@@ -1,9 +1,15 @@
+pub mod connections;
+pub mod lan_scanner;
+
 use chrono::Local;
+use connections::{ActiveConnection, ConnectionTracker};
+use lan_scanner::{LanDevice, LanScanner};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use sysinfo::System;
 use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +22,7 @@ pub struct NetworkDevice {
 }
 
 impl NetworkDevice {
+    #[allow(dead_code)]
     pub fn traffic_display(&self) -> String {
         let total = self.bytes_sent + self.bytes_received;
         if total > 1_073_741_824 {
@@ -41,8 +48,12 @@ pub struct LogEntry {
 pub struct NetworkMonitor {
     devices: Arc<RwLock<HashMap<String, NetworkDevice>>>,
     logs: Arc<RwLock<Vec<LogEntry>>>,
+    filtered_cache: Arc<RwLock<Option<Vec<LogEntry>>>>,
     max_logs: usize,
     log_file_path: PathBuf,
+    system_info: Arc<RwLock<System>>,
+    pub connection_tracker: Arc<ConnectionTracker>,
+    pub lan_scanner: Arc<LanScanner>,
 }
 
 impl NetworkMonitor {
@@ -52,11 +63,18 @@ impl NetworkMonitor {
         let _ = fs::create_dir_all(&log_dir);
         let log_file_path = log_dir.join("dns_log.json");
 
+        let mut sys = System::new_all();
+        sys.refresh_all();
+
         let monitor = Self {
             devices: Arc::new(RwLock::new(HashMap::new())),
             logs: Arc::new(RwLock::new(Vec::new())),
+            filtered_cache: Arc::new(RwLock::new(None)),
             max_logs,
             log_file_path,
+            system_info: Arc::new(RwLock::new(sys)),
+            connection_tracker: Arc::new(ConnectionTracker::new()),
+            lan_scanner: Arc::new(LanScanner::new()),
         };
 
         monitor.load_logs_from_disk();
@@ -79,13 +97,11 @@ impl NetworkMonitor {
         }
     }
 
-    fn save_logs_to_disk(&self) {
+    pub fn save_logs_to_disk(&self) {
         if let Ok(logs) = self.logs.read() {
-            match serde_json::to_string_pretty(&*logs) {
+            match serde_json::to_string(&*logs) {
                 Ok(json) => {
-                    if let Err(e) = fs::write(&self.log_file_path, json) {
-                        warn!("Failed to save logs: {}", e);
-                    }
+                    let _ = fs::write(&self.log_file_path, json);
                 }
                 Err(e) => warn!("Failed to serialize logs: {}", e),
             }
@@ -94,7 +110,7 @@ impl NetworkMonitor {
 
     pub fn add_log(&self, domain: &str, source_ip: &str, is_blocked: bool) {
         let entry = LogEntry {
-            timestamp: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            timestamp: Local::now().format("%H:%M:%S").to_string(),
             domain: domain.to_string(),
             source_ip: source_ip.to_string(),
             is_blocked,
@@ -109,31 +125,59 @@ impl NetworkMonitor {
     }
 
     pub fn get_logs(&self) -> Vec<LogEntry> {
+        if let Ok(fc) = self.filtered_cache.read() {
+            if let Some(ref filtered) = *fc {
+                return filtered.clone();
+            }
+        }
         self.logs.read().map(|l| l.clone()).unwrap_or_default()
     }
 
-    pub fn get_filtered_logs(&self, filter_domain: &str, filter_ip: &str, filter_blocked: Option<bool>) -> Vec<LogEntry> {
-        self.logs
+    pub fn apply_filter(&self, filter_domain: &str, filter_ip: &str, filter_blocked: Option<bool>) {
+        if filter_domain.is_empty() && filter_ip.is_empty() && filter_blocked.is_none() {
+            if let Ok(mut fc) = self.filtered_cache.write() {
+                *fc = None;
+            }
+            return;
+        }
+
+        let fd = filter_domain.trim().to_lowercase();
+        let fip = filter_ip.trim().to_string();
+
+        let filtered: Vec<LogEntry> = self
+            .logs
             .read()
             .map(|logs| {
                 logs.iter()
                     .filter(|l| {
-                        let domain_match = filter_domain.is_empty()
-                            || l.domain.to_lowercase().contains(&filter_domain.to_lowercase());
-                        let ip_match = filter_ip.is_empty()
-                            || l.source_ip.contains(filter_ip);
+                        let domain_match = fd.is_empty() || l.domain.to_lowercase().contains(&fd);
+                        let ip_match = fip.is_empty() || l.source_ip.contains(&fip);
                         let blocked_match = filter_blocked.is_none_or(|b| l.is_blocked == b);
                         domain_match && ip_match && blocked_match
                     })
                     .cloned()
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+
+        if let Ok(mut fc) = self.filtered_cache.write() {
+            *fc = Some(filtered);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn clear_filter(&self) {
+        if let Ok(mut fc) = self.filtered_cache.write() {
+            *fc = None;
+        }
     }
 
     pub fn clear_logs(&self) {
         if let Ok(mut logs) = self.logs.write() {
             logs.clear();
+        }
+        if let Ok(mut fc) = self.filtered_cache.write() {
+            *fc = None;
         }
         self.save_logs_to_disk();
     }
@@ -170,6 +214,7 @@ impl NetworkMonitor {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_devices(&self) -> Vec<NetworkDevice> {
         self.devices
             .read()
@@ -177,88 +222,35 @@ impl NetworkMonitor {
             .unwrap_or_default()
     }
 
-    pub async fn scan_local_network(&self) -> Vec<NetworkDevice> {
-        let output = match tokio::process::Command::new("arp")
-            .arg("-a")
-            .output()
-            .await
-        {
-            Ok(o) => o,
-            Err(e) => {
-                warn!("Failed to run arp command: {}", e);
-                return Vec::new();
-            }
-        };
+    pub fn get_active_connections(&self) -> Vec<ActiveConnection> {
+        self.connection_tracker.get_active_connections()
+    }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut devices = Vec::new();
+    pub fn get_lan_devices(&self) -> Vec<LanDevice> {
+        self.lan_scanner.get_devices()
+    }
 
-        for line in stdout.lines() {
-            let line = line.trim();
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 {
-                let ip = parts[0].to_string();
-                let mac_raw = parts[1];
-
-                if ip.parse::<std::net::IpAddr>().is_err() {
-                    continue;
-                }
-
-                let mac = mac_raw.replace('-', ":").to_uppercase();
-
-                if mac == "FF:FF:FF:FF:FF:FF" || ip.ends_with(".255") {
-                    continue;
-                }
-
-                let dev = NetworkDevice {
-                    name: if ip.ends_with(".1") {
-                        "Router/Gateway".to_string()
-                    } else {
-                        format!("Thiết bị {}", ip)
-                    },
-                    ip: ip.clone(),
-                    mac,
-                    bytes_sent: 0,
-                    bytes_received: 0,
-                };
-
-                if let Ok(existing) = self.devices.read() {
-                    if let Some(old) = existing.get(&ip) {
-                        devices.push(NetworkDevice {
-                            name: dev.name.clone(),
-                            ip: dev.ip.clone(),
-                            mac: dev.mac.clone(),
-                            bytes_sent: old.bytes_sent,
-                            bytes_received: old.bytes_received,
-                        });
-                    } else {
-                        devices.push(dev.clone());
-                    }
-                } else {
-                    devices.push(dev.clone());
-                }
-            }
+    pub fn get_system_metrics(&self) -> (f32, f32) {
+        if let Ok(mut sys) = self.system_info.write() {
+            sys.refresh_cpu();
+            sys.refresh_memory();
+            let cpu = sys.global_cpu_info().cpu_usage();
+            let used_mem = sys.used_memory() as f64 / (1024.0 * 1024.0 * 1024.0); // GB
+            (cpu, used_mem as f32)
+        } else {
+            (0.0, 0.0)
         }
-
-        if let Ok(mut existing) = self.devices.write() {
-            for dev in &devices {
-                let entry = existing.entry(dev.ip.clone()).or_insert_with(|| dev.clone());
-                entry.mac = dev.mac.clone();
-                entry.name = dev.name.clone();
-            }
-        }
-
-        info!("ARP scan found {} devices", devices.len());
-        devices
     }
 
     pub async fn start_traffic_monitor(self: Arc<Self>) {
         use std::time::Duration;
 
-        info!("Traffic monitor started (using netsh interface stats)");
-
         loop {
-            let output = tokio::process::Command::new("netsh")
+            // 1. Query network subinterfaces traffic silently without window
+            let mut cmd = tokio::process::Command::new("netsh");
+            #[cfg(windows)]
+            cmd.creation_flags(0x08000000);
+            let output = cmd
                 .args(["interface", "ipv4", "show", "subinterfaces"])
                 .output()
                 .await;
@@ -273,16 +265,19 @@ impl NetworkMonitor {
                             parts[parts.len() - 2].parse::<u64>(),
                             parts[parts.len() - 1].parse::<u64>(),
                         ) {
-                            self.update_device_traffic("local", "LOCAL", bytes_in, bytes_out);
+                            self.update_device_traffic("127.0.0.1", "Cục bộ (Máy này)", bytes_in, bytes_out);
                         }
                     }
                 }
             }
 
+            // 2. Refresh active Internet connections
+            self.connection_tracker.refresh_connections();
+
+            // 3. Save logs periodically
             self.save_logs_to_disk();
 
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::time::sleep(Duration::from_secs(6)).await;
         }
     }
 }
-

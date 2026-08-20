@@ -11,15 +11,17 @@ impl SelfDefense {
 
     #[cfg(windows)]
     pub fn enable(&mut self) -> Result<(), String> {
-        if self.enabled { return Ok(()); }
+        if self.enabled {
+            return Ok(());
+        }
         use windows::Win32::System::Threading::{
-            GetCurrentProcess, SetPriorityClass, HIGH_PRIORITY_CLASS,
+            GetCurrentProcess, SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS,
         };
         unsafe {
             let handle = GetCurrentProcess();
-            let _ = SetPriorityClass(handle, HIGH_PRIORITY_CLASS);
+            let _ = SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS);
         }
-        info!("Self-defense enabled: process priority elevated");
+        info!("Self-defense enabled: process priority elevated to ABOVE_NORMAL");
         self.enabled = true;
         Ok(())
     }
@@ -32,7 +34,9 @@ impl SelfDefense {
 
     #[cfg(windows)]
     pub fn disable(&mut self) -> Result<(), String> {
-        if !self.enabled { return Ok(()); }
+        if !self.enabled {
+            return Ok(());
+        }
         use windows::Win32::System::Threading::{
             GetCurrentProcess, SetPriorityClass, NORMAL_PRIORITY_CLASS,
         };
@@ -40,7 +44,7 @@ impl SelfDefense {
             let handle = GetCurrentProcess();
             let _ = SetPriorityClass(handle, NORMAL_PRIORITY_CLASS);
         }
-        info!("Self-defense disabled: process priority restored");
+        info!("Self-defense disabled: process priority restored to NORMAL");
         self.enabled = false;
         Ok(())
     }
@@ -51,9 +55,14 @@ impl SelfDefense {
         Ok(())
     }
 
-    pub fn is_enabled(&self) -> bool { self.enabled }
+    #[allow(dead_code)]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 }
 
 impl Drop for SelfDefense {
-    fn drop(&mut self) { let _ = self.disable(); }
+    fn drop(&mut self) {
+        let _ = self.disable();
+    }
 }

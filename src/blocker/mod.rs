@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
 
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
@@ -40,11 +40,15 @@ impl WfpBlocker {
     #[cfg(windows)]
     pub fn initialize(&self) -> Result<(), String> {
         let mut handle = self.engine_handle.lock().map_err(|e| e.to_string())?;
-        if handle.is_some() { return Ok(()); }
+        if handle.is_some() {
+            return Ok(());
+        }
         let mut engine_handle = HANDLE::default();
         unsafe {
             let result = FwpmEngineOpen0(None, 0, None, None, &mut engine_handle);
-            if result != 0 { return Err(format!("FwpmEngineOpen0 failed with error code: {}", result)); }
+            if result != 0 {
+                return Err(format!("FwpmEngineOpen0 failed with error code: {}", result));
+            }
         }
         *handle = Some(engine_handle);
         info!("WFP engine initialized successfully");
@@ -53,31 +57,6 @@ impl WfpBlocker {
 
     #[cfg(not(windows))]
     pub fn initialize(&self) -> Result<(), String> {
-        warn!("WFP is only available on Windows");
-        Ok(())
-    }
-
-    pub fn add_blocked_ip(&self, ip: &str) -> Result<(), String> {
-        let mut ips = self.blocked_ips.write().map_err(|e| e.to_string())?;
-        if !ips.contains(&ip.to_string()) { ips.push(ip.to_string()); }
-        Ok(())
-    }
-
-    pub fn remove_blocked_ip(&self, ip: &str) -> Result<(), String> {
-        let mut ips = self.blocked_ips.write().map_err(|e| e.to_string())?;
-        ips.retain(|i| i != ip);
-        Ok(())
-    }
-
-    pub fn add_blocked_port(&self, port: u16) -> Result<(), String> {
-        let mut ports = self.blocked_ports.write().map_err(|e| e.to_string())?;
-        if !ports.contains(&port) { ports.push(port); }
-        Ok(())
-    }
-
-    pub fn remove_blocked_port(&self, port: u16) -> Result<(), String> {
-        let mut ports = self.blocked_ports.write().map_err(|e| e.to_string())?;
-        ports.retain(|p| p != &port);
         Ok(())
     }
 
@@ -91,12 +70,14 @@ impl WfpBlocker {
 
     #[cfg(windows)]
     pub fn enable(&self) -> Result<(), String> {
-        if self.enabled.load(Ordering::Relaxed) { return Ok(()); }
+        if self.enabled.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         self.initialize()?;
         self.clear_filters()?;
         let ips = self.get_blocked_ips();
         let ports = self.get_blocked_ports();
-        info!("WFP blocker enabled with {} IPs and {} ports", ips.len(), ports.len());
+        info!("WFP blocker active: {} custom IP rules, {} port rules", ips.len(), ports.len());
         self.enabled.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -109,7 +90,9 @@ impl WfpBlocker {
 
     #[cfg(windows)]
     pub fn disable(&self) -> Result<(), String> {
-        if !self.enabled.load(Ordering::Relaxed) { return Ok(()); }
+        if !self.enabled.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         self.clear_filters()?;
         self.enabled.store(false, Ordering::SeqCst);
         info!("WFP blocker disabled");
@@ -122,28 +105,49 @@ impl WfpBlocker {
         Ok(())
     }
 
-    pub fn is_enabled(&self) -> bool { self.enabled.load(Ordering::Relaxed) }
+    #[allow(dead_code)]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
 
     #[cfg(windows)]
     fn clear_filters(&self) -> Result<(), String> {
         let hg = self.engine_handle.lock().map_err(|e| e.to_string())?;
-        let engine = match *hg { Some(h) => h, None => return Ok(()) };
+        let engine = match *hg {
+            Some(h) => h,
+            None => return Ok(()),
+        };
         let mut fids = self.filter_ids.lock().map_err(|e| e.to_string())?;
-        for id in fids.drain(..) { unsafe { let _ = FwpmFilterDeleteById0(engine, id); } }
+        for id in fids.drain(..) {
+            unsafe {
+                let _ = FwpmFilterDeleteById0(engine, id);
+            }
+        }
         Ok(())
     }
 
     #[cfg(windows)]
     pub fn shutdown(&self) {
         let _ = self.disable();
-        let mut handle = match self.engine_handle.lock() { Ok(h) => h, Err(_) => return };
-        if let Some(h) = handle.take() { unsafe { let _ = FwpmEngineClose0(h); } }
+        let mut handle = match self.engine_handle.lock() {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        if let Some(h) = handle.take() {
+            unsafe {
+                let _ = FwpmEngineClose0(h);
+            }
+        }
     }
 
     #[cfg(not(windows))]
-    pub fn shutdown(&self) { let _ = self.disable(); }
+    pub fn shutdown(&self) {
+        let _ = self.disable();
+    }
 }
 
 impl Drop for WfpBlocker {
-    fn drop(&mut self) { self.shutdown(); }
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }

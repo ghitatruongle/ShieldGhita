@@ -20,12 +20,15 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             dns_listen_addr: "127.0.0.1".to_string(),
-            dns_listen_port: 5353,
+            dns_listen_port: 53,
             upstream_dns: vec![
-                "https://dns.cloudflare.com/dns-query".to_string(),
-                "https://dns.google/dns-query".to_string(),
+                "https://1.1.1.1/dns-query".to_string(),
+                "https://8.8.8.8/dns-query".to_string(),
+                "https://9.9.9.9/dns-query".to_string(),
             ],
             blocklist_urls: vec![
+                "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt".to_string(),
+                "https://small.oisd.nl".to_string(),
                 "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
                 "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt".to_string(),
             ],
@@ -47,7 +50,7 @@ impl AppConfig {
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        if path.exists() {
+        let mut config = if path.exists() {
             match fs::read_to_string(&path) {
                 Ok(content) => toml::from_str(&content).unwrap_or_default(),
                 Err(_) => Self::default(),
@@ -56,7 +59,15 @@ impl AppConfig {
             let config = Self::default();
             let _ = config.save();
             config
+        };
+
+        // If an old config had port 5353, auto-fix it to standard DNS port 53
+        if config.dns_listen_port == 5353 {
+            config.dns_listen_port = 53;
+            let _ = config.save();
         }
+
+        config
     }
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {

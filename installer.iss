@@ -1,6 +1,6 @@
 ; Shield Ghita Installer Script for Inno Setup 6
 #define MyAppName "Shield Ghita"
-#define MyAppVersion "0.0.0-beta+0"
+#define MyAppVersion "0.0.0+0"
 #define MyAppPublisher "ShieldGhita"
 #define MyAppExeName "shield_ghita.exe"
 
@@ -12,12 +12,12 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=installer_output
-OutputBaseFilename=ShieldGhita_Setup_v0.0.0-beta
+OutputBaseFilename=ShieldGhita_Setup_v0.0.0+0
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
-SetupIconFile=
+; SetupIconFile=
 UninstallDisplayIcon={app}\{#MyAppExeName}
 WizardStyle=modern
 

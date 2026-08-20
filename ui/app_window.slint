@@ -1,189 +1,368 @@
 import { Button, LineEdit, ListView, TabWidget } from "std-widgets.slint";
 
-struct NetworkDevice {
+export struct NetworkDevice {
     name: string,
     ip: string,
     mac: string,
+    vendor: string,
+    device-type: string,
+    is-online: bool,
+    latency: string,
     traffic: string,
 }
 
-struct LogEntry {
+export struct ActiveConnection {
+    process-name: string,
+    pid: int,
+    local-addr: string,
+    remote-addr: string,
+    protocol: string,
+    state: string,
+    is-safe: bool,
+}
+
+export struct LogEntry {
     timestamp: string,
     domain: string,
     source-ip: string,
     is-blocked: bool,
 }
 
-export component AppWindow inherits Window {
-    title: "Shield Ghita v0.0.0-beta+0";
-    width: 950px;
-    height: 700px;
+export struct ConsoleLogEntry {
+    time: string,
+    level: string,
+    message: string,
+}
 
-    in-out property <string> status-text: "Dang hoat dong";
+export component AppWindow inherits Window {
+    title: "Shield Ghita v0.0.0+0 - Master Internet Controller";
+    width: 1060px;
+    height: 750px;
+    background: #0f172a;
+    default-font-family: "Segoe UI, Tahoma, Geneva, Verdana, sans-serif";
+
+    in-out property <string> status-text: "Đang hoạt động";
     in-out property <int> blocked-count: 0;
     in-out property <int> total-queries: 0;
+    in-out property <int> absorbed-count: 0;
     in-out property <float> cpu-usage: 0.0;
     in-out property <float> mem-usage: 0.0;
-    in-out property <[NetworkDevice]> devices;
-    in-out property <[LogEntry]> logs;
     in-out property <bool> protection-enabled: true;
-    in-out property <string> last-update-text: "Chua cap nhat";
+    in-out property <bool> master-locked: false;
+    in-out property <bool> silent-sinkhole: true;
+    in-out property <string> last-update-text: "Chưa cập nhật";
+    in-out property <[NetworkDevice]> devices;
+    in-out property <[ActiveConnection]> connections;
+    in-out property <[LogEntry]> logs;
+    in-out property <[ConsoleLogEntry]> console-logs;
     in-out property <[string]> custom-rules;
+    in-out property <[string]> allowed-rules;
+    in-out property <int> active-log-view: 0; // 0 = DNS Logs, 1 = System Console Logs
 
     callback toggle-protection(bool);
+    callback toggle-master-lock(bool);
+    callback toggle-silent-sinkhole(bool);
     callback refresh-devices();
+    callback refresh-connections();
     callback clear-logs();
+    callback clear-console-logs();
     callback add-custom-rule(string);
     callback remove-custom-rule(string);
+    callback add-allowed-rule(string);
+    callback remove-allowed-rule(string);
     callback update-blocklist();
     callback export-logs();
     callback filter-logs(string, string, int);
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 8px;
+        padding: 16px;
+        spacing: 12px;
 
+        // Top Header Bar
         HorizontalLayout {
             spacing: 16px;
-            alignment: start;
+            alignment: center;
 
-            Text { text: "Shield Ghita"; font-size: 20px; font-weight: 700; }
-            Rectangle { width: 1px; background: #ccc; }
-            Text { text: root.status-text; font-size: 14px; color: root.protection-enabled ? #2e7d32 : #c62828; }
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: start;
+                Text {
+                    text: "🛡️ Shield Ghita";
+                    font-size: 22px;
+                    font-weight: 800;
+                    color: #38bdf8;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    width: 140px;
+                    height: 26px;
+                    border-radius: 13px;
+                    background: root.master-locked ? #7f1d1d : (root.protection-enabled ? #166534 : #991b1b);
+                    HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.master-locked ? "🔒 ĐÃ KHÓA INTERNET" : (root.protection-enabled ? "🟢 BẢO VỆ TỐI CAO" : "🔴 TẠM DỪNG");
+                            font-size: 11px;
+                            font-weight: 800;
+                            color: #ffffff;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
             Rectangle { horizontal-stretch: 1; }
-            Text { text: root.last-update-text; font-size: 11px; color: #888; }
-        }
 
-        Rectangle { height: 1px; background: #ddd; }
+            HorizontalLayout {
+                spacing: 14px;
+                alignment: end;
+                Text {
+                    text: "🤫 Phát nền: " + root.absorbed-count + " ads";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #a78bfa;
+                    vertical-alignment: center;
+                }
+                Rectangle { width: 1px; height: 16px; background: #334155; }
+                Text {
+                    text: "CPU: " + Math.round(root.cpu-usage) + "% | RAM: " + (Math.round(root.mem-usage * 10) / 10) + " GB";
+                    font-size: 12px;
+                    color: #94a3b8;
+                    vertical-alignment: center;
+                }
+                Rectangle { width: 1px; height: 16px; background: #334155; }
+                Text {
+                    text: root.last-update-text;
+                    font-size: 12px;
+                    color: #94a3b8;
+                    vertical-alignment: center;
+                }
+            }
+        }
 
         TabWidget {
             vertical-stretch: 1;
 
+            // TAB 1: TỔNG QUAN & MASTER CONTROL
             Tab {
-                title: "Tong quan";
+                title: "📊 Tổng quan & Điều khiển";
                 VerticalLayout {
                     padding: 16px;
-                    spacing: 12px;
+                    spacing: 16px;
 
                     HorizontalLayout {
-                        spacing: 16px;
+                        spacing: 14px;
 
+                        // Card 1: Tổng truy vấn
                         Rectangle {
-                            background: #e3f2fd; border-radius: 8px;
+                            background: #1e293b;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #334155;
                             VerticalLayout {
                                 padding: 16px;
-                                Text { text: "Truy van DNS"; font-size: 12px; color: #1565c0; }
-                                Text { text: root.total-queries; font-size: 28px; font-weight: 700; color: #0d47a1; }
+                                spacing: 4px;
+                                Text { text: "TỔNG TRUY VẤN DNS"; font-size: 11px; font-weight: 700; color: #38bdf8; }
+                                Text { text: root.total-queries; font-size: 30px; font-weight: 800; color: #f8fafc; }
+                                Text { text: "Lọc toàn bộ kết nối mạng"; font-size: 11px; color: #64748b; }
                             }
                         }
+
+                        // Card 2: Đã chặn
                         Rectangle {
-                            background: #fce4ec; border-radius: 8px;
+                            background: #1e293b;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #334155;
                             VerticalLayout {
                                 padding: 16px;
-                                Text { text: "Da chan"; font-size: 12px; color: #c62828; }
-                                Text { text: root.blocked-count; font-size: 28px; font-weight: 700; color: #b71c1c; }
+                                spacing: 4px;
+                                Text { text: "QUẢNG CÁO & MÃ ĐỘC CHẶN"; font-size: 11px; font-weight: 700; color: #f87171; }
+                                Text { text: root.blocked-count; font-size: 30px; font-weight: 800; color: #ef4444; }
+                                Text { text: "Khử rò rỉ & theo dõi ngầm"; font-size: 11px; color: #64748b; }
                             }
                         }
+
+                        // Card 3: Phát nền êm dịu (Silent Sinkhole)
                         Rectangle {
-                            background: #e8f5e9; border-radius: 8px;
+                            background: #1e293b;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #334155;
                             VerticalLayout {
                                 padding: 16px;
-                                Text { text: "Ty le chan"; font-size: 12px; color: #2e7d32; }
+                                spacing: 4px;
+                                Text { text: "PHÁT NỀN ÊM DỊU (SILENT ADS)"; font-size: 11px; font-weight: 700; color: #c084fc; }
+                                Text { text: root.absorbed-count; font-size: 30px; font-weight: 800; color: #a855f7; }
+                                Text { text: "Nuốt chửng ad không gây lag"; font-size: 11px; color: #64748b; }
+                            }
+                        }
+
+                        // Card 4: Tỷ lệ chặn
+                        Rectangle {
+                            background: #1e293b;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #334155;
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 4px;
+                                Text { text: "TỶ LỆ LỌC THÀNH CÔNG"; font-size: 11px; font-weight: 700; color: #4ade80; }
                                 Text {
-                                    text: root.total-queries > 0 ? (round(root.blocked-count * 10000 / root.total-queries) / 100) + "%" : "0%";
-                                    font-size: 28px; font-weight: 700; color: #1b5e20;
+                                    text: root.total-queries > 0 ? (Math.round(root.blocked-count * 10000 / root.total-queries) / 100) + "%" : "0%";
+                                    font-size: 30px;
+                                    font-weight: 800;
+                                    color: #22c55e;
+                                }
+                                Text { text: "Bảo vệ Internet tối cao"; font-size: 11px; color: #64748b; }
+                            }
+                        }
+                    }
+
+                    // Master Control Box
+                    Rectangle {
+                        background: #1e293b;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: #334155;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 12px;
+                            Text { text: "⚡ Trung tâm điều khiển Internet tối cao (Master Controller):"; font-size: 14px; font-weight: 700; color: #e2e8f0; }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Button {
+                                    text: root.protection-enabled ? "⏸️ Tạm dừng bảo vệ" : "▶️ Bật bảo vệ tối cao";
+                                    clicked => { root.toggle-protection(!root.protection-enabled); }
+                                }
+                                Button {
+                                    text: root.master-locked ? "🔓 Mở khóa Internet" : "🔒 Khóa toàn bộ Internet (Kill Switch)";
+                                    clicked => { root.toggle-master-lock(!root.master-locked); }
+                                }
+                                Button {
+                                    text: root.silent-sinkhole ? "🤫 Chế độ: Phát nền êm dịu (Bật)" : "🚫 Chế độ: Chặn cứng NXDOMAIN";
+                                    clicked => { root.toggle-silent-sinkhole(!root.silent-sinkhole); }
+                                }
+                                Button {
+                                    text: "🔄 Cập nhật bộ lọc Online";
+                                    clicked => { root.update-blocklist(); }
                                 }
                             }
                         }
                     }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+
+            // TAB 2: KẾT NỐI INTERNET TRỰC TIẾP TRÊN MÁY (REQUIREMENT 3)
+            Tab {
+                title: "🌐 Kết nối Internet của máy";
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
 
                     HorizontalLayout {
                         spacing: 12px;
                         Button {
-                            text: root.protection-enabled ? "Tam dung bao ve" : "Bat bao ve";
-                            clicked => { root.toggle-protection(!root.protection-enabled); }
+                            text: "🔄 Làm mới kết nối";
+                            clicked => { root.refresh-connections(); }
                         }
-                        Button {
-                            text: "Cap nhat danh sach chan";
-                            clicked => { root.update-blocklist(); }
-                        }
-                    }
-                }
-            }
-
-            Tab {
-                title: "Thiet bi mang";
-                VerticalLayout {
-                    padding: 12px;
-                    spacing: 8px;
-
-                    HorizontalLayout {
-                        Button {
-                            text: "Quet thiet bi";
-                            clicked => { root.refresh-devices(); }
-                        }
-                        Text { text: "Thiet bi trong mang LAN"; font-size: 14px; font-weight: 600; }
-                    }
-
-                    ListView {
-                        for device[index] in root.devices : Rectangle {
-                            height: 48px;
-                            background: Math.mod(index, 2) == 0 ? #fafafa : #fff;
-                            HorizontalLayout {
-                                padding-left: 12px;
-                                padding-right: 12px;
-                                spacing: 12px;
-                                alignment: start;
-
-                                Text { text: device.name; font-weight: 600; vertical-alignment: center; }
-                                Text { text: device.ip; color: #666; vertical-alignment: center; }
-                                Text { text: device.mac; color: #999; font-size: 12px; vertical-alignment: center; }
-                                Rectangle { horizontal-stretch: 1; }
-                                Text { text: device.traffic; color: #1565c0; font-size: 12px; vertical-alignment: center; }
-                            }
+                        Text {
+                            text: "Các ứng dụng & tiến trình đang kết nối ra ngoài Internet trên máy tính này:";
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: #94a3b8;
+                            vertical-alignment: center;
                         }
                     }
-                }
-            }
-
-            Tab {
-                title: "Quy tac chan";
-                VerticalLayout {
-                    padding: 12px;
-                    spacing: 8px;
-
-                    HorizontalLayout {
-                        spacing: 8px;
-                        rule-input := LineEdit {
-                            placeholder-text: "Nhap domain de chan (vd: ads.example.com)";
-                            horizontal-stretch: 1;
-                        }
-                        Button {
-                            text: "Them";
-                            clicked => {
-                                root.add-custom-rule(rule-input.text);
-                                rule-input.text = "";
-                            }
-                        }
-                    }
-
-                    Text { text: "Danh sach quy tac tuy chinh:"; font-size: 13px; font-weight: 600; }
 
                     ListView {
                         vertical-stretch: 1;
-                        for rule[index] in root.custom-rules : Rectangle {
-                            height: 36px;
-                            background: Math.mod(index, 2) == 0 ? #fafafa : #fff;
+                        for conn in root.connections : Rectangle {
+                            height: 38px;
+                            background: #1e293b;
+                            border-radius: 6px;
                             HorizontalLayout {
                                 padding-left: 12px;
-                                padding-right: 8px;
-                                spacing: 8px;
+                                padding-right: 12px;
+                                spacing: 14px;
                                 alignment: start;
 
-                                Text { text: rule; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                                Button {
-                                    text: "Xoa";
-                                    clicked => { root.remove-custom-rule(rule); }
+                                Text { text: "🚀 " + conn.process-name; font-size: 13px; font-weight: 700; color: #38bdf8; vertical-alignment: center; min-width: 180px; overflow: elide; }
+                                Text { text: "PID: " + conn.pid; font-size: 11px; color: #64748b; vertical-alignment: center; min-width: 70px; }
+                                Text { text: conn.protocol; font-size: 11px; font-weight: 700; color: #a78bfa; vertical-alignment: center; min-width: 45px; }
+                                Text { text: conn.local-addr; font-size: 12px; color: #94a3b8; vertical-alignment: center; min-width: 150px; }
+                                Text { text: "➔"; font-size: 12px; color: #64748b; vertical-alignment: center; }
+                                Text { text: conn.remote-addr; font-size: 12px; color: #f1f5f9; vertical-alignment: center; min-width: 170px; overflow: elide; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: conn.state; font-size: 11px; font-weight: 700; color: #22c55e; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // TAB 3: THIẾT BỊ MẠNG LAN & VENDOR & ONLINE (REQUIREMENT 2)
+            Tab {
+                title: "💻 Thiết bị chung mạng LAN";
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Button {
+                            text: "🔍 Quét toàn bộ mạng LAN";
+                            clicked => { root.refresh-devices(); }
+                        }
+                        Text {
+                            text: "Quét chi tiết loại thiết bị, nhà sản xuất (Vendor) và trạng thái Online/Ping trong mạng:";
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: #94a3b8;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    ListView {
+                        vertical-stretch: 1;
+                        for device in root.devices : Rectangle {
+                            height: 52px;
+                            background: #1e293b;
+                            border-radius: 6px;
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 14px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 280px;
+                                    Text { text: device.name; font-size: 13px; font-weight: 700; color: #f1f5f9; }
+                                    Text { text: "Hãng: " + device.vendor; font-size: 11px; color: #38bdf8; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 170px;
+                                    Text { text: "IP: " + device.ip; font-size: 12px; color: #cbd5e1; }
+                                    Text { text: "MAC: " + device.mac; font-size: 11px; color: #64748b; }
+                                }
+
+                                Rectangle { horizontal-stretch: 1; }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: device.is-online ? "🟢 TRỰC TUYẾN" : "🔴 NGOẠI TUYẾN";
+                                        font-size: 11px;
+                                        font-weight: 800;
+                                        color: device.is-online ? #4ade80 : #f87171;
+                                    }
+                                    Text { text: "Độ trễ: " + device.latency; font-size: 11px; color: #94a3b8; }
                                 }
                             }
                         }
@@ -191,63 +370,204 @@ export component AppWindow inherits Window {
                 }
             }
 
+            // TAB 4: QUY TẮC CHẶN & CHO PHÉP
             Tab {
-                title: "Nhat ky";
+                title: "🚫 Quy tắc lọc & Whitelist";
+                HorizontalLayout {
+                    padding: 16px;
+                    spacing: 16px;
+
+                    // Cột Blacklist
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 10px;
+
+                        Text { text: "⛔ Danh sách chặn tùy chỉnh (Blacklist):"; font-size: 14px; font-weight: 700; color: #f87171; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            block-input := LineEdit {
+                                placeholder-text: "Nhập domain muốn chặn...";
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: "➕ Chặn";
+                                clicked => {
+                                    root.add-custom-rule(block-input.text);
+                                    block-input.text = "";
+                                }
+                            }
+                        }
+
+                        ListView {
+                            vertical-stretch: 1;
+                            for rule in root.custom-rules : Rectangle {
+                                height: 36px;
+                                background: #1e293b;
+                                border-radius: 4px;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 6px;
+                                    Text { text: "🚫 " + rule; font-size: 12px; color: #fca5a5; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button {
+                                        text: "Xóa";
+                                        clicked => { root.remove-custom-rule(rule); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle { width: 1px; background: #334155; }
+
+                    // Cột Whitelist
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 10px;
+
+                        Text { text: "✅ Danh sách cho phép (Whitelist - Ưu tiên cao nhất):"; font-size: 14px; font-weight: 700; color: #4ade80; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            allow-input := LineEdit {
+                                placeholder-text: "Nhập domain luôn cho phép...";
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: "➕ Cho phép";
+                                clicked => {
+                                    root.add-allowed-rule(allow-input.text);
+                                    allow-input.text = "";
+                                }
+                            }
+                        }
+
+                        ListView {
+                            vertical-stretch: 1;
+                            for rule in root.allowed-rules : Rectangle {
+                                height: 36px;
+                                background: #1e293b;
+                                border-radius: 4px;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 6px;
+                                    Text { text: "✅ " + rule; font-size: 12px; color: #86efac; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button {
+                                        text: "Xóa";
+                                        clicked => { root.remove-allowed-rule(rule); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // TAB 5: NHẬT KÝ DNS & CONSOLE HỆ THỐNG (REQUIREMENT 1)
+            Tab {
+                title: "📋 Nhật ký & Console trong app";
                 VerticalLayout {
-                    padding: 12px;
-                    spacing: 8px;
+                    padding: 16px;
+                    spacing: 10px;
 
                     HorizontalLayout {
                         spacing: 8px;
+
+                        Button {
+                            text: root.active-log-view == 0 ? "📋 Xem Console hệ thống" : "🌐 Xem Nhật ký DNS";
+                            clicked => {
+                                root.active-log-view = root.active-log-view == 0 ? 1 : 0;
+                            }
+                        }
+
                         filter-domain := LineEdit {
-                            placeholder-text: "Loc theo domain...";
+                            placeholder-text: "Lọc domain...";
                             width: 180px;
                         }
                         filter-ip := LineEdit {
-                            placeholder-text: "Loc theo IP...";
-                            width: 140px;
+                            placeholder-text: "Lọc IP...";
+                            width: 130px;
                         }
                         Button {
-                            text: "Loc";
+                            text: "🔍 Lọc";
                             clicked => {
                                 root.filter-logs(filter-domain.text, filter-ip.text, -1);
                             }
                         }
                         Button {
-                            text: "Xoa loc";
+                            text: "✖ Xóa lọc";
                             clicked => {
                                 filter-domain.text = "";
                                 filter-ip.text = "";
                                 root.filter-logs("", "", -1);
                             }
                         }
+
                         Rectangle { horizontal-stretch: 1; }
+
                         Button {
-                            text: "Export CSV";
+                            text: "💾 Xuất CSV";
                             clicked => { root.export-logs(); }
                         }
                         Button {
-                            text: "Xoa nhat ky";
-                            clicked => { root.clear-logs(); }
+                            text: "🗑️ Xóa log";
+                            clicked => {
+                                if (root.active-log-view == 0) {
+                                    root.clear-logs();
+                                } else {
+                                    root.clear-console-logs();
+                                }
+                            }
                         }
                     }
 
-                    ListView {
+                    if root.active-log-view == 0 : ListView {
                         vertical-stretch: 1;
                         for log in root.logs : Rectangle {
                             height: 32px;
-                            background: log.is-blocked ? #ffebee : #fff;
+                            background: log.is-blocked ? #450a0a : #1e293b;
+                            border-radius: 4px;
                             HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 10px;
+                                alignment: start;
+
+                                Text { text: log.timestamp; font-size: 12px; color: #94a3b8; vertical-alignment: center; min-width: 80px; }
+                                Text {
+                                    text: log.is-blocked ? "[BỊ CHẶN]" : "[CHO PHÉP]";
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                    min-width: 85px;
+                                    color: log.is-blocked ? #f87171 : #4ade80;
+                                }
+                                Text { text: log.domain; font-size: 13px; color: #f1f5f9; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                Text { text: log.source-ip; font-size: 12px; color: #64748b; vertical-alignment: center; min-width: 100px; }
+                            }
+                        }
+                    }
+
+                    if root.active-log-view == 1 : ListView {
+                        vertical-stretch: 1;
+                        for clog in root.console-logs : Rectangle {
+                            height: 30px;
+                            background: #020617;
+                            border-radius: 4px;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
                                 spacing: 8px;
                                 alignment: start;
 
-                                Text { text: log.timestamp; font-size: 11px; color: #999; vertical-alignment: center; min-width: 120px; }
-                                Text { text: log.is-blocked ? "[BLOCKED]" : "[OK]"; font-size: 12px; vertical-alignment: center; min-width: 70px; color: log.is-blocked ? #c62828 : #2e7d32; }
-                                Text { text: log.domain; font-size: 12px; vertical-alignment: center; overflow: elide; }
-                                Rectangle { horizontal-stretch: 1; }
-                                Text { text: log.source-ip; font-size: 11px; color: #666; vertical-alignment: center; }
+                                Text { text: clog.time; font-size: 11px; color: #64748b; vertical-alignment: center; min-width: 70px; }
+                                Text {
+                                    text: "[" + clog.level + "]";
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    color: clog.level == "ERROR" ? #ef4444 : (clog.level == "WARN" ? #f59e0b : #38bdf8);
+                                    vertical-alignment: center;
+                                    min-width: 65px;
+                                }
+                                Text { text: clog.message; font-size: 12px; color: #e2e8f0; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                             }
                         }
                     }
@@ -256,4 +576,3 @@ export component AppWindow inherits Window {
         }
     }
 }
-
