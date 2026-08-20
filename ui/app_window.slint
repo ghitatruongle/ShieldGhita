@@ -1,0 +1,259 @@
+import { Button, LineEdit, ListView, TabWidget } from "std-widgets.slint";
+
+struct NetworkDevice {
+    name: string,
+    ip: string,
+    mac: string,
+    traffic: string,
+}
+
+struct LogEntry {
+    timestamp: string,
+    domain: string,
+    source-ip: string,
+    is-blocked: bool,
+}
+
+export component AppWindow inherits Window {
+    title: "Shield Ghita v0.0.0-beta+0";
+    width: 950px;
+    height: 700px;
+
+    in-out property <string> status-text: "Dang hoat dong";
+    in-out property <int> blocked-count: 0;
+    in-out property <int> total-queries: 0;
+    in-out property <float> cpu-usage: 0.0;
+    in-out property <float> mem-usage: 0.0;
+    in-out property <[NetworkDevice]> devices;
+    in-out property <[LogEntry]> logs;
+    in-out property <bool> protection-enabled: true;
+    in-out property <string> last-update-text: "Chua cap nhat";
+    in-out property <[string]> custom-rules;
+
+    callback toggle-protection(bool);
+    callback refresh-devices();
+    callback clear-logs();
+    callback add-custom-rule(string);
+    callback remove-custom-rule(string);
+    callback update-blocklist();
+    callback export-logs();
+    callback filter-logs(string, string, int);
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: start;
+
+            Text { text: "Shield Ghita"; font-size: 20px; font-weight: 700; }
+            Rectangle { width: 1px; background: #ccc; }
+            Text { text: root.status-text; font-size: 14px; color: root.protection-enabled ? #2e7d32 : #c62828; }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: root.last-update-text; font-size: 11px; color: #888; }
+        }
+
+        Rectangle { height: 1px; background: #ddd; }
+
+        TabWidget {
+            vertical-stretch: 1;
+
+            Tab {
+                title: "Tong quan";
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        spacing: 16px;
+
+                        Rectangle {
+                            background: #e3f2fd; border-radius: 8px;
+                            VerticalLayout {
+                                padding: 16px;
+                                Text { text: "Truy van DNS"; font-size: 12px; color: #1565c0; }
+                                Text { text: root.total-queries; font-size: 28px; font-weight: 700; color: #0d47a1; }
+                            }
+                        }
+                        Rectangle {
+                            background: #fce4ec; border-radius: 8px;
+                            VerticalLayout {
+                                padding: 16px;
+                                Text { text: "Da chan"; font-size: 12px; color: #c62828; }
+                                Text { text: root.blocked-count; font-size: 28px; font-weight: 700; color: #b71c1c; }
+                            }
+                        }
+                        Rectangle {
+                            background: #e8f5e9; border-radius: 8px;
+                            VerticalLayout {
+                                padding: 16px;
+                                Text { text: "Ty le chan"; font-size: 12px; color: #2e7d32; }
+                                Text {
+                                    text: root.total-queries > 0 ? (round(root.blocked-count * 10000 / root.total-queries) / 100) + "%" : "0%";
+                                    font-size: 28px; font-weight: 700; color: #1b5e20;
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Button {
+                            text: root.protection-enabled ? "Tam dung bao ve" : "Bat bao ve";
+                            clicked => { root.toggle-protection(!root.protection-enabled); }
+                        }
+                        Button {
+                            text: "Cap nhat danh sach chan";
+                            clicked => { root.update-blocklist(); }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Thiet bi mang";
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+
+                    HorizontalLayout {
+                        Button {
+                            text: "Quet thiet bi";
+                            clicked => { root.refresh-devices(); }
+                        }
+                        Text { text: "Thiet bi trong mang LAN"; font-size: 14px; font-weight: 600; }
+                    }
+
+                    ListView {
+                        for device[index] in root.devices : Rectangle {
+                            height: 48px;
+                            background: Math.mod(index, 2) == 0 ? #fafafa : #fff;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                spacing: 12px;
+                                alignment: start;
+
+                                Text { text: device.name; font-weight: 600; vertical-alignment: center; }
+                                Text { text: device.ip; color: #666; vertical-alignment: center; }
+                                Text { text: device.mac; color: #999; font-size: 12px; vertical-alignment: center; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: device.traffic; color: #1565c0; font-size: 12px; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Quy tac chan";
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        rule-input := LineEdit {
+                            placeholder-text: "Nhap domain de chan (vd: ads.example.com)";
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            text: "Them";
+                            clicked => {
+                                root.add-custom-rule(rule-input.text);
+                                rule-input.text = "";
+                            }
+                        }
+                    }
+
+                    Text { text: "Danh sach quy tac tuy chinh:"; font-size: 13px; font-weight: 600; }
+
+                    ListView {
+                        vertical-stretch: 1;
+                        for rule[index] in root.custom-rules : Rectangle {
+                            height: 36px;
+                            background: Math.mod(index, 2) == 0 ? #fafafa : #fff;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 8px;
+                                spacing: 8px;
+                                alignment: start;
+
+                                Text { text: rule; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                Button {
+                                    text: "Xoa";
+                                    clicked => { root.remove-custom-rule(rule); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Tab {
+                title: "Nhat ky";
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        filter-domain := LineEdit {
+                            placeholder-text: "Loc theo domain...";
+                            width: 180px;
+                        }
+                        filter-ip := LineEdit {
+                            placeholder-text: "Loc theo IP...";
+                            width: 140px;
+                        }
+                        Button {
+                            text: "Loc";
+                            clicked => {
+                                root.filter-logs(filter-domain.text, filter-ip.text, -1);
+                            }
+                        }
+                        Button {
+                            text: "Xoa loc";
+                            clicked => {
+                                filter-domain.text = "";
+                                filter-ip.text = "";
+                                root.filter-logs("", "", -1);
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: "Export CSV";
+                            clicked => { root.export-logs(); }
+                        }
+                        Button {
+                            text: "Xoa nhat ky";
+                            clicked => { root.clear-logs(); }
+                        }
+                    }
+
+                    ListView {
+                        vertical-stretch: 1;
+                        for log in root.logs : Rectangle {
+                            height: 32px;
+                            background: log.is-blocked ? #ffebee : #fff;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 8px;
+                                alignment: start;
+
+                                Text { text: log.timestamp; font-size: 11px; color: #999; vertical-alignment: center; min-width: 120px; }
+                                Text { text: log.is-blocked ? "[BLOCKED]" : "[OK]"; font-size: 12px; vertical-alignment: center; min-width: 70px; color: log.is-blocked ? #c62828 : #2e7d32; }
+                                Text { text: log.domain; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: log.source-ip; font-size: 11px; color: #666; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
