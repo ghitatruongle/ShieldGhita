@@ -22,10 +22,28 @@ pub struct AppConfig {
     pub log_max_entries: usize,
     pub auto_update_blocklist_hours: u64,
     pub last_blocklist_update: Option<String>,
+    #[serde(default = "default_false")]
+    pub network_wide_adblock_enabled: bool,
+    #[serde(default = "default_false")]
+    pub attack_detection_enabled: bool,
+    #[serde(default = "default_false")]
+    pub auto_block_attacks: bool,
+    #[serde(default = "default_false")]
+    pub arp_spoof_detection: bool,
+    #[serde(default = "default_rate_limit")]
+    pub dns_flood_rate_limit: u32,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
+}
+
+fn default_rate_limit() -> u32 {
+    80
 }
 
 fn default_language() -> String {
@@ -46,7 +64,9 @@ impl Default for AppConfig {
                 "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt".to_string(),
                 "https://small.oisd.nl".to_string(),
                 "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
-                "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt".to_string(),
+                "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt"
+                    .to_string(),
+                "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts".to_string(),
             ],
             custom_blocked_domains: Vec::new(),
             custom_allowed_domains: Vec::new(),
@@ -58,6 +78,11 @@ impl Default for AppConfig {
             log_max_entries: 1000,
             auto_update_blocklist_hours: 24,
             last_blocklist_update: None,
+            network_wide_adblock_enabled: false,
+            attack_detection_enabled: false,
+            auto_block_attacks: false,
+            arp_spoof_detection: false,
+            dns_flood_rate_limit: 80,
         }
     }
 }
@@ -65,7 +90,9 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn config_path() -> PathBuf {
         let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(app_data).join("ShieldGhita").join("config.toml")
+        PathBuf::from(app_data)
+            .join("ShieldGhita")
+            .join("config.toml")
     }
 
     pub fn load() -> Self {
@@ -100,7 +127,8 @@ impl AppConfig {
     }
 
     pub fn set_autostart_registry(enable: bool) {
-        let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("shield_ghita.exe"));
+        let exe_path =
+            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("shield_ghita.exe"));
         let exe_str = exe_path.to_string_lossy().to_string();
 
         let mut cmd = std::process::Command::new("reg");

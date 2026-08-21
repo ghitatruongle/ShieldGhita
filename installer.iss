@@ -1,5 +1,5 @@
 #define MyAppName "Shield Ghita"
-#define MyAppVersion "0.0.1"
+#define MyAppVersion "0.0.5-beta1"
 #define MyAppPublisher "ShieldGhita"
 #define MyAppExeName "shield_ghita.exe"
 
@@ -11,7 +11,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=installer_output
-OutputBaseFilename=ShieldGhita_Setup_v0.0.1
+OutputBaseFilename=ShieldGhita_Setup_v0.0.5-beta1
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -36,10 +36,13 @@ Name: "autostart"; Description: "Start Shield Ghita when Windows starts"; GroupD
 Type: files; Name: "{app}\{#MyAppExeName}"
 Type: files; Name: "{app}\*.dll"
 Type: files; Name: "{app}\*.exe"
+Type: files; Name: "{app}\local_*.json"
+Type: files; Name: "{app}\local_*.log"
+Type: filesandordirs; Name: "{app}\local"
 Type: filesandordirs; Name: "{app}\assets"
 
 [Files]
-Source: "target\release\shield_ghita.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "target\release_std\shield_ghita.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -98,6 +101,10 @@ begin
     Exec('taskkill.exe', '/F /IM {#MyAppExeName} /T', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
     Sleep(300);
     DeleteFile(ExpandConstant('{app}\{#MyAppExeName}'));
+    DeleteFile(ExpandConstant('{app}\local_behavior.json'));
+    DeleteFile(ExpandConstant('{app}\local_devices.json'));
+    DeleteFile(ExpandConstant('{app}\local_security.json'));
+    DelTree(ExpandConstant('{app}\local'), True, True, True);
   end;
 end;
 

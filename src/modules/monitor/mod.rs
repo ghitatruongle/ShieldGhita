@@ -65,17 +65,19 @@ pub struct NetworkMonitor {
     networks: Arc<RwLock<Networks>>,
     pub connection_tracker: Arc<ConnectionTracker>,
     pub lan_scanner: Arc<LanScanner>,
+    pub security_engine: Arc<crate::modules::security::SecurityEngine>,
 }
 
 impl NetworkMonitor {
-    pub fn new(max_logs: usize) -> Self {
+    pub fn new(max_logs: usize, sec_engine: Arc<crate::modules::security::SecurityEngine>) -> Self {
         let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
         let log_dir = PathBuf::from(app_data).join("ShieldGhita");
         let _ = fs::create_dir_all(&log_dir);
         let log_file_path = log_dir.join("dns_log.json");
 
-        let mut sys = System::new_all();
-        sys.refresh_all();
+        let mut sys = System::new();
+        sys.refresh_cpu();
+        sys.refresh_memory();
 
         let mut nets = Networks::new_with_refreshed_list();
         nets.refresh();
@@ -90,6 +92,7 @@ impl NetworkMonitor {
             networks: Arc::new(RwLock::new(nets)),
             connection_tracker: Arc::new(ConnectionTracker::new()),
             lan_scanner: Arc::new(LanScanner::new()),
+            security_engine: sec_engine,
         };
 
         monitor.load_logs_from_disk();
@@ -124,6 +127,9 @@ impl NetworkMonitor {
     }
 
     pub fn add_log(&self, domain: &str, source_ip: &str, is_blocked: bool) {
+        self.lan_scanner
+            .record_activity(source_ip, domain, is_blocked, false);
+
         let entry = LogEntry {
             timestamp: Local::now().format("%H:%M:%S").to_string(),
             domain: domain.to_string(),
@@ -207,9 +213,10 @@ impl NetworkMonitor {
             ));
         }
         let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
-        let export_path = PathBuf::from(app_data)
-            .join("ShieldGhita")
-            .join(format!("dns_log_export_{}.csv", Local::now().format("%Y%m%d_%H%M%S")));
+        let export_path = PathBuf::from(app_data).join("ShieldGhita").join(format!(
+            "dns_log_export_{}.csv",
+            Local::now().format("%Y%m%d_%H%M%S")
+        ));
         fs::write(&export_path, &csv).map_err(|e| e.to_string())?;
         info!("Exported {} log entries to {:?}", logs.len(), export_path);
         Ok(export_path.to_string_lossy().to_string())
@@ -217,13 +224,15 @@ impl NetworkMonitor {
 
     pub fn update_device_traffic(&self, ip: &str, mac: &str, bytes_sent: u64, bytes_received: u64) {
         if let Ok(mut devices) = self.devices.write() {
-            let device = devices.entry(ip.to_string()).or_insert_with(|| NetworkDevice {
-                name: format!("Thiết bị {}", ip),
-                ip: ip.to_string(),
-                mac: mac.to_string(),
-                bytes_sent: 0,
-                bytes_received: 0,
-            });
+            let device = devices
+                .entry(ip.to_string())
+                .or_insert_with(|| NetworkDevice {
+                    name: format!("Thiết bị {}", ip),
+                    ip: ip.to_string(),
+                    mac: mac.to_string(),
+                    bytes_sent: 0,
+                    bytes_received: 0,
+                });
             device.bytes_sent += bytes_sent;
             device.bytes_received += bytes_received;
         }
@@ -242,9 +251,12 @@ impl NetworkMonitor {
         let mut map: HashMap<String, (usize, usize, String, String)> = HashMap::new();
 
         for l in logs {
-            let entry = map
-                .entry(l.domain.clone())
-                .or_insert((0, 0, l.timestamp.clone(), l.source_ip.clone()));
+            let entry = map.entry(l.domain.clone()).or_insert((
+                0,
+                0,
+                l.timestamp.clone(),
+                l.source_ip.clone(),
+            ));
             entry.0 += 1;
             if l.is_blocked {
                 entry.1 += 1;
@@ -266,7 +278,7 @@ impl NetworkMonitor {
             })
             .collect();
 
-        groups.sort_by(|a, b| b.total_queries.cmp(&a.total_queries));
+        groups.sort_by_key(|b| std::cmp::Reverse(b.total_queries));
         groups
     }
 
@@ -317,12 +329,12 @@ impl NetworkMonitor {
         }
     }
 
+    #[allow(clippy::manual_is_multiple_of)]
     pub async fn start_traffic_monitor(self: Arc<Self>) {
         use std::time::Duration;
         let mut cycle: u64 = 0;
 
         loop {
-            // Update device traffic directly using internal kernel counters from sysinfo
             if let Ok(mut nets) = self.networks.write() {
                 nets.refresh();
                 let mut total_rx = 0u64;
@@ -343,8 +355,9 @@ impl NetworkMonitor {
 
             if cycle > 0 && cycle % 100 == 0 {
                 let scanner = self.lan_scanner.clone();
+                let sec = self.security_engine.clone();
                 tokio::spawn(async move {
-                    let _ = scanner.scan_network().await;
+                    let _ = scanner.scan_network(Some(sec)).await;
                 });
             }
 

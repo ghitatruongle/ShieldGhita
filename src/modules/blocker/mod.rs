@@ -47,7 +47,10 @@ impl WfpBlocker {
         unsafe {
             let result = FwpmEngineOpen0(None, 0, None, None, &mut engine_handle);
             if result != 0 {
-                return Err(format!("FwpmEngineOpen0 failed with error code: {}", result));
+                return Err(format!(
+                    "FwpmEngineOpen0 failed with error code: {}",
+                    result
+                ));
             }
         }
         *handle = Some(engine_handle);
@@ -61,11 +64,17 @@ impl WfpBlocker {
     }
 
     pub fn get_blocked_ips(&self) -> Vec<String> {
-        self.blocked_ips.read().map(|v| v.clone()).unwrap_or_default()
+        self.blocked_ips
+            .read()
+            .map(|v| v.clone())
+            .unwrap_or_default()
     }
 
     pub fn get_blocked_ports(&self) -> Vec<u16> {
-        self.blocked_ports.read().map(|v| v.clone()).unwrap_or_default()
+        self.blocked_ports
+            .read()
+            .map(|v| v.clone())
+            .unwrap_or_default()
     }
 
     #[cfg(windows)]
@@ -77,7 +86,11 @@ impl WfpBlocker {
         self.clear_filters()?;
         let ips = self.get_blocked_ips();
         let ports = self.get_blocked_ports();
-        info!("WFP blocker active: {} custom IP rules, {} port rules", ips.len(), ports.len());
+        info!(
+            "WFP blocker active: {} custom IP rules, {} port rules",
+            ips.len(),
+            ports.len()
+        );
         self.enabled.store(true, Ordering::SeqCst);
         Ok(())
     }

@@ -1,4 +1,4 @@
-import { Button, LineEdit, ListView, TabWidget } from "std-widgets.slint";
+import { Button, LineEdit, ListView } from "std-widgets.slint";
 
 export struct NetworkDevice {
     name: string,
@@ -9,6 +9,12 @@ export struct NetworkDevice {
     is-online: bool,
     latency: string,
     traffic: string,
+    total-queries: int,
+    blocked-queries: int,
+    threats-detected: int,
+    last-domain: string,
+    last-active: string,
+    risk-level: string,
 }
 
 export struct ActiveConnection {
@@ -53,49 +59,147 @@ export struct ConsoleLogEntry {
     message: string,
 }
 
+export struct SecurityIncident {
+    id: int,
+    time: string,
+    incident-type: string,
+    source-ip: string,
+    details: string,
+    severity: string,
+    mitigation: string,
+}
+
+export struct ProximityDeviceItem {
+    id: string,
+    name: string,
+    ip: string,
+    mac: string,
+    vendor: string,
+    discovery-method: string,
+    signal-info: string,
+    last-seen: string,
+    latency-ms: int,
+    is-online: bool,
+    open-ports-str: string,
+}
+
+export struct BehaviorProfileItem {
+    ip: string,
+    hostname: string,
+    total-queries: int,
+    blocked-queries: int,
+    threat-queries: int,
+    burst-qps: string,
+    risk-score: int,
+    category: string,
+    last-seen: string,
+}
+
+component TabButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> active: false;
+    in property <color> active-color: #38bdf8;
+    callback clicked <=> touch.clicked;
+
+    border-radius: 8px;
+    background: root.active ? #1e293b : #0f172a;
+    border-width: 1px;
+    border-color: root.active ? root.active-color : #1f2937;
+    animate background { duration: 150ms; }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        alignment: center;
+        Text {
+            text: root.text;
+            font-size: 12px;
+            font-weight: root.active ? 800 : 600;
+            color: root.active ? root.active-color : #94a3b8;
+            vertical-alignment: center;
+        }
+    }
+}
+
 export component AppWindow inherits Window {
-    title: root.is-vi ? "Shield Ghita v0.0.1 - Trình Điều Khiển Mạng Tối Cao" : "Shield Ghita v0.0.1 - Master Internet Controller";
-    width: 1120px;
-    height: 780px;
-    background: #0f172a;
-    default-font-family: "Segoe UI, Tahoma, Geneva, Verdana, sans-serif";
+    title: root.is-vi ? "Shield Ghita v0.0.5-beta1 - Trình Điều Khiển Mạng & Bảo Mật Tối Cao" : "Shield Ghita v0.0.5-beta1 - Master Network & Security Controller";
+    width: 1160px;
+    height: 800px;
+    background: #0b0f19;
+    default-font-family: "Segoe UI";
 
     in-out property <bool> is-vi: true;
+    in-out property <string> app-version: "0.0.5-beta1";
     in-out property <bool> enable-notifications: true;
     in-out property <bool> show-toast: false;
     in-out property <string> toast-domain: "";
     in-out property <string> toast-time: "";
-    in-out property <string> app-version: "0.0.1";
+    in-out property <string> toast-title: "";
+    in-out property <bool> toast-is-threat: false;
 
-    in-out property <string> status-text: "Đang hoạt động";
+    in-out property <string> status-text: "🟢 Đang bảo vệ tối cao";
     in-out property <int> blocked-count: 0;
     in-out property <int> total-queries: 0;
     in-out property <int> absorbed-count: 0;
     in-out property <int> active-rules-count: 0;
+    in-out property <int> lan-devices-count: 0;
+    in-out property <int> threats-blocked-count: 0;
+    in-out property <int> security-score: 100;
+    in-out property <string> host-lan-ip: "127.0.0.1";
+
     in-out property <float> cpu-usage: 0.0;
     in-out property <float> mem-usage: 0.0;
     in-out property <bool> protection-enabled: true;
     in-out property <bool> master-locked: false;
     in-out property <bool> silent-sinkhole: true;
+    in-out property <bool> network-wide-adblock: false;
+    in-out property <bool> attack-detection-enabled: false;
+    in-out property <bool> auto-block-attacks: false;
+    in-out property <bool> arp-spoof-detection: false;
+
     in-out property <bool> autostart-enabled: true;
     in-out property <bool> minimize-to-tray-enabled: true;
     in-out property <string> last-update-text: "Chưa cập nhật";
     in-out property <string> live-traffic-rate: "0 KB/s";
+
     in-out property <[NetworkDevice]> devices;
     in-out property <[ActiveConnection]> connections;
     in-out property <[AppConnectionGroup]> grouped-connections;
     in-out property <[LogEntry]> logs;
     in-out property <[DomainLogGroup]> grouped-logs;
     in-out property <[ConsoleLogEntry]> console-logs;
+    in-out property <[SecurityIncident]> security-incidents;
     in-out property <[string]> custom-rules;
     in-out property <[string]> allowed-rules;
     in-out property <int> active-log-view: 0;
     in-out property <int> conn-view-mode: 1;
     in-out property <int> log-view-mode: 0;
+    in-out property <int> lan-subview-mode: 0;
+    in-out property <int> monitor-subview-mode: 0;
+    in-out property <string> filter-domain-text: "";
+    in-out property <string> filter-ip-text: "";
+
+    in-out property <int> active-tab: 0;
+    in-out property <bool> is-admin-edition: false;
+    in-out property <[ProximityDeviceItem]> proximity-devices;
+    in-out property <[BehaviorProfileItem]> behavior-profiles;
+    in-out property <int> admin-subview-mode: 0;
+    in-out property <int> proximity-devices-count: 0;
+    in-out property <int> behavior-profiles-count: 0;
+    in-out property <int> high-risk-count: 0;
+    in-out property <int> wifi-nodes-count: 0;
 
     callback toggle-protection(bool);
     callback toggle-master-lock(bool);
     callback toggle-silent-sinkhole(bool);
+    callback toggle-network-wide-adblock(bool);
+    callback toggle-attack-detection(bool);
+    callback toggle-auto-block-attacks(bool);
+    callback toggle-arp-spoof-detection(bool);
     callback toggle-autostart(bool);
     callback toggle-minimize-to-tray(bool);
     callback toggle-notifications(bool);
@@ -104,6 +208,7 @@ export component AppWindow inherits Window {
     callback refresh-connections();
     callback clear-logs();
     callback clear-console-logs();
+    callback clear-security-incidents();
     callback add-custom-rule(string);
     callback remove-custom-rule(string);
     callback add-allowed-rule(string);
@@ -111,32 +216,34 @@ export component AppWindow inherits Window {
     callback update-blocklist();
     callback export-logs();
     callback filter-logs(string, string, int);
+    callback filter-logs-by-ip(string);
     callback dismiss-toast();
+    callback trigger-proximity-scan();
+    callback refresh-admin-data();
 
-    // Floating Notification Toast
     if root.show-toast : Rectangle {
         z: 100;
-        x: root.width - 390px;
+        x: root.width - 410px;
         y: 60px;
-        width: 370px;
-        height: 68px;
-        background: #1e1b4b;
+        width: 390px;
+        height: 72px;
+        background: root.toast-is-threat ? #450a0a : #1e1b4b;
         border-radius: 10px;
-        border-width: 1.5px;
-        border-color: #818cf8;
-        drop-shadow-color: #00000088;
+        border-width: 2px;
+        border-color: root.toast-is-threat ? #ef4444 : #818cf8;
+        drop-shadow-color: #000000aa;
         drop-shadow-offset-x: 0px;
-        drop-shadow-offset-y: 6px;
-        drop-shadow-blur: 16px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-blur: 20px;
 
         HorizontalLayout {
             padding: 10px;
-            spacing: 10px;
+            spacing: 12px;
             alignment: center;
 
             Text {
-                text: "🛡️";
-                font-size: 24px;
+                text: root.toast-is-threat ? "🚨" : "🛡️";
+                font-size: 26px;
                 vertical-alignment: center;
             }
 
@@ -145,10 +252,10 @@ export component AppWindow inherits Window {
                 spacing: 2px;
                 alignment: center;
                 Text {
-                    text: root.is-vi ? "ĐÃ CHẶN QUẢNG CÁO & THEO DÕI" : "AD & TRACKER BLOCKED";
+                    text: root.toast-title != "" ? root.toast-title : (root.is-vi ? "ĐÃ CHẶN QUẢNG CÁO & THEO DÕI" : "AD & TRACKER BLOCKED");
                     font-size: 11px;
                     font-weight: 800;
-                    color: #a5b4fc;
+                    color: root.toast-is-threat ? #fca5a5 : #a5b4fc;
                 }
                 Text {
                     text: root.toast-domain + " (" + root.toast-time + ")";
@@ -161,7 +268,7 @@ export component AppWindow inherits Window {
 
             Button {
                 text: "✖";
-                width: 30px;
+                width: 32px;
                 clicked => { root.dismiss-toast(); }
             }
         }
@@ -171,7 +278,6 @@ export component AppWindow inherits Window {
         padding: 16px;
         spacing: 12px;
 
-        // Top Navigation Header
         HorizontalLayout {
             spacing: 16px;
             alignment: center;
@@ -181,30 +287,60 @@ export component AppWindow inherits Window {
                 alignment: start;
                 Image {
                     source: @image-url("assets/logo.png");
-                    width: 30px;
-                    height: 30px;
+                    width: 32px;
+                    height: 32px;
                 }
-                Text {
-                    text: "Shield Ghita";
-                    font-size: 22px;
-                    font-weight: 800;
-                    color: #38bdf8;
-                    vertical-alignment: center;
-                }
-                Rectangle {
-                    width: root.is-vi ? 150px : 160px;
-                    height: 26px;
-                    border-radius: 13px;
-                    background: root.master-locked ? #7f1d1d : (root.protection-enabled ? #166534 : #991b1b);
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 0px;
                     HorizontalLayout {
-                        alignment: center;
+                        spacing: 6px;
                         Text {
-                            text: root.master-locked ? (root.is-vi ? "🔒 ĐÃ KHÓA MẠNG" : "🔒 LOCKED") : (root.protection-enabled ? (root.is-vi ? "🟢 BẢO VỆ TỐI CAO" : "🟢 ACTIVE SHIELD") : (root.is-vi ? "🔴 TẠM DỪNG" : "🔴 PAUSED"));
-                            font-size: 11px;
+                            text: "Shield Ghita";
+                            font-size: 20px;
                             font-weight: 800;
-                            color: #ffffff;
+                            color: #38bdf8;
                             vertical-alignment: center;
                         }
+                        Rectangle {
+                            height: 18px;
+                            border-radius: 9px;
+                            background: #0284c7;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                alignment: center;
+                                Text {
+                                    text: "v" + root.app-version;
+                                    font-size: 10px;
+                                    font-weight: 800;
+                                    color: #ffffff;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        if root.is-admin-edition : Rectangle {
+                            height: 18px;
+                            border-radius: 9px;
+                            background: #7c3aed;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                alignment: center;
+                                Text {
+                                    text: "👑 ADMIN EDITION";
+                                    font-size: 10px;
+                                    font-weight: 800;
+                                    color: #ffffff;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                    Text {
+                        text: root.is-vi ? "Bảo mật mạng, Ngăn chặn xâm nhập & Chặn quảng cáo LAN" : "Cyber Security, IDS/IPS & LAN Adblock Controller";
+                        font-size: 11px;
+                        color: #94a3b8;
                     }
                 }
             }
@@ -212,144 +348,235 @@ export component AppWindow inherits Window {
             Rectangle { horizontal-stretch: 1; }
 
             HorizontalLayout {
-                spacing: 14px;
-                alignment: end;
-                Text {
-                    text: (root.is-vi ? "🎯 Quy tắc: " : "🎯 Rules: ") + root.active-rules-count;
-                    font-size: 12px;
-                    font-weight: 700;
-                    color: #38bdf8;
-                    vertical-alignment: center;
+                spacing: 12px;
+                alignment: center;
+
+                Rectangle {
+                    height: 28px;
+                    border-radius: 14px;
+                    background: root.protection-enabled ? #064e3b : #450a0a;
+                    border-width: 1px;
+                    border-color: root.protection-enabled ? #059669 : #dc2626;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        alignment: center;
+                        Text {
+                            text: root.status-text;
+                            font-size: 12px;
+                            font-weight: 800;
+                            color: root.protection-enabled ? #6ee7b7 : #fca5a5;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
-                Rectangle { width: 1px; height: 16px; background: #334155; }
-                Text {
-                    text: "⚡ " + root.live-traffic-rate;
-                    font-size: 12px;
-                    font-weight: 700;
-                    color: #22c55e;
-                    vertical-alignment: center;
+
+                Rectangle {
+                    height: 28px;
+                    border-radius: 14px;
+                    background: #1e1b4b;
+                    border-width: 1px;
+                    border-color: #4f46e5;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        alignment: center;
+                        Text {
+                            text: (root.is-vi ? "🛡 Điểm an ninh: " : "🛡 Security Score: ") + root.security-score + "/100";
+                            font-size: 12px;
+                            font-weight: 800;
+                            color: #a5b4fc;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
-                Rectangle { width: 1px; height: 16px; background: #334155; }
-                Text {
-                    text: (root.is-vi ? "🤫 Phát nền: " : "🤫 Silent: ") + root.absorbed-count;
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #a78bfa;
-                    vertical-alignment: center;
-                }
-                Rectangle { width: 1px; height: 16px; background: #334155; }
-                Text {
-                    text: "CPU: " + Math.round(root.cpu-usage) + "% | RAM: " + (Math.round(root.mem-usage * 10) / 10) + " GB";
-                    font-size: 12px;
-                    color: #94a3b8;
-                    vertical-alignment: center;
+
+                Rectangle {
+                    height: 28px;
+                    border-radius: 14px;
+                    background: #0f172a;
+                    border-width: 1px;
+                    border-color: #334155;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 8px;
+                        alignment: center;
+                        Text {
+                            text: "CPU: " + Math.round(root.cpu-usage) + "%";
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: #94a3b8;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "RAM: " + Math.round(root.mem-usage * 10.0) / 10.0 + " GB";
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: #94a3b8;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "⚡ " + root.live-traffic-rate;
+                            font-size: 11px;
+                            font-weight: 800;
+                            color: #38bdf8;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
         }
 
-        TabWidget {
-            vertical-stretch: 1;
+        HorizontalLayout {
+            spacing: 8px;
+            height: 38px;
 
-            // Tab 1: Dashboard
-            Tab {
-                title: root.is-vi ? "📊 Tổng quan & Điều khiển" : "📊 Dashboard & Controls";
+            TabButton {
+                text: root.is-vi ? "📊 Tổng quan" : "📊 Overview";
+                active: root.active-tab == 0;
+                active-color: #38bdf8;
+                clicked => { root.active-tab = 0; }
+            }
+
+            TabButton {
+                text: root.is-vi ? "🛡 An ninh" : "🛡 Security";
+                active: root.active-tab == 1;
+                active-color: #34d399;
+                clicked => { root.active-tab = 1; }
+            }
+
+            TabButton {
+                text: root.is-vi ? "🚀 Giám sát" : "🚀 Monitor & Logs";
+                active: root.active-tab == 2;
+                active-color: #a78bfa;
+                clicked => { root.active-tab = 2; }
+            }
+
+            TabButton {
+                text: root.is-vi ? "🚫 Bộ lọc" : "🚫 Filter Rules";
+                active: root.active-tab == 3;
+                active-color: #f87171;
+                clicked => { root.active-tab = 3; }
+            }
+
+            TabButton {
+                text: root.is-vi ? "⚙ Cài đặt" : "⚙ Settings";
+                active: root.active-tab == 4;
+                active-color: #38bdf8;
+                clicked => { root.active-tab = 4; }
+            }
+
+            if root.is-admin-edition : TabButton {
+                text: root.is-vi ? "👑 Quản trị Admin" : "👑 Admin Suite";
+                active: root.active-tab == 5;
+                active-color: #c084fc;
+                clicked => { root.active-tab = 5; }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            background: #0d121f;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #1e293b;
+            clip: true;
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.active-tab == 0;
                 VerticalLayout {
                     padding: 16px;
                     spacing: 16px;
 
                     HorizontalLayout {
-                        spacing: 12px;
+                        spacing: 14px;
 
                         Rectangle {
-                            background: #1e293b;
+                            horizontal-stretch: 1;
+                            height: 105px;
+                            background: #111827;
                             border-radius: 10px;
                             border-width: 1px;
-                            border-color: #334155;
+                            border-color: #1f2937;
                             VerticalLayout {
                                 padding: 14px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "TỔNG TRUY VẤN DNS" : "TOTAL DNS QUERIES"; font-size: 11px; font-weight: 700; color: #38bdf8; }
-                                Text { text: root.total-queries; font-size: 26px; font-weight: 800; color: #f8fafc; }
-                                Text { text: root.is-vi ? "Toàn bộ lưu lượng máy" : "All device DNS traffic"; font-size: 11px; color: #64748b; }
+                                Text { text: root.is-vi ? "TỔNG TRUY VẤN DNS" : "TOTAL DNS QUERIES"; font-size: 11px; font-weight: 700; color: #94a3b8; }
+                                Text { text: root.total-queries; font-size: 26px; font-weight: 800; color: #38bdf8; }
+                                Text { text: root.is-vi ? "Xử lý song song siêu tốc qua DoH" : "Ultra-fast parallel DoH engine"; font-size: 11px; color: #64748b; }
                             }
                         }
 
                         Rectangle {
-                            background: #1e293b;
+                            horizontal-stretch: 1;
+                            height: 105px;
+                            background: #111827;
                             border-radius: 10px;
                             border-width: 1px;
-                            border-color: #334155;
+                            border-color: #1f2937;
                             VerticalLayout {
                                 padding: 14px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "QUẢNG CÁO & THEO DÕI ĐÃ CHẶN" : "ADS & TRACKERS BLOCKED"; font-size: 11px; font-weight: 700; color: #f87171; }
-                                Text { text: root.blocked-count; font-size: 26px; font-weight: 800; color: #ef4444; }
-                                Text { text: root.is-vi ? "Khử rò rỉ dữ liệu ngầm" : "Zero tracking leakage"; font-size: 11px; color: #64748b; }
+                                Text { text: root.is-vi ? "QUẢNG CÁO & THEO DÕI ĐÃ CHẶN" : "ADS & TRACKERS BLOCKED"; font-size: 11px; font-weight: 700; color: #94a3b8; }
+                                Text { text: root.blocked-count; font-size: 26px; font-weight: 800; color: #22c55e; }
+                                Text { text: (root.is-vi ? "Đã lọc ngầm bởi Silent Sinkhole: " : "Silently absorbed: ") + root.absorbed-count; font-size: 11px; color: #4ade80; }
                             }
                         }
 
                         Rectangle {
-                            background: #1e293b;
+                            horizontal-stretch: 1;
+                            height: 105px;
+                            background: #111827;
                             border-radius: 10px;
                             border-width: 1px;
-                            border-color: #334155;
+                            border-color: #1f2937;
                             VerticalLayout {
                                 padding: 14px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "QUY TẮC BỘ LỌC ĐANG CHẶN" : "ACTIVE FILTER RULES"; font-size: 11px; font-weight: 700; color: #38bdf8; }
-                                Text { text: root.active-rules-count; font-size: 26px; font-weight: 800; color: #38bdf8; }
-                                Text { text: root.is-vi ? "Domain trong cơ sở dữ liệu" : "Domains in active memory"; font-size: 11px; color: #64748b; }
+                                Text { text: root.is-vi ? "MỐI NGUY & TẤN CÔNG ĐÃ CHẶN" : "THREATS & ATTACKS BLOCKED"; font-size: 11px; font-weight: 700; color: #94a3b8; }
+                                Text { text: root.threats-blocked-count; font-size: 26px; font-weight: 800; color: #f87171; }
+                                Text { text: root.is-vi ? "IDS/IPS & Chống rò rỉ DNS Tunneling" : "IDS/IPS & Anti-DNS Tunneling"; font-size: 11px; color: #fca5a5; }
                             }
                         }
 
                         Rectangle {
-                            background: #1e293b;
+                            horizontal-stretch: 1;
+                            height: 105px;
+                            background: #111827;
                             border-radius: 10px;
                             border-width: 1px;
-                            border-color: #334155;
+                            border-color: #1f2937;
                             VerticalLayout {
                                 padding: 14px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "PHÁT NỀN ÊM DỊU (SILENT ADS)" : "SILENT SINKHOLE ADS"; font-size: 11px; font-weight: 700; color: #c084fc; }
-                                Text { text: root.absorbed-count; font-size: 26px; font-weight: 800; color: #a855f7; }
-                                Text { text: root.is-vi ? "Nuốt chửng ad không gây lag" : "Smooth media absorption"; font-size: 11px; color: #64748b; }
-                            }
-                        }
-
-                        Rectangle {
-                            background: #1e293b;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: #334155;
-                            VerticalLayout {
-                                padding: 14px;
-                                spacing: 4px;
-                                Text { text: root.is-vi ? "TỶ LỆ LỌC THÀNH CÔNG" : "BLOCKING RATIO"; font-size: 11px; font-weight: 700; color: #4ade80; }
-                                Text {
-                                    text: root.total-queries > 0 ? (Math.round(root.blocked-count * 10000 / root.total-queries) / 100) + "%" : "0%";
-                                    font-size: 26px;
-                                    font-weight: 800;
-                                    color: #22c55e;
-                                }
-                                Text { text: root.is-vi ? "Bảo vệ an toàn tối cao" : "Ultra-fast response"; font-size: 11px; color: #64748b; }
+                                Text { text: root.is-vi ? "THIẾT BỊ MẠNG LAN HOẠT ĐỘNG" : "ACTIVE LAN DEVICES"; font-size: 11px; font-weight: 700; color: #94a3b8; }
+                                Text { text: root.lan-devices-count; font-size: 26px; font-weight: 800; color: #a78bfa; }
+                                Text { text: (root.is-vi ? "Quy tắc lọc đang kích hoạt: " : "Active filter rules: ") + root.active-rules-count; font-size: 11px; color: #cbd5e1; }
                             }
                         }
                     }
 
                     Rectangle {
-                        background: #1e293b;
+                        background: #111827;
                         border-radius: 10px;
                         border-width: 1px;
-                        border-color: #334155;
+                        border-color: #1f2937;
                         VerticalLayout {
                             padding: 16px;
-                            spacing: 12px;
-                            Text { text: root.is-vi ? "⚡ Trung tâm điều khiển Internet tối cao (Master Controller):" : "⚡ Master Internet Controller Quick Actions:"; font-size: 14px; font-weight: 700; color: #e2e8f0; }
+                            spacing: 14px;
+                            Text { text: root.is-vi ? "⚡ Trung tâm điều khiển mạng tối cao (Master Controller Quick Actions):" : "⚡ Master Internet Controller Quick Actions:"; font-size: 14px; font-weight: 700; color: #e2e8f0; }
 
                             HorizontalLayout {
                                 spacing: 12px;
                                 Button {
-                                    text: root.protection-enabled ? (root.is-vi ? "⏸️ Tạm dừng bảo vệ" : "⏸️ Pause Protection") : (root.is-vi ? "▶️ Bật bảo vệ tối cao" : "▶️ Enable Protection");
+                                    text: root.protection-enabled ? (root.is-vi ? "⏸️ Tạm dừng bảo vệ máy" : "⏸️ Pause Protection") : (root.is-vi ? "▶️ Bật bảo vệ máy" : "▶️ Enable Protection");
                                     clicked => { root.toggle-protection(!root.protection-enabled); }
                                 }
                                 Button {
@@ -357,13 +584,40 @@ export component AppWindow inherits Window {
                                     clicked => { root.toggle-master-lock(!root.master-locked); }
                                 }
                                 Button {
-                                    text: root.silent-sinkhole ? (root.is-vi ? "🤫 Chế độ: Phát nền êm dịu (Bật)" : "🤫 Mode: Silent Sinkhole (ON)") : (root.is-vi ? "🚫 Chế độ: Chặn NXDOMAIN" : "🚫 Mode: NXDOMAIN Block");
-                                    clicked => { root.toggle-silent-sinkhole(!root.silent-sinkhole); }
+                                    text: root.network-wide-adblock ? (root.is-vi ? "🌐 Chống QC toàn mạng: BẬT" : "🌐 Network Adblock: ON") : (root.is-vi ? "🌐 Chống QC toàn mạng: TẮT" : "🌐 Network Adblock: OFF");
+                                    clicked => { root.toggle-network-wide-adblock(!root.network-wide-adblock); }
                                 }
                                 Button {
-                                    text: root.is-vi ? "🔄 Cập nhật bộ lọc Online" : "🔄 Update Blocklists Online";
+                                    text: root.attack-detection-enabled ? (root.is-vi ? "🛡️ Chống tấn công: BẬT" : "🛡️ IDS/IPS Attack Shield: ON") : (root.is-vi ? "🛡️ Chống tấn công: TẮT" : "🛡️ IDS/IPS Attack Shield: OFF");
+                                    clicked => { root.toggle-attack-detection(!root.attack-detection-enabled); }
+                                }
+                                Button {
+                                    text: root.is-vi ? "🔄 Cập nhật Bộ lọc" : "🔄 Update Blocklists";
                                     clicked => { root.update-blocklist(); }
                                 }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        background: #111827;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: #1f2937;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 12px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: root.is-vi ? "📡 Hướng dẫn cấu hình Chống quảng cáo Toàn mạng LAN:" : "📡 Quick LAN Setup Guide:"; font-size: 14px; font-weight: 700; color: #38bdf8; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: (root.is-vi ? "Địa chỉ IP máy tính này: " : "Host Machine IP: ") + root.host-lan-ip; font-size: 13px; font-weight: 800; color: #22c55e; }
+                            }
+                            Text {
+                                text: root.is-vi ? "• Bật tính năng 'Chống quảng cáo toàn mạng' ở trên hoặc trong Cài đặt.\n• Đặt DNS trên Router Wi-Fi hoặc trên Điện thoại (iPhone/Android)/Smart TV thành: " + root.host-lan-ip + "\n• Mọi thiết bị kết nối vào Wi-Fi sẽ tự động sạch 100% quảng cáo và được bảo vệ như máy tính này." : "• Enable 'Network-wide Ad Blocking' above or in Settings.\n• Set DNS on your Wi-Fi Router or Phone/Smart TV to: " + root.host-lan-ip + "\n• All connected LAN devices will have ads blocked automatically without extra software.";
+                                font-size: 12px;
+                                color: #94a3b8;
                             }
                         }
                     }
@@ -372,25 +626,75 @@ export component AppWindow inherits Window {
                 }
             }
 
-            // Tab 2: Connections
-            Tab {
-                title: root.is-vi ? "🌐 Kết nối Internet của máy" : "🌐 Active Connections";
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.active-tab == 1;
                 VerticalLayout {
                     padding: 16px;
-                    spacing: 10px;
+                    spacing: 12px;
 
                     HorizontalLayout {
                         spacing: 12px;
-                        Button {
-                            text: root.is-vi ? "🔄 Làm mới" : "🔄 Refresh";
-                            clicked => { root.refresh-connections(); }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #1f2937;
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 4px;
+                                Text { text: root.is-vi ? "🛡️ HỆ THỐNG PHÁT HIỆN TẤN CÔNG (IDS)" : "🛡️ INTRUSION DETECTION (IDS)"; font-size: 11px; font-weight: 700; color: #38bdf8; }
+                                Text { text: root.attack-detection-enabled ? (root.is-vi ? "🟢 ĐANG BẢO VỆ" : "🟢 ACTIVE") : (root.is-vi ? "⚪ ĐANG TẮT" : "⚪ DISABLED"); font-size: 13px; font-weight: 800; color: root.attack-detection-enabled ? #4ade80 : #94a3b8; }
+                            }
                         }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #1f2937;
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 4px;
+                                Text { text: root.is-vi ? "⚡ TỰ ĐỘNG KHÓA IP TẤN CÔNG (IPS)" : "⚡ AUTO-BLOCK THREATS (IPS)"; font-size: 11px; font-weight: 700; color: #f87171; }
+                                Text { text: root.auto-block-attacks ? (root.is-vi ? "🟢 TỰ ĐỘNG CÔ LẬP NGUỒN" : "🟢 AUTO-MITIGATION ON") : (root.is-vi ? "⚪ CHỈ CẢNH BÁO" : "⚪ ALERT ONLY"); font-size: 13px; font-weight: 800; color: root.auto-block-attacks ? #4ade80 : #94a3b8; }
+                            }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #1f2937;
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 4px;
+                                Text { text: root.is-vi ? "📡 GIÁM SÁT ARP SPOOFING / MITM" : "📡 ARP SPOOFING WATCH"; font-size: 11px; font-weight: 700; color: #fbbf24; }
+                                Text { text: root.arp-spoof-detection ? (root.is-vi ? "🟢 QUẢN TRỊ GATEWAY" : "🟢 GATEWAY MONITORED") : (root.is-vi ? "⚪ ĐANG TẮT" : "⚪ DISABLED"); font-size: 13px; font-weight: 800; color: root.arp-spoof-detection ? #4ade80 : #94a3b8; }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
                         Button {
-                            text: root.conn-view-mode == 1 ? (root.is-vi ? "📄 Chuyển sang Xem Chi Tiết" : "📄 View Detailed List") : (root.is-vi ? "🚀 Chuyển sang Gom Nhóm Ứng Dụng" : "🚀 Group by Application");
-                            clicked => { root.conn-view-mode = root.conn-view-mode == 1 ? 0 : 1; }
+                            text: root.lan-subview-mode == 0 ? (root.is-vi ? "🚨 Xem Nhật ký Cảnh báo An ninh" : "🚨 View Security Incidents") : (root.is-vi ? "🌐 Xem Danh sách Thiết bị LAN" : "🌐 View LAN Devices");
+                            clicked => { root.lan-subview-mode = root.lan-subview-mode == 0 ? 1 : 0; }
+                        }
+                        if root.lan-subview-mode == 0 : Button {
+                            text: root.is-vi ? "🔍 Quét lại mạng LAN" : "🔍 Rescan LAN Subnet";
+                            clicked => { root.refresh-devices(); }
+                        }
+                        if root.lan-subview-mode == 1 : Button {
+                            text: root.is-vi ? "🗑️ Xóa toàn bộ cảnh báo" : "🗑️ Clear All Incidents";
+                            clicked => { root.clear-security-incidents(); }
                         }
                         Text {
-                            text: root.conn-view-mode == 1 ? (root.is-vi ? "Gom nhóm theo Ứng dụng / Tiến trình:" : "Grouped by Application / Process:") : (root.is-vi ? "Chi tiết tất cả kết nối mạng trực tiếp:" : "Detailed direct network connections:");
+                            text: root.lan-subview-mode == 0 ? (root.is-vi ? "Giám sát thời gian thực mọi hoạt động Internet của thiết bị LAN:" : "Real-time Internet activity of LAN devices:") : (root.is-vi ? "Nhật ký cảnh báo an ninh & ngăn chặn xâm nhập thời gian thực:" : "Real-time Security Incidents & Intrusion Prevention Logs:");
                             font-size: 13px;
                             font-weight: 600;
                             color: #94a3b8;
@@ -398,11 +702,264 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    if root.conn-view-mode == 1 : ListView {
+                    if root.lan-subview-mode == 0 : ListView {
+                        vertical-stretch: 1;
+                        for device in root.devices : Rectangle {
+                            height: 64px;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: device.threats-detected > 0 ? #ef4444 : #1f2937;
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 14px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 250px;
+                                    Text { text: device.name; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
+                                    Text { text: (root.is-vi ? "Hãng: " : "Vendor: ") + device.vendor; font-size: 11px; color: #38bdf8; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 150px;
+                                    Text { text: "IP: " + device.ip; font-size: 12px; font-weight: 700; color: #cbd5e1; }
+                                    Text { text: "MAC: " + device.mac; font-size: 11px; color: #64748b; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 160px;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Rectangle {
+                                            height: 20px;
+                                            border-radius: 10px;
+                                            background: #0284c7;
+                                            HorizontalLayout {
+                                                padding-left: 6px;
+                                                padding-right: 6px;
+                                                alignment: center;
+                                                Text { text: device.total-queries + " req"; font-size: 10px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
+                                            }
+                                        }
+                                        Rectangle {
+                                            height: 20px;
+                                            border-radius: 10px;
+                                            background: #dc2626;
+                                            HorizontalLayout {
+                                                padding-left: 6px;
+                                                padding-right: 6px;
+                                                alignment: center;
+                                                Text { text: device.blocked-queries + " ad"; font-size: 10px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
+                                            }
+                                        }
+                                    }
+                                    Text { text: (root.is-vi ? "Domain gần nhất: " : "Last: ") + device.last-domain; font-size: 11px; color: #94a3b8; overflow: elide; }
+                                }
+
+                                Rectangle { horizontal-stretch: 1; }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 140px;
+                                    Text {
+                                        text: device.is-online ? (root.is-vi ? "🟢 TRỰC TUYẾN" : "🟢 ONLINE") : (root.is-vi ? "🔴 NGOẠI TUYẾN" : "🔴 OFFLINE");
+                                        font-size: 11px;
+                                        font-weight: 800;
+                                        color: device.is-online ? #4ade80 : #f87171;
+                                    }
+                                    Text { text: device.risk-level != "" ? device.risk-level : (root.is-vi ? "Độ trễ: " + device.latency : "Latency: " + device.latency); font-size: 11px; color: #94a3b8; }
+                                }
+
+                                Button {
+                                    text: root.is-vi ? "📋 Xem Log" : "📋 View Logs";
+                                    clicked => { root.filter-logs-by-ip(device.ip); }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.lan-subview-mode == 1 : ListView {
+                        vertical-stretch: 1;
+                        for inc in root.security-incidents : Rectangle {
+                            height: 74px;
+                            background: inc.severity == "CRITICAL" ? #2a0808 : (inc.severity == "HIGH" ? #241405 : #0f172a);
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: inc.severity == "CRITICAL" ? #ef4444 : (inc.severity == "HIGH" ? #f59e0b : #3b82f6);
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                padding-top: 8px;
+                                padding-bottom: 8px;
+                                spacing: 14px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 85px;
+                                    spacing: 4px;
+                                    Rectangle {
+                                        height: 22px;
+                                        border-radius: 11px;
+                                        background: inc.severity == "CRITICAL" ? #dc2626 : (inc.severity == "HIGH" ? #d97706 : #2563eb);
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            Text {
+                                                text: inc.severity;
+                                                font-size: 10px;
+                                                font-weight: 800;
+                                                color: #ffffff;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                    Text { text: inc.time; font-size: 11px; color: #94a3b8; horizontal-alignment: center; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    spacing: 3px;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Text {
+                                            text: "🚨 " + inc.incident-type;
+                                            font-size: 13px;
+                                            font-weight: 800;
+                                            color: inc.severity == "CRITICAL" ? #fca5a5 : (inc.severity == "HIGH" ? #fcd34d : #93c5fd);
+                                        }
+                                        Rectangle {
+                                            height: 18px;
+                                            border-radius: 4px;
+                                            background: #1e293b;
+                                            HorizontalLayout {
+                                                padding-left: 6px;
+                                                padding-right: 6px;
+                                                alignment: center;
+                                                Text { text: "IP: " + inc.source-ip; font-size: 10px; font-weight: 700; color: #cbd5e1; vertical-alignment: center; }
+                                            }
+                                        }
+                                    }
+                                    Text { text: inc.details; font-size: 11px; color: #e2e8f0; overflow: elide; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 250px;
+                                    Rectangle {
+                                        border-radius: 6px;
+                                        background: #064e3b;
+                                        border-width: 1px;
+                                        border-color: #059669;
+                                        VerticalLayout {
+                                            padding: 6px;
+                                            Text {
+                                                text: (root.is-vi ? "🛡️ Biện pháp IPS: " : "🛡️ IPS Action: ") + inc.mitigation;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                                color: #6ee7b7;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.active-tab == 2;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        Button {
+                            text: root.monitor-subview-mode == 0 ? (root.is-vi ? "● 🚀 Tiến trình mạng" : "● 🚀 Active Connections") : (root.is-vi ? "🚀 Tiến trình mạng" : "🚀 Active Connections");
+                            clicked => { root.monitor-subview-mode = 0; }
+                        }
+                        Button {
+                            text: root.monitor-subview-mode == 1 ? (root.is-vi ? "● 🌐 Nhật ký DNS" : "● 🌐 DNS Logs") : (root.is-vi ? "🌐 Nhật ký DNS" : "🌐 DNS Logs");
+                            clicked => { root.monitor-subview-mode = 1; }
+                        }
+                        Button {
+                            text: root.monitor-subview-mode == 2 ? (root.is-vi ? "● 📋 Console hệ thống" : "● 📋 System Console") : (root.is-vi ? "📋 Console hệ thống" : "📋 System Console");
+                            clicked => { root.monitor-subview-mode = 2; }
+                        }
+
+                        Rectangle { width: 1px; height: 20px; background: #334155; }
+
+                        if root.monitor-subview-mode == 0 : Button {
+                            text: root.is-vi ? "🔄 Làm mới" : "🔄 Refresh";
+                            clicked => { root.refresh-connections(); }
+                        }
+                        if root.monitor-subview-mode == 0 : Button {
+                            text: root.conn-view-mode == 1 ? (root.is-vi ? "📄 Xem Chi Tiết" : "📄 Detailed List") : (root.is-vi ? "🚀 Gom Nhóm Ứng Dụng" : "🚀 Group by App");
+                            clicked => { root.conn-view-mode = root.conn-view-mode == 1 ? 0 : 1; }
+                        }
+
+                        if root.monitor-subview-mode == 1 : Button {
+                            text: root.log-view-mode == 1 ? (root.is-vi ? "🌐 Dòng Thời Gian" : "🌐 Timeline View") : (root.is-vi ? "📊 Gom Nhóm Domain" : "📊 Group by Domain");
+                            clicked => { root.log-view-mode = root.log-view-mode == 1 ? 0 : 1; }
+                        }
+
+                        if root.monitor-subview-mode == 1 : LineEdit {
+                            placeholder-text: root.is-vi ? "Lọc domain..." : "Filter domain...";
+                            width: 160px;
+                            text <=> root.filter-domain-text;
+                        }
+                        if root.monitor-subview-mode == 1 : LineEdit {
+                            placeholder-text: root.is-vi ? "Lọc IP..." : "Filter IP...";
+                            width: 120px;
+                            text <=> root.filter-ip-text;
+                        }
+                        if root.monitor-subview-mode == 1 : Button {
+                            text: root.is-vi ? "🔍 Lọc" : "🔍 Filter";
+                            clicked => { root.filter-logs(root.filter-domain-text, root.filter-ip-text, -1); }
+                        }
+                        if root.monitor-subview-mode == 1 : Button {
+                            text: root.is-vi ? "✖ Xóa lọc" : "✖ Clear";
+                            clicked => {
+                                root.filter-domain-text = "";
+                                root.filter-ip-text = "";
+                                root.filter-logs("", "", -1);
+                            }
+                        }
+
+                        Rectangle { horizontal-stretch: 1; }
+
+                        if root.monitor-subview-mode == 1 : Button {
+                            text: root.is-vi ? "💾 Xuất CSV" : "💾 Export CSV";
+                            clicked => { root.export-logs(); }
+                        }
+                        if root.monitor-subview-mode == 1 : Button {
+                            text: root.is-vi ? "🗑️ Xóa log" : "🗑️ Clear Logs";
+                            clicked => { root.clear-logs(); }
+                        }
+                        if root.monitor-subview-mode == 2 : Button {
+                            text: root.is-vi ? "🗑️ Xóa console log" : "🗑️ Clear Console";
+                            clicked => { root.clear-console-logs(); }
+                        }
+                    }
+
+                    if root.monitor-subview-mode == 0 && root.conn-view-mode == 1 : ListView {
                         vertical-stretch: 1;
                         for grp in root.grouped-connections : Rectangle {
                             height: 42px;
-                            background: #1e293b;
+                            background: #111827;
                             border-radius: 6px;
                             HorizontalLayout {
                                 padding-left: 12px;
@@ -431,11 +988,11 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    if root.conn-view-mode == 0 : ListView {
+                    if root.monitor-subview-mode == 0 && root.conn-view-mode == 0 : ListView {
                         vertical-stretch: 1;
                         for conn in root.connections : Rectangle {
                             height: 38px;
-                            background: #1e293b;
+                            background: #111827;
                             border-radius: 6px;
                             HorizontalLayout {
                                 padding-left: 12px;
@@ -454,234 +1011,12 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                }
-            }
 
-            // Tab 3: LAN Scanner
-            Tab {
-                title: root.is-vi ? "💻 Thiết bị chung mạng LAN" : "💻 LAN Devices Scanner";
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 10px;
-
-                    HorizontalLayout {
-                        spacing: 12px;
-                        Button {
-                            text: root.is-vi ? "🔍 Quét toàn bộ mạng LAN" : "🔍 Scan Entire LAN Subnet";
-                            clicked => { root.refresh-devices(); }
-                        }
-                        Text {
-                            text: root.is-vi ? "Quét chủ động toàn bộ dải mạng LAN /24 qua Layer 2 ARP & tra cứu Vendor/NetBIOS:" : "Active Layer 2 ARP subnet sweep (/24) with Vendor/NetBIOS hardware identification:";
-                            font-size: 13px;
-                            font-weight: 600;
-                            color: #94a3b8;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    ListView {
-                        vertical-stretch: 1;
-                        for device in root.devices : Rectangle {
-                            height: 52px;
-                            background: #1e293b;
-                            border-radius: 6px;
-                            HorizontalLayout {
-                                padding-left: 14px;
-                                padding-right: 14px;
-                                spacing: 14px;
-                                alignment: start;
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    min-width: 280px;
-                                    Text { text: device.name; font-size: 13px; font-weight: 700; color: #f1f5f9; }
-                                    Text { text: (root.is-vi ? "Hãng: " : "Vendor: ") + device.vendor; font-size: 11px; color: #38bdf8; }
-                                }
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    min-width: 170px;
-                                    Text { text: "IP: " + device.ip; font-size: 12px; color: #cbd5e1; }
-                                    Text { text: "MAC: " + device.mac; font-size: 11px; color: #64748b; }
-                                }
-
-                                Rectangle { horizontal-stretch: 1; }
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    Text {
-                                        text: device.is-online ? (root.is-vi ? "🟢 TRỰC TUYẾN" : "🟢 ONLINE") : (root.is-vi ? "🔴 NGOẠI TUYẾN" : "🔴 OFFLINE");
-                                        font-size: 11px;
-                                        font-weight: 800;
-                                        color: device.is-online ? #4ade80 : #f87171;
-                                    }
-                                    Text { text: (root.is-vi ? "Độ trễ: " : "Latency: ") + device.latency; font-size: 11px; color: #94a3b8; }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Tab 4: Rules & Whitelist
-            Tab {
-                title: root.is-vi ? "🚫 Quy tắc lọc & Whitelist" : "🚫 Rules & Whitelist";
-                HorizontalLayout {
-                    padding: 16px;
-                    spacing: 16px;
-
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 10px;
-
-                        Text { text: root.is-vi ? "⛔ Danh sách chặn tùy chỉnh (Blacklist):" : "⛔ Custom Blacklist (Block):"; font-size: 14px; font-weight: 700; color: #f87171; }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            block-input := LineEdit {
-                                placeholder-text: root.is-vi ? "Nhập domain muốn chặn..." : "Enter domain to block...";
-                                horizontal-stretch: 1;
-                            }
-                            Button {
-                                text: root.is-vi ? "➕ Chặn" : "➕ Block";
-                                clicked => {
-                                    root.add-custom-rule(block-input.text);
-                                    block-input.text = "";
-                                }
-                            }
-                        }
-
-                        ListView {
-                            vertical-stretch: 1;
-                            for rule in root.custom-rules : Rectangle {
-                                height: 36px;
-                                background: #1e293b;
-                                border-radius: 4px;
-                                HorizontalLayout {
-                                    padding-left: 10px;
-                                    padding-right: 6px;
-                                    Text { text: "🚫 " + rule; font-size: 12px; color: #fca5a5; vertical-alignment: center; horizontal-stretch: 1; }
-                                    Button {
-                                        text: root.is-vi ? "Xóa" : "Delete";
-                                        clicked => { root.remove-custom-rule(rule); }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle { width: 1px; background: #334155; }
-
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 10px;
-
-                        Text { text: root.is-vi ? "✅ Danh sách cho phép (Whitelist - Ưu tiên cao nhất):" : "✅ Whitelist (Always Allow - Highest Priority):"; font-size: 14px; font-weight: 700; color: #4ade80; }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            allow-input := LineEdit {
-                                placeholder-text: root.is-vi ? "Nhập domain luôn cho phép..." : "Enter domain to always allow...";
-                                horizontal-stretch: 1;
-                            }
-                            Button {
-                                text: root.is-vi ? "➕ Cho phép" : "➕ Allow";
-                                clicked => {
-                                    root.add-allowed-rule(allow-input.text);
-                                    allow-input.text = "";
-                                }
-                            }
-                        }
-
-                        ListView {
-                            vertical-stretch: 1;
-                            for rule in root.allowed-rules : Rectangle {
-                                height: 36px;
-                                background: #1e293b;
-                                border-radius: 4px;
-                                HorizontalLayout {
-                                    padding-left: 10px;
-                                    padding-right: 6px;
-                                    Text { text: "✅ " + rule; font-size: 12px; color: #86efac; vertical-alignment: center; horizontal-stretch: 1; }
-                                    Button {
-                                        text: root.is-vi ? "Xóa" : "Delete";
-                                        clicked => { root.remove-allowed-rule(rule); }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Tab 5: Logs & Console
-            Tab {
-                title: root.is-vi ? "📋 Nhật ký & Console" : "📋 Logs & Console";
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 10px;
-
-                    HorizontalLayout {
-                        spacing: 8px;
-
-                        Button {
-                            text: root.active-log-view == 0 ? (root.is-vi ? "📋 Xem Console hệ thống" : "📋 System Console") : (root.is-vi ? "🌐 Xem Nhật ký DNS" : "🌐 DNS Logs");
-                            clicked => {
-                                root.active-log-view = root.active-log-view == 0 ? 1 : 0;
-                            }
-                        }
-
-                        if root.active-log-view == 0 : Button {
-                            text: root.log-view-mode == 1 ? (root.is-vi ? "🌐 Xem Dòng Thời Gian" : "🌐 Timeline View") : (root.is-vi ? "📊 Gom Nhóm Tên Miền" : "📊 Group by Domain");
-                            clicked => {
-                                root.log-view-mode = root.log-view-mode == 1 ? 0 : 1;
-                            }
-                        }
-
-                        filter-domain := LineEdit {
-                            placeholder-text: root.is-vi ? "Lọc domain..." : "Filter domain...";
-                            width: 180px;
-                        }
-                        filter-ip := LineEdit {
-                            placeholder-text: root.is-vi ? "Lọc IP..." : "Filter IP...";
-                            width: 130px;
-                        }
-                        Button {
-                            text: root.is-vi ? "🔍 Lọc" : "🔍 Filter";
-                            clicked => {
-                                root.filter-logs(filter-domain.text, filter-ip.text, -1);
-                            }
-                        }
-                        Button {
-                            text: root.is-vi ? "✖ Xóa lọc" : "✖ Clear";
-                            clicked => {
-                                filter-domain.text = "";
-                                filter-ip.text = "";
-                                root.filter-logs("", "", -1);
-                            }
-                        }
-
-                        Rectangle { horizontal-stretch: 1; }
-
-                        Button {
-                            text: root.is-vi ? "💾 Xuất CSV" : "💾 Export CSV";
-                            clicked => { root.export-logs(); }
-                        }
-                        Button {
-                            text: root.is-vi ? "🗑️ Xóa log" : "🗑️ Clear Logs";
-                            clicked => {
-                                if (root.active-log-view == 0) {
-                                    root.clear-logs();
-                                } else {
-                                    root.clear-console-logs();
-                                }
-                            }
-                        }
-                    }
-
-                    if root.active-log-view == 0 && root.log-view-mode == 1 : ListView {
+                    if root.monitor-subview-mode == 1 && root.log-view-mode == 1 : ListView {
                         vertical-stretch: 1;
                         for glog in root.grouped-logs : Rectangle {
                             height: 36px;
-                            background: glog.is-blocked ? #450a0a : #1e293b;
+                            background: glog.is-blocked ? #450a0a : #111827;
                             border-radius: 4px;
                             HorizontalLayout {
                                 padding-left: 10px;
@@ -719,11 +1054,11 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    if root.active-log-view == 0 && root.log-view-mode == 0 : ListView {
+                    if root.monitor-subview-mode == 1 && root.log-view-mode == 0 : ListView {
                         vertical-stretch: 1;
                         for log in root.logs : Rectangle {
                             height: 32px;
-                            background: log.is-blocked ? #450a0a : #1e293b;
+                            background: log.is-blocked ? #450a0a : #111827;
                             border-radius: 4px;
                             HorizontalLayout {
                                 padding-left: 10px;
@@ -746,7 +1081,7 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    if root.active-log-view == 1 : ListView {
+                    if root.monitor-subview-mode == 2 : ListView {
                         vertical-stretch: 1;
                         for clog in root.console-logs : Rectangle {
                             height: 30px;
@@ -767,125 +1102,320 @@ export component AppWindow inherits Window {
                                     vertical-alignment: center;
                                     min-width: 65px;
                                 }
-                                Text { text: clog.message; font-size: 12px; color: #e2e8f0; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                Text { text: clog.message; font-size: 12px; color: #e2e8f0; vertical-alignment: center; overflow: elide; horizontal-alignment: start; horizontal-stretch: 1; }
                             }
                         }
                     }
                 }
             }
 
-            // Tab 6: Settings & System
-            Tab {
-                title: root.is-vi ? "⚙️ Cài đặt & Hệ thống" : "⚙️ Settings & System";
-                VerticalLayout {
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.active-tab == 3;
+                HorizontalLayout {
                     padding: 16px;
                     spacing: 16px;
 
-                    // Language Settings
-                    Rectangle {
-                        background: #1e293b;
-                        border-radius: 10px;
-                        border-width: 1px;
-                        border-color: #334155;
-                        VerticalLayout {
-                            padding: 16px;
-                            spacing: 12px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 10px;
 
-                            Text {
-                                text: root.is-vi ? "🌐 Ngôn ngữ hiển thị / Display Language:" : "🌐 Display Language / Ngôn ngữ hiển thị:";
-                                font-size: 14px;
-                                font-weight: 700;
-                                color: #38bdf8;
+                        Text { text: root.is-vi ? "⛔ Danh sách chặn tùy chỉnh (Blacklist):" : "⛔ Custom Blacklist (Block):"; font-size: 14px; font-weight: 700; color: #f87171; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            block-input := LineEdit {
+                                placeholder-text: root.is-vi ? "Nhập domain muốn chặn..." : "Enter domain to block...";
+                                horizontal-stretch: 1;
                             }
-
-                            HorizontalLayout {
-                                spacing: 14px;
-                                Button {
-                                    text: root.is-vi ? "🇻🇳 Tiếng Việt (Đang chọn)" : "🇻🇳 Tiếng Việt";
-                                    clicked => { root.change-language("vi"); }
+                            Button {
+                                text: root.is-vi ? "➕ Chặn" : "➕ Block";
+                                clicked => {
+                                    root.add-custom-rule(block-input.text);
+                                    block-input.text = "";
                                 }
-                                Button {
-                                    text: !root.is-vi ? "🇬🇧 English (Selected)" : "🇬🇧 English";
-                                    clicked => { root.change-language("en"); }
+                            }
+                        }
+
+                        ListView {
+                            vertical-stretch: 1;
+                            for rule in root.custom-rules : Rectangle {
+                                height: 36px;
+                                background: #111827;
+                                border-radius: 4px;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 6px;
+                                    Text { text: "🚫 " + rule; font-size: 12px; color: #fca5a5; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button {
+                                        text: root.is-vi ? "Xóa" : "Delete";
+                                        clicked => { root.remove-custom-rule(rule); }
+                                    }
                                 }
                             }
                         }
                     }
 
-                    // System & Behavior Settings
+                    Rectangle { width: 1px; background: #1f2937; }
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 10px;
+
+                        Text { text: root.is-vi ? "✅ Danh sách cho phép (Whitelist - Ưu tiên cao nhất):" : "✅ Whitelist (Always Allow - Highest Priority):"; font-size: 14px; font-weight: 700; color: #4ade80; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            allow-input := LineEdit {
+                                placeholder-text: root.is-vi ? "Nhập domain luôn cho phép..." : "Enter domain to always allow...";
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: root.is-vi ? "➕ Cho phép" : "➕ Allow";
+                                clicked => {
+                                    root.add-allowed-rule(allow-input.text);
+                                    allow-input.text = "";
+                                }
+                            }
+                        }
+
+                        ListView {
+                            vertical-stretch: 1;
+                            for rule in root.allowed-rules : Rectangle {
+                                height: 36px;
+                                background: #111827;
+                                border-radius: 4px;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 6px;
+                                    Text { text: "✅ " + rule; font-size: 12px; color: #86efac; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button {
+                                        text: root.is-vi ? "Xóa" : "Delete";
+                                        clicked => { root.remove-allowed-rule(rule); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.active-tab == 4;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
                     Rectangle {
-                        background: #1e293b;
+                        background: #111827;
                         border-radius: 10px;
                         border-width: 1px;
-                        border-color: #334155;
+                        border-color: root.network-wide-adblock ? #38bdf8 : #1f2937;
                         VerticalLayout {
-                            padding: 16px;
-                            spacing: 12px;
+                            padding: 14px;
+                            spacing: 10px;
 
-                            Text {
-                                text: root.is-vi ? "⚙️ Vận hành hệ thống & Khay ứng dụng:" : "⚙️ System Behavior & Notifications:";
-                                font-size: 14px;
-                                font-weight: 700;
-                                color: #e2e8f0;
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: center;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    horizontal-stretch: 1;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Text { text: "🌐 " + (root.is-vi ? "Chống quảng cáo toàn mạng LAN (DNS Proxy Port 53)" : "Network-wide LAN Adblocker (Port 53)"); font-size: 14px; font-weight: 700; color: #38bdf8; }
+                                        Rectangle {
+                                            height: 20px;
+                                            border-radius: 10px;
+                                            background: root.network-wide-adblock ? #059669 : #374151;
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                alignment: center;
+                                                Text { text: root.network-wide-adblock ? (root.is-vi ? "ĐANG HOẠT ĐỘNG" : "ACTIVE") : (root.is-vi ? "ĐANG TẮT" : "DISABLED"); font-size: 10px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        text: root.is-vi ? "Mở cổng DNS 53 cho tất cả các thiết bị cùng mạng Wi-Fi (iPhone, Android, Smart TV, PC). Đặt DNS Router về IP máy này để tự động chặn sạch quảng cáo." : "Listen on UDP/TCP port 53 for all LAN devices. Set your Wi-Fi Router DNS to this PC's IP to block ads network-wide.";
+                                        font-size: 12px;
+                                        color: #94a3b8;
+                                    }
+                                }
+                                Button {
+                                    text: root.network-wide-adblock ? (root.is-vi ? "TẮT TÍNH NĂNG" : "DISABLE") : (root.is-vi ? "BẬT TOÀN MẠNG" : "ENABLE");
+                                    clicked => { root.toggle-network-wide-adblock(!root.network-wide-adblock); }
+                                }
                             }
 
                             HorizontalLayout {
-                                spacing: 14px;
+                                spacing: 12px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: 32px;
+                                    background: #0f172a;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: #334155;
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        alignment: start;
+                                        Text { text: (root.is-vi ? "📡 Địa chỉ IP máy chủ LAN: " : "📡 Host Server IP: ") + root.host-lan-ip + " : 53"; font-size: 12px; font-weight: 800; color: #22c55e; vertical-alignment: center; }
+                                    }
+                                }
                                 Button {
-                                    text: root.autostart-enabled ? (root.is-vi ? "✅ Tự khởi động cùng Windows: BẬT" : "✅ Autostart with Windows: ON") : (root.is-vi ? "❌ Tự khởi động cùng Windows: TẮT" : "❌ Autostart with Windows: OFF");
+                                    text: root.silent-sinkhole ? (root.is-vi ? "🛡️ Silent Sinkhole: BẬT" : "🛡️ Silent Sinkhole: ON") : (root.is-vi ? "🛡️ Silent Sinkhole: TẮT" : "🛡️ Silent Sinkhole: OFF");
+                                    clicked => { root.toggle-silent-sinkhole(!root.silent-sinkhole); }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        background: #111827;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: root.attack-detection-enabled ? #10b981 : #1f2937;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: "🛡️ " + (root.is-vi ? "Hệ thống Phòng thủ An ninh & Chống Xâm nhập (IDS / IPS / ARP)" : "Intrusion Detection & Prevention Defense (IDS / IPS / ARP)"); font-size: 14px; font-weight: 700; color: #34d399; }
+                                Rectangle {
+                                    height: 20px;
+                                    border-radius: 10px;
+                                    background: root.attack-detection-enabled ? #059669 : #374151;
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        alignment: center;
+                                        Text { text: root.attack-detection-enabled ? (root.is-vi ? "BẢO VỆ TỐI CAO" : "MAX SHIELD") : (root.is-vi ? "ĐANG TẮT" : "OFF"); font-size: 10px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: #0f172a;
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: #1e293b;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        spacing: 6px;
+                                        Text { text: root.is-vi ? "Phát hiện tấn công (IDS)" : "Intrusion Detection (IDS)"; font-size: 12px; font-weight: 700; color: #38bdf8; }
+                                        Text { text: root.is-vi ? "Giám sát DoS Flood, Tunneling & Botnet" : "Monitors DoS, Tunneling & Botnet"; font-size: 11px; color: #94a3b8; }
+                                        Button {
+                                            text: root.attack-detection-enabled ? (root.is-vi ? "✅ ĐANG BẬT" : "✅ ON") : (root.is-vi ? "⚪ ĐANG TẮT" : "⚪ OFF");
+                                            clicked => { root.toggle-attack-detection(!root.attack-detection-enabled); }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: #0f172a;
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: #1e293b;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        spacing: 6px;
+                                        Text { text: root.is-vi ? "Tự động khóa IP (IPS)" : "Auto-Block Threat (IPS)"; font-size: 12px; font-weight: 700; color: #f87171; }
+                                        Text { text: root.is-vi ? "Tự động cô lập nguồn độc hại 5 phút" : "Auto-mitigates & drops source IP"; font-size: 11px; color: #94a3b8; }
+                                        Button {
+                                            text: root.auto-block-attacks ? (root.is-vi ? "✅ ĐANG BẬT" : "✅ ON") : (root.is-vi ? "⚪ ĐANG TẮT" : "⚪ OFF");
+                                            clicked => { root.toggle-auto-block-attacks(!root.auto-block-attacks); }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: #0f172a;
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: #1e293b;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        spacing: 6px;
+                                        Text { text: root.is-vi ? "Chống ARP Spoofing" : "Anti-ARP Spoofing"; font-size: 12px; font-weight: 700; color: #fbbf24; }
+                                        Text { text: root.is-vi ? "Bảo vệ Router Gateway chống nghe lén" : "Protects Gateway from MITM snooping"; font-size: 11px; color: #94a3b8; }
+                                        Button {
+                                            text: root.arp-spoof-detection ? (root.is-vi ? "✅ ĐANG BẬT" : "✅ ON") : (root.is-vi ? "⚪ ĐANG TẮT" : "⚪ OFF");
+                                            clicked => { root.toggle-arp-spoof-detection(!root.arp-spoof-detection); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        background: #111827;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: #1f2937;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+
+                            Text { text: "⚙️ " + (root.is-vi ? "Vận hành Hệ thống & Tùy chọn Ứng dụng:" : "System Operation & Preferences:"); font-size: 14px; font-weight: 700; color: #e2e8f0; }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Button {
+                                    horizontal-stretch: 1;
+                                    text: root.autostart-enabled ? (root.is-vi ? "✅ Khởi động cùng Windows: BẬT" : "✅ Autostart: ON") : (root.is-vi ? "⚪ Khởi động cùng Windows: TẮT" : "⚪ Autostart: OFF");
                                     clicked => { root.toggle-autostart(!root.autostart-enabled); }
                                 }
                                 Button {
-                                    text: root.minimize-to-tray-enabled ? (root.is-vi ? "✅ Thu nhỏ xuống Khay khi đóng: BẬT" : "✅ Minimize to Tray on Close: ON") : (root.is-vi ? "❌ Thu nhỏ xuống Khay khi đóng: TẮT" : "❌ Minimize to Tray on Close: OFF");
+                                    horizontal-stretch: 1;
+                                    text: root.minimize-to-tray-enabled ? (root.is-vi ? "✅ Thu nhỏ xuống Khay: BẬT" : "✅ Minimize to Tray: ON") : (root.is-vi ? "⚪ Thu nhỏ xuống Khay: TẮT" : "⚪ Minimize to Tray: OFF");
                                     clicked => { root.toggle-minimize-to-tray(!root.minimize-to-tray-enabled); }
                                 }
                                 Button {
-                                    text: root.enable-notifications ? (root.is-vi ? "🔔 Thông báo chặn quảng cáo: BẬT" : "🔔 Ad Block Notifications: ON") : (root.is-vi ? "🔕 Thông báo chặn quảng cáo: TẮT" : "🔕 Ad Block Notifications: OFF");
+                                    horizontal-stretch: 1;
+                                    text: root.enable-notifications ? (root.is-vi ? "🔔 Thông báo Popup: BẬT" : "🔔 Toast Alerts: ON") : (root.is-vi ? "🔕 Thông báo Popup: TẮT" : "🔕 Toast Alerts: OFF");
                                     clicked => { root.toggle-notifications(!root.enable-notifications); }
+                                }
+                                Button {
+                                    horizontal-stretch: 1;
+                                    text: root.is-vi ? "🇻🇳 Tiếng Việt (Chuyển EN)" : "🇬🇧 English (Switch VI)";
+                                    clicked => { root.change-language(root.is-vi ? "en" : "vi"); }
                                 }
                             }
                         }
                     }
 
-                    // Engine & Version Info
                     Rectangle {
-                        background: #1e293b;
+                        background: #111827;
                         border-radius: 10px;
                         border-width: 1px;
-                        border-color: #334155;
+                        border-color: #1f2937;
                         VerticalLayout {
-                            padding: 16px;
-                            spacing: 10px;
-
-                            Text {
-                                text: root.is-vi ? "ℹ️ Thông tin phiên bản & Giấy phép:" : "ℹ️ Software Version & Information:";
-                                font-size: 14px;
-                                font-weight: 700;
-                                color: #e2e8f0;
-                            }
+                            padding: 14px;
+                            spacing: 8px;
 
                             HorizontalLayout {
-                                spacing: 20px;
-                                Text {
-                                    text: "Shield Ghita v" + root.app-version + " (Official Release)";
-                                    font-size: 13px;
-                                    font-weight: 700;
-                                    color: #38bdf8;
-                                }
-                                Text {
-                                    text: "Engine: Rust + Slint UI + Win32 WFP";
-                                    font-size: 12px;
-                                    color: #94a3b8;
-                                }
-                                Text {
-                                    text: root.last-update-text;
-                                    font-size: 12px;
-                                    color: #22c55e;
-                                }
+                                spacing: 16px;
+                                alignment: center;
+                                Text { text: "Shield Ghita v" + root.app-version + " (Official Release)"; font-size: 13px; font-weight: 800; color: #38bdf8; }
+                                Text { text: "• Engine: Rust 2021 + Slint UI + Win32 WFP"; font-size: 12px; color: #94a3b8; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: root.last-update-text; font-size: 12px; font-weight: 700; color: #22c55e; }
                             }
 
                             Text {
-                                text: root.is-vi ? "Bảo mật mạng, chặn quảng cáo đa nền tảng (YouTube, Spotify, Web) & Giám sát lưu lượng máy tính thời gian thực." : "High-performance Windows network controller, system-wide adblocker, and real-time LAN inspector.";
+                                text: root.is-vi ? "Phần mềm bảo vệ an ninh mạng, chống rò rỉ dữ liệu, ngăn chặn tấn công xâm nhập & triệt tiêu 100% quảng cáo toàn mạng LAN thế hệ mới." : "Next-generation cyber shield protecting network privacy, preventing intrusion attacks, and eliminating ads across your entire LAN.";
                                 font-size: 11px;
                                 color: #64748b;
                             }
@@ -895,7 +1425,218 @@ export component AppWindow inherits Window {
                     Rectangle { vertical-stretch: 1; }
                 }
             }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.is-admin-edition && root.active-tab == 5;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 14px;
+
+                    HorizontalLayout {
+                        spacing: 12px;
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: 90px;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #1f2937;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 4px;
+                                Text { text: root.is-vi ? "THIẾT BỊ LÂN CẬN (PROXIMITY)" : "PROXIMITY NODES"; font-size: 11px; font-weight: 700; color: #a78bfa; }
+                                Text { text: root.proximity-devices-count; font-size: 24px; font-weight: 800; color: #c084fc; }
+                                Text { text: root.is-vi ? "Quét mDNS, SSDP, ARP đa lớp mạng" : "Multi-layer mDNS, SSDP & ARP probe"; font-size: 11px; color: #64748b; }
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: 90px;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #1f2937;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 4px;
+                                Text { text: root.is-vi ? "HỒ SƠ HÀNH VI (BEHAVIOR)" : "BEHAVIOR PROFILES"; font-size: 11px; font-weight: 700; color: #38bdf8; }
+                                Text { text: root.behavior-profiles-count; font-size: 24px; font-weight: 800; color: #38bdf8; }
+                                Text { text: root.is-vi ? "Baseline lưu lượng & phân tích DGA" : "Traffic baseline & DGA analytics"; font-size: 11px; color: #64748b; }
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: 90px;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #1f2937;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 4px;
+                                Text { text: root.is-vi ? "MỐI NGUY CAO (HIGH RISK)" : "HIGH RISK THREATS"; font-size: 11px; font-weight: 700; color: #f87171; }
+                                Text { text: root.high-risk-count; font-size: 24px; font-weight: 800; color: #ef4444; }
+                                Text { text: root.is-vi ? "Thiết bị có điểm rủi ro >= 50" : "Devices with Risk Score >= 50"; font-size: 11px; color: #fca5a5; }
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: 90px;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #1f2937;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 4px;
+                                Text { text: root.is-vi ? "TRẠM PHÁT WI-FI (AIR)" : "AMBIENT WI-FI NODES"; font-size: 11px; font-weight: 700; color: #fbbf24; }
+                                Text { text: root.wifi-nodes-count; font-size: 24px; font-weight: 800; color: #fbbf24; }
+                                Text { text: root.is-vi ? "BSSID & Tín hiệu lân cận" : "Nearby BSSIDs & Signal radios"; font-size: 11px; color: #64748b; }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+
+                        Button {
+                            text: root.admin-subview-mode == 0 ? (root.is-vi ? "🧠 Xem Hồ Sơ Hành Vi" : "🧠 View Behavior Profiles") : (root.is-vi ? "📡 Xem Thiết Bị Lân Cận" : "📡 View Proximity Nodes");
+                            clicked => { root.admin-subview-mode = root.admin-subview-mode == 0 ? 1 : 0; }
+                        }
+                        Button {
+                            text: root.is-vi ? "🔍 Quét lân cận ngay (Proximity Sweep)" : "🔍 Trigger Proximity Sweep";
+                            clicked => { root.trigger-proximity-scan(); }
+                        }
+                        Button {
+                            text: root.is-vi ? "🔄 Làm mới dữ liệu" : "🔄 Refresh Data";
+                            clicked => { root.refresh-admin-data(); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text {
+                            text: root.admin-subview-mode == 0 ? (root.is-vi ? "Danh sách thiết bị quét lân cận & thăm dò đa giao thức:" : "Proximity devices discovered via multi-protocol probes:") : (root.is-vi ? "Hồ sơ phân tích hành vi & nhận diện bất thường từng thiết bị:" : "Real-time device behavioral profiling & anomaly detection:");
+                            font-size: 12px;
+                            font-weight: 600;
+                            color: #94a3b8;
+                        }
+                    }
+
+                    if root.admin-subview-mode == 0 : ListView {
+                        vertical-stretch: 1;
+                        for pdev in root.proximity-devices : Rectangle {
+                            height: 58px;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #1f2937;
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 14px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 220px;
+                                    Text { text: pdev.name; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
+                                    Text { text: (root.is-vi ? "Hãng: " : "Vendor: ") + pdev.vendor; font-size: 11px; color: #38bdf8; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 140px;
+                                    Text { text: "IP: " + pdev.ip; font-size: 12px; font-weight: 700; color: #cbd5e1; }
+                                    Text { text: "MAC: " + pdev.mac; font-size: 11px; color: #64748b; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 150px;
+                                    Text { text: "Giao thức: " + pdev.discovery-method; font-size: 11px; font-weight: 700; color: #a78bfa; }
+                                    Text { text: "Độ trễ: " + pdev.latency-ms + " ms"; font-size: 11px; color: #94a3b8; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    Text { text: "Cổng mở: " + pdev.open-ports-str; font-size: 11px; color: #e2e8f0; overflow: elide; }
+                                    Text { text: "Thấy lúc: " + pdev.last-seen; font-size: 10px; color: #64748b; }
+                                }
+
+                                Rectangle {
+                                    width: 80px;
+                                    height: 24px;
+                                    border-radius: 12px;
+                                    background: pdev.is-online ? #064e3b : #374151;
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        Text { text: pdev.is-online ? (root.is-vi ? "ONLINE" : "ONLINE") : (root.is-vi ? "OFFLINE" : "OFFLINE"); font-size: 10px; font-weight: 800; color: pdev.is-online ? #34d399 : #94a3b8; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.admin-subview-mode == 1 : ListView {
+                        vertical-stretch: 1;
+                        for prof in root.behavior-profiles : Rectangle {
+                            height: 58px;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: prof.risk-score >= 50 ? #ef4444 : #1f2937;
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 14px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 180px;
+                                    Text { text: prof.hostname; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
+                                    Text { text: "IP: " + prof.ip; font-size: 11px; color: #38bdf8; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 160px;
+                                    Text { text: "Phân loại: " + prof.category; font-size: 12px; font-weight: 700; color: prof.risk-score >= 50 ? #f87171 : #4ade80; }
+                                    Text { text: "Burst QPS: " + prof.burst-qps; font-size: 11px; color: #94a3b8; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 180px;
+                                    Text { text: "Tổng: " + prof.total-queries + " | Chặn: " + prof.blocked-queries; font-size: 11px; font-weight: 600; color: #cbd5e1; }
+                                    Text { text: "Mối nguy: " + prof.threat-queries + " đe dọa"; font-size: 11px; color: prof.threat-queries > 0 ? #f87171 : #64748b; }
+                                }
+
+                                Rectangle { horizontal-stretch: 1; }
+
+                                Rectangle {
+                                    width: 100px;
+                                    height: 26px;
+                                    border-radius: 13px;
+                                    background: prof.risk-score >= 70 ? #7f1d1d : (prof.risk-score >= 40 ? #78350f : #064e3b);
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        Text { text: (root.is-vi ? "Rủi ro: " : "Risk: ") + prof.risk-score + "/100"; font-size: 11px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
-

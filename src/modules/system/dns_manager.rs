@@ -30,7 +30,9 @@ pub fn silent_command(program: &str) -> Command {
 
 #[cfg(windows)]
 pub fn is_elevated() -> bool {
-    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     unsafe {
         let mut token = windows::Win32::Foundation::HANDLE::default();
@@ -118,7 +120,13 @@ fn is_valid_physical_adapter(name: &str) -> bool {
 
 pub fn get_current_adapter_dns(adapter: &str) -> AdapterDnsState {
     let output = match silent_command("netsh")
-        .args(["interface", "ip", "show", "dns", &format!("name={}", adapter)])
+        .args([
+            "interface",
+            "ip",
+            "show",
+            "dns",
+            &format!("name={}", adapter),
+        ])
         .output()
     {
         Ok(o) => o,
@@ -133,7 +141,9 @@ pub fn get_current_adapter_dns(adapter: &str) -> AdapterDnsState {
         let trimmed = line.trim();
         if trimmed.to_lowercase().contains("dhcp") {
             is_static_section = false;
-        } else if trimmed.to_lowercase().contains("statically") || trimmed.to_lowercase().contains("tĩnh") {
+        } else if trimmed.to_lowercase().contains("statically")
+            || trimmed.to_lowercase().contains("tĩnh")
+        {
             is_static_section = true;
             if let Some(pos) = trimmed.find(':') {
                 let ip = trimmed[pos + 1..].trim();
@@ -143,7 +153,12 @@ pub fn get_current_adapter_dns(adapter: &str) -> AdapterDnsState {
             }
         } else if is_static_section {
             let ip = trimmed;
-            if !ip.is_empty() && ip != "None" && ip != "127.0.0.1" && ip != "127.0.0.2" && ip.parse::<std::net::IpAddr>().is_ok() {
+            if !ip.is_empty()
+                && ip != "None"
+                && ip != "127.0.0.1"
+                && ip != "127.0.0.2"
+                && ip.parse::<std::net::IpAddr>().is_ok()
+            {
                 static_servers.push(ip.to_string());
             }
         }
@@ -161,13 +176,15 @@ pub fn flush_dns_cache() {
 }
 
 pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
-    let _guard = CLEANUP_LOCK.lock().unwrap();
+    let _guard = CLEANUP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let adapters = get_active_adapters();
     let mut success_count = 0;
     let mut last_err = String::new();
 
     {
-        let mut orig_guard = ORIGINAL_DNS_SETTINGS.write().unwrap();
+        let mut orig_guard = ORIGINAL_DNS_SETTINGS
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         if orig_guard.is_none() {
             let mut backup_map = HashMap::new();
             for adapter in &adapters {
@@ -178,19 +195,30 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
         }
     }
 
+    let clean_server = dns_server.replace('\'', "''");
+
     for adapter in &adapters {
         let output = silent_command("netsh")
             .args([
-                "interface", "ip", "set", "dns",
+                "interface",
+                "ip",
+                "set",
+                "dns",
                 &format!("name={}", adapter),
-                "static", dns_server, "primary", "validate=no"
+                "static",
+                dns_server,
+                "primary",
+                "validate=no",
             ])
             .output();
 
         let mut adapter_ok = false;
         match output {
             Ok(o) if o.status.success() => {
-                info!("Master DNS Controller: Netsh set IPv4 DNS to {} on '{}'", dns_server, adapter);
+                info!(
+                    "Master DNS Controller: Netsh set IPv4 DNS to {} on '{}'",
+                    dns_server, adapter
+                );
                 adapter_ok = true;
             }
             Ok(o) => {
@@ -203,16 +231,20 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
         }
 
         if !adapter_ok {
+            let clean_adapter = adapter.replace('\'', "''");
             let ps_script = format!(
                 "Set-DnsClientServerAddress -InterfaceAlias '{}' -ServerAddresses ('{}') -ErrorAction SilentlyContinue",
-                adapter, dns_server
+                clean_adapter, clean_server
             );
             if let Ok(ps_out) = silent_command("powershell")
                 .args(["-NoProfile", "-Command", &ps_script])
                 .output()
             {
                 if ps_out.status.success() {
-                    info!("Master DNS Controller: PowerShell set IPv4 DNS to {} on '{}'", dns_server, adapter);
+                    info!(
+                        "Master DNS Controller: PowerShell set IPv4 DNS to {} on '{}'",
+                        dns_server, adapter
+                    );
                     adapter_ok = true;
                 }
             }
@@ -224,7 +256,10 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
 
         let _ = silent_command("netsh")
             .args([
-                "interface", "ipv6", "set", "dns",
+                "interface",
+                "ipv6",
+                "set",
+                "dns",
                 &format!("name={}", adapter),
                 "dhcp",
             ])
@@ -242,10 +277,12 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
 }
 
 pub fn restore_system_dns() -> Result<(), String> {
-    let _guard = CLEANUP_LOCK.lock().unwrap();
+    let _guard = CLEANUP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let adapters = get_active_adapters();
     let backup_map = {
-        let mut orig_guard = ORIGINAL_DNS_SETTINGS.write().unwrap();
+        let mut orig_guard = ORIGINAL_DNS_SETTINGS
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         orig_guard.take()
     };
 
@@ -255,11 +292,16 @@ pub fn restore_system_dns() -> Result<(), String> {
             .and_then(|m| m.get(adapter).cloned())
             .unwrap_or(AdapterDnsState::Dhcp);
 
+        let clean_adapter = adapter.replace('\'', "''");
+
         match original_state {
             AdapterDnsState::Dhcp => {
                 let _ = silent_command("netsh")
                     .args([
-                        "interface", "ip", "set", "dns",
+                        "interface",
+                        "ip",
+                        "set",
+                        "dns",
                         &format!("name={}", adapter),
                         "dhcp",
                     ])
@@ -267,7 +309,7 @@ pub fn restore_system_dns() -> Result<(), String> {
                 let _ = silent_command("powershell")
                     .args([
                         "-NoProfile", "-Command",
-                        &format!("Set-DnsClientServerAddress -InterfaceAlias '{}' -ResetServerAddresses -ErrorAction SilentlyContinue", adapter)
+                        &format!("Set-DnsClientServerAddress -InterfaceAlias '{}' -ResetServerAddresses -ErrorAction SilentlyContinue", clean_adapter)
                     ])
                     .output();
             }
@@ -275,16 +317,24 @@ pub fn restore_system_dns() -> Result<(), String> {
                 if let Some(first_ip) = ips.first() {
                     let _ = silent_command("netsh")
                         .args([
-                            "interface", "ip", "set", "dns",
+                            "interface",
+                            "ip",
+                            "set",
+                            "dns",
                             &format!("name={}", adapter),
-                            "static", first_ip, "primary",
+                            "static",
+                            first_ip,
+                            "primary",
                         ])
                         .output();
 
                     for (idx, next_ip) in ips.iter().skip(1).enumerate() {
                         let _ = silent_command("netsh")
                             .args([
-                                "interface", "ip", "add", "dns",
+                                "interface",
+                                "ip",
+                                "add",
+                                "dns",
                                 &format!("name={}", adapter),
                                 next_ip,
                                 &format!("index={}", idx + 2),
@@ -294,7 +344,10 @@ pub fn restore_system_dns() -> Result<(), String> {
                 } else {
                     let _ = silent_command("netsh")
                         .args([
-                            "interface", "ip", "set", "dns",
+                            "interface",
+                            "ip",
+                            "set",
+                            "dns",
                             &format!("name={}", adapter),
                             "dhcp",
                         ])
@@ -305,7 +358,10 @@ pub fn restore_system_dns() -> Result<(), String> {
 
         let _ = silent_command("netsh")
             .args([
-                "interface", "ipv6", "set", "dns",
+                "interface",
+                "ipv6",
+                "set",
+                "dns",
                 &format!("name={}", adapter),
                 "dhcp",
             ])
@@ -342,11 +398,74 @@ pub fn is_dns_overridden() -> bool {
 pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, listen_addr: String) {
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(8)).await;
-        if protection_enabled.load(Ordering::Relaxed) && !MASTER_INTERNET_LOCKED.load(Ordering::Relaxed) {
-            if DNS_OVERRIDDEN.load(Ordering::Relaxed) {
-                let _ = set_system_dns(&listen_addr);
-            }
+        if protection_enabled.load(Ordering::Relaxed)
+            && !MASTER_INTERNET_LOCKED.load(Ordering::Relaxed)
+            && DNS_OVERRIDDEN.load(Ordering::Relaxed)
+        {
+            let _ = set_system_dns(&listen_addr);
         }
+    }
+}
+
+pub fn get_lan_ip_address() -> String {
+    if let Some(ip) = crate::modules::monitor::lan_scanner::LanScanner::get_local_outbound_ip() {
+        ip.to_string()
+    } else {
+        "127.0.0.1".to_string()
+    }
+}
+
+pub fn configure_lan_dns_firewall(enable: bool) {
+    if enable {
+        let _ = silent_command("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "add",
+                "rule",
+                "name=ShieldGhita_LAN_DNS",
+                "dir=in",
+                "action=allow",
+                "protocol=UDP",
+                "localport=53",
+            ])
+            .output();
+
+        let _ = silent_command("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "add",
+                "rule",
+                "name=ShieldGhita_LAN_DNS_TCP",
+                "dir=in",
+                "action=allow",
+                "protocol=TCP",
+                "localport=53",
+            ])
+            .output();
+        info!("Windows Firewall rule configured: Port 53 UDP/TCP opened for LAN Network Adblock");
+    } else {
+        let _ = silent_command("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
+                "name=ShieldGhita_LAN_DNS",
+            ])
+            .output();
+
+        let _ = silent_command("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "delete",
+                "rule",
+                "name=ShieldGhita_LAN_DNS_TCP",
+            ])
+            .output();
+        info!("Windows Firewall rule cleaned up: Port 53 LAN access closed");
     }
 }
 

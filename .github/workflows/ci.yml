@@ -1,0 +1,39 @@
+name: Shield Ghita CI Engine
+
+on:
+  push:
+    branches: [ "main", "master", "develop" ]
+  pull_request:
+    branches: [ "main", "master", "develop" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-and-test:
+    name: Build & Security Test Suite
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check code formatting
+        run: cargo fmt --check
+
+      - name: Cargo Check
+        run: cargo check --verbose
+
+      - name: Run Test Suite
+        run: cargo test --verbose
+
+      - name: Clippy Linter
+        run: cargo clippy -- -D warnings

@@ -50,9 +50,18 @@ const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
     "ad.zadn.vn",
     "api.ad.zadn.vn",
     "tracking.zadn.vn",
-    "qc.nct.vn",
     "media.zadn.vn",
+    "sdk.e.zadn.vn",
+    "zalo-analytics.zadn.vn",
+    "qc.nct.vn",
+    "ad.nct.vn",
     "adv.zing.vn",
+    "adt.zing.vn",
+    "qc.coccoc.com",
+    "adserver.coccoc.com",
+    "dsp.coccoc.com",
+    "tracking.shopee.vn",
+    "criteo.shopee.vn",
     "fls-na.amazon.com",
     "aax-us-east.amazon-adsystem.com",
     "c.amazon-adsystem.com",
@@ -61,14 +70,19 @@ const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
     "criteo.com",
     "taboola.com",
     "outbrain.com",
+    "telemetry.microsoft.com",
+    "vortex.data.microsoft.com",
+    "watson.telemetry.microsoft.com",
 ];
+
+pub type DnsCacheMap = Arc<RwLock<HashMap<String, (Vec<u8>, Instant)>>>;
 
 pub struct DnsBlocker {
     blocked_domains: Arc<RwLock<HashSet<String>>>,
     allowed_domains: Arc<RwLock<HashSet<String>>>,
     custom_blocked: Arc<RwLock<HashSet<String>>>,
     custom_allowed: Arc<RwLock<HashSet<String>>>,
-    dns_cache: Arc<RwLock<HashMap<String, (Vec<u8>, Instant)>>>,
+    dns_cache: DnsCacheMap,
     http_client: reqwest::Client,
     pub total_queries: Arc<AtomicU64>,
     pub blocked_count: Arc<AtomicU64>,
@@ -308,7 +322,8 @@ impl DnsBlocker {
     }
 
     pub fn set_silent_sinkhole(&self, enabled: bool) {
-        self.silent_sinkhole_enabled.store(enabled, Ordering::SeqCst);
+        self.silent_sinkhole_enabled
+            .store(enabled, Ordering::SeqCst);
     }
 
     pub fn is_silent_sinkhole(&self) -> bool {
@@ -322,22 +337,36 @@ impl DnsBlocker {
         }
 
         {
-            let ca = self.custom_allowed.read().unwrap();
-            let ga = self.allowed_domains.read().unwrap();
-            if Self::match_domain_hierarchy(&clean, &ca) || Self::match_domain_hierarchy(&clean, &ga) {
+            let ca = self
+                .custom_allowed
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            let ga = self
+                .allowed_domains
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            if Self::match_domain_hierarchy(&clean, &ca)
+                || Self::match_domain_hierarchy(&clean, &ga)
+            {
                 return false;
             }
         }
 
         {
-            let cb = self.custom_blocked.read().unwrap();
+            let cb = self
+                .custom_blocked
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             if Self::match_domain_hierarchy(&clean, &cb) {
                 return true;
             }
         }
 
         {
-            let gb = self.blocked_domains.read().unwrap();
+            let gb = self
+                .blocked_domains
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             if Self::match_domain_hierarchy(&clean, &gb) {
                 return true;
             }
@@ -373,7 +402,12 @@ impl DnsBlocker {
         }
         let mut pos = 12;
         let mut labels = Vec::new();
+        let mut loop_count = 0;
         while pos < pkt.len() {
+            loop_count += 1;
+            if loop_count > 128 {
+                return None;
+            }
             let len = pkt[pos] as usize;
             if len == 0 {
                 pos += 1;
@@ -428,7 +462,12 @@ impl DnsBlocker {
         r.extend_from_slice(&[0x00, 0x00]);
 
         let mut pos = 12;
+        let mut loop_count = 0;
         while pos < q.len() {
+            loop_count += 1;
+            if loop_count > 128 {
+                return None;
+            }
             let len = q[pos] as usize;
             if len == 0 {
                 pos += 1;
@@ -437,6 +476,9 @@ impl DnsBlocker {
             if len & 0xC0 == 0xC0 {
                 pos += 2;
                 break;
+            }
+            if pos + 1 + len > q.len() {
+                return None;
             }
             pos += 1 + len;
         }
@@ -470,7 +512,12 @@ impl DnsBlocker {
         r.extend_from_slice(&[0x00, 0x00]);
 
         let mut pos = 12;
+        let mut loop_count = 0;
         while pos < q.len() {
+            loop_count += 1;
+            if loop_count > 128 {
+                return None;
+            }
             let len = q[pos] as usize;
             if len == 0 {
                 pos += 1;
@@ -479,6 +526,9 @@ impl DnsBlocker {
             if len & 0xC0 == 0xC0 {
                 pos += 2;
                 break;
+            }
+            if pos + 1 + len > q.len() {
+                return None;
             }
             pos += 1 + len;
         }
@@ -514,7 +564,7 @@ impl DnsBlocker {
         addr: &str,
         port: u16,
         doh_urls: Vec<String>,
-        mon: Arc<crate::monitor::NetworkMonitor>,
+        mon: Arc<crate::modules::monitor::NetworkMonitor>,
         ready_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
     ) {
         let bind_addr = format!("{}:{}", addr, port);
@@ -567,15 +617,37 @@ impl DnsBlocker {
         src: SocketAddr,
         sock: Arc<UdpSocket>,
         doh_urls: Vec<String>,
-        mon: Arc<crate::monitor::NetworkMonitor>,
+        mon: Arc<crate::modules::monitor::NetworkMonitor>,
     ) {
         let (query_name, qtype) = match Self::parse_query_info(&pkt) {
             Some(info) => info,
             None => return,
         };
 
-        self.total_queries.fetch_add(1, Ordering::Relaxed);
         let src_ip = src.ip().to_string();
+
+        if mon.security_engine.is_ip_temporarily_blocked(&src_ip) {
+            warn!(
+                "Security IPS: Dropping query from blacklisted IP {}",
+                src_ip
+            );
+            return;
+        }
+
+        if let Some(_incident) = mon.security_engine.inspect_dns_query(&src_ip, &query_name) {
+            mon.lan_scanner
+                .record_activity(&src_ip, &query_name, true, true);
+            if mon.security_engine.is_auto_block_enabled() {
+                self.blocked_count.fetch_add(1, Ordering::Relaxed);
+                mon.add_log(&query_name, &src_ip, true);
+                if let Some(r) = Self::build_nxdomain(&pkt) {
+                    let _ = sock.send_to(&r, src).await;
+                }
+                return;
+            }
+        }
+
+        self.total_queries.fetch_add(1, Ordering::Relaxed);
 
         if self.should_block(&query_name) {
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
@@ -603,7 +675,7 @@ impl DnsBlocker {
         mon.add_log(&query_name, &src_ip, false);
 
         let cached_response = {
-            let cache = self.dns_cache.read().unwrap();
+            let cache = self.dns_cache.read().unwrap_or_else(|e| e.into_inner());
             if let Some((cached_resp, instant)) = cache.get(&query_name) {
                 if instant.elapsed() < Duration::from_secs(30) && cached_resp.len() >= 12 {
                     let mut resp = cached_resp.clone();
@@ -628,7 +700,8 @@ impl DnsBlocker {
             if let Ok(mut cache) = self.dns_cache.write() {
                 if cache.len() > 3000 {
                     let now = Instant::now();
-                    cache.retain(|_, (_, inst)| now.duration_since(*inst) < Duration::from_secs(60));
+                    cache
+                        .retain(|_, (_, inst)| now.duration_since(*inst) < Duration::from_secs(60));
                     if cache.len() > 3000 {
                         cache.clear();
                     }
@@ -641,7 +714,11 @@ impl DnsBlocker {
         }
     }
 
-    async fn forward_parallel_racing(&self, query_packet: &[u8], doh_urls: &[String]) -> Option<Vec<u8>> {
+    async fn forward_parallel_racing(
+        &self,
+        query_packet: &[u8],
+        doh_urls: &[String],
+    ) -> Option<Vec<u8>> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
 
         for url in doh_urls {
@@ -657,7 +734,7 @@ impl DnsBlocker {
                         .post(&url)
                         .header("Content-Type", "application/dns-message")
                         .header("Accept", "application/dns-message")
-                        .body(pkt)
+                        .body(pkt.clone())
                         .send(),
                 )
                 .await;
@@ -665,7 +742,7 @@ impl DnsBlocker {
                 if let Ok(Ok(resp)) = res {
                     if resp.status().is_success() {
                         if let Ok(bytes) = resp.bytes().await {
-                            if bytes.len() >= 12 {
+                            if bytes.len() >= 12 && bytes[0] == pkt[0] && bytes[1] == pkt[1] {
                                 let _ = tx_clone.send(bytes.to_vec()).await;
                             }
                         }
@@ -689,7 +766,7 @@ impl DnsBlocker {
                         )
                         .await
                         {
-                            if len >= 12 {
+                            if len >= 12 && buf[0] == pkt[0] && buf[1] == pkt[1] {
                                 let _ = tx_clone.send(buf[..len].to_vec()).await;
                             }
                         }
@@ -765,16 +842,8 @@ mod tests {
     #[test]
     fn test_sinkhole_a_and_aaaa_record_builder() {
         let query_a = vec![
-            0xAB, 0xCD,
-            0x01, 0x00,
-            0x00, 0x01,
-            0x00, 0x00,
-            0x00, 0x00,
-            0x00, 0x00,
-            0x03, b'a', b'd', b's',
-            0x06, b'g', b'o', b'o', b'g', b'l', b'e',
-            0x03, b'c', b'o', b'm',
-            0x00,
+            0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, b'a',
+            b'd', b's', 0x06, b'g', b'o', b'o', b'g', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00,
             0x00, 0x01, 0x00, 0x01,
         ];
 
@@ -792,20 +861,13 @@ mod tests {
         assert_eq!(&sinkhole_a[len_a - 4..len_a], &[0, 0, 0, 0]);
 
         let query_aaaa = vec![
-            0xAB, 0xCD,
-            0x01, 0x00,
-            0x00, 0x01,
-            0x00, 0x00,
-            0x00, 0x00,
-            0x00, 0x00,
-            0x03, b'a', b'd', b's',
-            0x06, b'g', b'o', b'o', b'g', b'l', b'e',
-            0x03, b'c', b'o', b'm',
-            0x00,
+            0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, b'a',
+            b'd', b's', 0x06, b'g', b'o', b'o', b'g', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00,
             0x00, 0x1C, 0x00, 0x01,
         ];
 
-        let (_, qtype_aaaa) = DnsBlocker::parse_query_info(&query_aaaa).expect("Parse query info AAAA");
+        let (_, qtype_aaaa) =
+            DnsBlocker::parse_query_info(&query_aaaa).expect("Parse query info AAAA");
         assert_eq!(qtype_aaaa, 28);
 
         let sinkhole_aaaa = DnsBlocker::build_sinkhole_aaaa_record(&query_aaaa, [0u8; 16])

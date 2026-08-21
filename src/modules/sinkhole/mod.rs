@@ -22,7 +22,10 @@ impl SilentSinkhole {
         for port in ports {
             match TcpListener::bind(format!("127.0.0.1:{}", port)).await {
                 Ok(l) => {
-                    info!("Silent Ad Sinkhole HTTP Server listening on 127.0.0.1:{}", port);
+                    info!(
+                        "Silent Ad Sinkhole HTTP Server listening on 127.0.0.1:{}",
+                        port
+                    );
                     active_listener = Some(l);
                     break;
                 }
@@ -58,15 +61,24 @@ impl SilentSinkhole {
 
             tokio::spawn(async move {
                 let mut buf = [0u8; 1024];
-                let n = match socket.read(&mut buf).await {
-                    Ok(n) if n > 0 => n,
+                let n = match tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    socket.read(&mut buf),
+                )
+                .await
+                {
+                    Ok(Ok(n)) if n > 0 => n,
                     _ => return,
                 };
 
                 let request = String::from_utf8_lossy(&buf[..n]);
                 counter.fetch_add(1, Ordering::Relaxed);
 
-                let response = if request.contains(".gif") || request.contains(".png") || request.contains(".jpg") || request.contains(".webp") {
+                let response = if request.contains(".gif")
+                    || request.contains(".png")
+                    || request.contains(".jpg")
+                    || request.contains(".webp")
+                {
                     let mut resp = format!(
                         "HTTP/1.1 200 OK\r\n\
                         Content-Type: image/gif\r\n\
@@ -74,7 +86,8 @@ impl SilentSinkhole {
                         Content-Length: {}\r\n\
                         Connection: close\r\n\r\n",
                         gif_data.len()
-                    ).into_bytes();
+                    )
+                    .into_bytes();
                     resp.extend_from_slice(&gif_data);
                     resp
                 } else if request.contains(".json") {
@@ -87,7 +100,8 @@ impl SilentSinkhole {
                         Connection: close\r\n\r\n{}",
                         body.len(),
                         body
-                    ).into_bytes()
+                    )
+                    .into_bytes()
                 } else {
                     let body = "";
                     format!(
@@ -98,10 +112,15 @@ impl SilentSinkhole {
                         Connection: close\r\n\r\n{}",
                         body.len(),
                         body
-                    ).into_bytes()
+                    )
+                    .into_bytes()
                 };
 
-                let _ = socket.write_all(&response).await;
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    socket.write_all(&response),
+                )
+                .await;
             });
         }
     }
