@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use sysinfo::System;
+use sysinfo::{Networks, System};
 use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +45,16 @@ pub struct LogEntry {
     pub is_blocked: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainLogGroup {
+    pub domain: String,
+    pub total_queries: usize,
+    pub blocked_queries: usize,
+    pub is_blocked: bool,
+    pub last_seen: String,
+    pub last_ip: String,
+}
+
 pub struct NetworkMonitor {
     devices: Arc<RwLock<HashMap<String, NetworkDevice>>>,
     logs: Arc<RwLock<Vec<LogEntry>>>,
@@ -52,6 +62,7 @@ pub struct NetworkMonitor {
     max_logs: usize,
     log_file_path: PathBuf,
     system_info: Arc<RwLock<System>>,
+    networks: Arc<RwLock<Networks>>,
     pub connection_tracker: Arc<ConnectionTracker>,
     pub lan_scanner: Arc<LanScanner>,
 }
@@ -66,6 +77,9 @@ impl NetworkMonitor {
         let mut sys = System::new_all();
         sys.refresh_all();
 
+        let mut nets = Networks::new_with_refreshed_list();
+        nets.refresh();
+
         let monitor = Self {
             devices: Arc::new(RwLock::new(HashMap::new())),
             logs: Arc::new(RwLock::new(Vec::new())),
@@ -73,6 +87,7 @@ impl NetworkMonitor {
             max_logs,
             log_file_path,
             system_info: Arc::new(RwLock::new(sys)),
+            networks: Arc::new(RwLock::new(nets)),
             connection_tracker: Arc::new(ConnectionTracker::new()),
             lan_scanner: Arc::new(LanScanner::new()),
         };
@@ -222,6 +237,39 @@ impl NetworkMonitor {
             .unwrap_or_default()
     }
 
+    pub fn get_grouped_logs(&self) -> Vec<DomainLogGroup> {
+        let logs = self.get_logs();
+        let mut map: HashMap<String, (usize, usize, String, String)> = HashMap::new();
+
+        for l in logs {
+            let entry = map
+                .entry(l.domain.clone())
+                .or_insert((0, 0, l.timestamp.clone(), l.source_ip.clone()));
+            entry.0 += 1;
+            if l.is_blocked {
+                entry.1 += 1;
+            }
+        }
+
+        let mut groups: Vec<DomainLogGroup> = map
+            .into_iter()
+            .map(|(domain, (total, blocked, last_seen, last_ip))| {
+                let is_blocked = blocked > 0;
+                DomainLogGroup {
+                    domain,
+                    total_queries: total,
+                    blocked_queries: blocked,
+                    is_blocked,
+                    last_seen,
+                    last_ip,
+                }
+            })
+            .collect();
+
+        groups.sort_by(|a, b| b.total_queries.cmp(&a.total_queries));
+        groups
+    }
+
     pub fn get_active_connections(&self) -> Vec<ActiveConnection> {
         self.connection_tracker.get_active_connections()
     }
@@ -235,18 +283,45 @@ impl NetworkMonitor {
             sys.refresh_cpu();
             sys.refresh_memory();
             let cpu = sys.global_cpu_info().cpu_usage();
-            let used_mem = sys.used_memory() as f64 / (1024.0 * 1024.0 * 1024.0); // GB
+            let used_mem = sys.used_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
             (cpu, used_mem as f32)
         } else {
             (0.0, 0.0)
         }
     }
 
+    pub fn get_live_traffic_rate(&self) -> String {
+        if let Ok(mut nets) = self.networks.write() {
+            nets.refresh();
+            let mut total_rx = 0u64;
+            let mut total_tx = 0u64;
+            for (interface_name, data) in nets.iter() {
+                let name = interface_name.to_lowercase();
+                if !name.contains("loopback") && !name.contains("pseudo") {
+                    total_rx += data.received();
+                    total_tx += data.transmitted();
+                }
+            }
+            let total = total_rx + total_tx;
+            if total > 1024 * 1024 {
+                format!("{:.1} MB/s", total as f64 / (1024.0 * 1024.0))
+            } else if total > 1024 {
+                format!("{} KB/s", total / 1024)
+            } else if total > 0 {
+                format!("{} B/s", total)
+            } else {
+                "0 KB/s".to_string()
+            }
+        } else {
+            "0 KB/s".to_string()
+        }
+    }
+
     pub async fn start_traffic_monitor(self: Arc<Self>) {
         use std::time::Duration;
+        let mut cycle: u64 = 0;
 
         loop {
-            // 1. Query network subinterfaces traffic silently without window
             let mut cmd = tokio::process::Command::new("netsh");
             #[cfg(windows)]
             cmd.creation_flags(0x08000000);
@@ -271,13 +346,21 @@ impl NetworkMonitor {
                 }
             }
 
-            // 2. Refresh active Internet connections
             self.connection_tracker.refresh_connections();
 
-            // 3. Save logs periodically
-            self.save_logs_to_disk();
+            if cycle % 20 == 0 {
+                let scanner = self.lan_scanner.clone();
+                tokio::spawn(async move {
+                    let _ = scanner.scan_network().await;
+                });
+            }
 
-            tokio::time::sleep(Duration::from_secs(6)).await;
+            if cycle % 10 == 0 {
+                self.save_logs_to_disk();
+            }
+
+            cycle = cycle.wrapping_add(1);
+            tokio::time::sleep(Duration::from_millis(1500)).await;
         }
     }
 }

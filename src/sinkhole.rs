@@ -15,9 +15,6 @@ impl SilentSinkhole {
         }
     }
 
-    /// Starts the background dummy HTTP server that swallows ad requests silently.
-    /// Responds with 200 OK and transparent 1x1 GIF / empty JS / empty JSON so
-    /// applications and web pages don't hang, detect adblockers, or show broken images.
     pub async fn start(self: Arc<Self>) {
         let ports = [80u16, 8080u16, 8888u16];
         let mut active_listener = None;
@@ -92,8 +89,7 @@ impl SilentSinkhole {
                         body
                     ).into_bytes()
                 } else {
-                    // Default JS / HTML / Tracking dummy response
-                    let body = "/* ShieldGhita: Silent Background Ad Neutralized */";
+                    let body = "";
                     format!(
                         "HTTP/1.1 200 OK\r\n\
                         Content-Type: application/javascript\r\n\

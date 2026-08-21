@@ -8,9 +8,7 @@ use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
 
-/// Pre-curated high-impact video, audio, streaming, and tracking ad networks
 const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
-    // YouTube Video & Telemetry Ads
     "s.youtube.com",
     "ad.youtube.com",
     "ads.youtube.com",
@@ -30,38 +28,31 @@ const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
     "googlesyndication.com",
     "doubleclick.net",
     "app-measurement.com",
-    // Spotify Audio & Banner Ads
     "spclient.wg.spotify.com",
     "audio-ak-spotify-com.akamaized.net",
     "heads4-ak-spotify-com.akamaized.net",
     "adstudio.spotify.com",
     "ads-fa.spotify.com",
     "crashdump.spotify.com",
-    // SoundCloud & Streaming Audio Ads
     "ad.soundcloud.com",
     "ads.soundcloud.com",
     "promoted.soundcloud.com",
-    // Twitch & Live Streaming Ads
     "countess.twitch.tv",
-    // TikTok Video Ads & Telemetry
     "ads.tiktok.com",
     "analytics.tiktok.com",
     "ib.tiktokv.com",
     "log.byteoversea.com",
     "mon.zijieapi.com",
-    // Facebook & Instagram Video Ads
     "an.facebook.com",
     "ads.facebook.com",
     "pixel.facebook.com",
     "tr.facebook.com",
-    // Vietnamese Music & Video Portals (Zing / Nhaccuatui)
     "ad.zadn.vn",
     "api.ad.zadn.vn",
     "tracking.zadn.vn",
     "qc.nct.vn",
     "media.zadn.vn",
     "adv.zing.vn",
-    // General Heavy Ad Trackers
     "fls-na.amazon.com",
     "aax-us-east.amazon-adsystem.com",
     "c.amazon-adsystem.com",
@@ -91,7 +82,6 @@ impl DnsBlocker {
             .pool_max_idle_per_host(15)
             .pool_idle_timeout(Duration::from_secs(90));
 
-        // Prevent recursive DNS deadlock by pre-resolving well-known DoH provider hostnames
         if let Ok(ip_cf) = "1.1.1.1:443".parse() {
             builder = builder
                 .resolve("dns.cloudflare.com", ip_cf)
@@ -109,7 +99,6 @@ impl DnsBlocker {
 
         let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
 
-        // Preload built-in high-impact video/audio ad rules
         let mut initial_blocked = HashSet::new();
         for domain in BUILTIN_VIDEO_AUDIO_AD_DOMAINS {
             initial_blocked.insert(domain.to_string());
@@ -126,6 +115,12 @@ impl DnsBlocker {
             blocked_count: Arc::new(AtomicU64::new(0)),
             silent_sinkhole_enabled: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    pub fn get_rules_count(&self) -> usize {
+        let base = self.blocked_domains.read().map(|b| b.len()).unwrap_or(0);
+        let custom = self.custom_blocked.read().map(|c| c.len()).unwrap_or(0);
+        base + custom
     }
 
     fn cache_path() -> PathBuf {
@@ -145,7 +140,6 @@ impl DnsBlocker {
             .filter(|l| !l.is_empty())
             .collect();
 
-        // Always keep built-in video & music ad domains
         for domain in BUILTIN_VIDEO_AUDIO_AD_DOMAINS {
             set.insert(domain.to_string());
         }
@@ -177,7 +171,6 @@ impl DnsBlocker {
         if l.is_empty() || l.starts_with('#') || l.starts_with('!') || l.starts_with('[') {
             return None;
         }
-        // Adblock / ABP format: ||example.com^
         if l.starts_with("||") {
             let d = l.trim_start_matches("||").trim_end_matches('^');
             let d = d.split('/').next().unwrap_or(d);
@@ -188,7 +181,6 @@ impl DnsBlocker {
             }
             return None;
         }
-        // Strict domain |example.com|
         if l.starts_with('|') && l.ends_with('|') && l.len() > 2 {
             let d = &l[1..l.len() - 1];
             if !d.is_empty() && !d.contains('*') && !d.contains('/') {
@@ -196,7 +188,6 @@ impl DnsBlocker {
             }
             return None;
         }
-        // Hosts file format: 0.0.0.0 domain.com or 127.0.0.1 domain.com
         if let Some(pos) = l.find(|c: char| c.is_whitespace()) {
             let ip = &l[..pos];
             if ip == "0.0.0.0" || ip == "127.0.0.1" {
@@ -214,7 +205,6 @@ impl DnsBlocker {
             }
             return None;
         }
-        // Plain domain list
         if !l.contains(' ') && !l.contains('/') && !l.contains('*') && l.contains('.') {
             let d = l.split('#').next().unwrap_or(l).trim();
             if !d.is_empty() && d != "localhost" && d != "broadcasthost" {
@@ -228,7 +218,6 @@ impl DnsBlocker {
         let _ = self.load_cache();
         let mut set = HashSet::new();
 
-        // Always include built-in video & audio ad rules
         for domain in BUILTIN_VIDEO_AUDIO_AD_DOMAINS {
             set.insert(domain.to_string());
         }
@@ -322,16 +311,12 @@ impl DnsBlocker {
         self.silent_sinkhole_enabled.load(Ordering::Relaxed)
     }
 
-    /// Accurate Domain & Subdomain Matching:
-    /// 1. Whitelist check first
-    /// 2. Blacklist check
     pub fn should_block(&self, domain: &str) -> bool {
         let clean = domain.trim_end_matches('.').to_lowercase();
         if clean.is_empty() {
             return false;
         }
 
-        // Whitelist check first
         {
             let ca = self.custom_allowed.read().unwrap();
             let ga = self.allowed_domains.read().unwrap();
@@ -340,7 +325,6 @@ impl DnsBlocker {
             }
         }
 
-        // Custom Blacklist check
         {
             let cb = self.custom_blocked.read().unwrap();
             if Self::match_domain_hierarchy(&clean, &cb) {
@@ -348,7 +332,6 @@ impl DnsBlocker {
             }
         }
 
-        // Global Blacklist check
         {
             let gb = self.blocked_domains.read().unwrap();
             if Self::match_domain_hierarchy(&clean, &gb) {
@@ -380,7 +363,6 @@ impl DnsBlocker {
         gb + cb
     }
 
-    /// Parses both Domain Query Name and Query Type (1 = A, 28 = AAAA, etc.)
     pub fn parse_query_info(pkt: &[u8]) -> Option<(String, u16)> {
         if pkt.len() < 12 {
             return None;
@@ -422,30 +404,25 @@ impl DnsBlocker {
             return None;
         }
         let mut r = q.to_vec();
-        // QR = 1 (Response), RCODE = 3 (NXDOMAIN)
         r[2] |= 0x80;
         r[3] = (r[3] & 0xF0) | 0x03;
-        // Set Answer, Authority, Additional count to 0
         r[6..12].fill(0);
         Some(r)
     }
 
-    /// Builds an IPv4 A-record response pointing to 0.0.0.0 (Standard Blackhole)
     pub fn build_sinkhole_a_record(q: &[u8], ip: [u8; 4]) -> Option<Vec<u8>> {
         if q.len() < 12 {
             return None;
         }
         let mut r = Vec::with_capacity(q.len() + 16);
-        // Header
-        r.extend_from_slice(&q[0..2]); // Transaction ID
-        r.push(0x81); // QR=1, AA=0, TC=0, RD=1
-        r.push(0x80); // RA=1, Z=0, RCODE=0 (NOERROR)
-        r.extend_from_slice(&q[4..6]); // QDCOUNT
-        r.extend_from_slice(&[0x00, 0x01]); // ANCOUNT = 1 answer
-        r.extend_from_slice(&[0x00, 0x00]); // NSCOUNT = 0
-        r.extend_from_slice(&[0x00, 0x00]); // ARCOUNT = 0
+        r.extend_from_slice(&q[0..2]);
+        r.push(0x81);
+        r.push(0x80);
+        r.extend_from_slice(&q[4..6]);
+        r.extend_from_slice(&[0x00, 0x01]);
+        r.extend_from_slice(&[0x00, 0x00]);
+        r.extend_from_slice(&[0x00, 0x00]);
 
-        // Find end of Question section
         let mut pos = 12;
         while pos < q.len() {
             let len = q[pos] as usize;
@@ -462,36 +439,32 @@ impl DnsBlocker {
         if pos + 4 > q.len() {
             return None;
         }
-        pos += 4; // Skip QTYPE (2) + QCLASS (2)
+        pos += 4;
         r.extend_from_slice(&q[12..pos]);
 
-        // Answer section (A Record)
-        r.extend_from_slice(&[0xC0, 0x0C]); // Name pointer
-        r.extend_from_slice(&[0x00, 0x01]); // Type A
-        r.extend_from_slice(&[0x00, 0x01]); // Class IN
-        r.extend_from_slice(&[0x00, 0x00, 0x00, 0x0A]); // TTL 10 seconds
-        r.extend_from_slice(&[0x00, 0x04]); // Data length 4 bytes
-        r.extend_from_slice(&ip); // e.g. [0, 0, 0, 0]
+        r.extend_from_slice(&[0xC0, 0x0C]);
+        r.extend_from_slice(&[0x00, 0x01]);
+        r.extend_from_slice(&[0x00, 0x01]);
+        r.extend_from_slice(&[0x00, 0x00, 0x00, 0x0A]);
+        r.extend_from_slice(&[0x00, 0x04]);
+        r.extend_from_slice(&ip);
 
         Some(r)
     }
 
-    /// Builds an IPv6 AAAA-record response pointing to :: (16 zero bytes)
     pub fn build_sinkhole_aaaa_record(q: &[u8], ip6: [u8; 16]) -> Option<Vec<u8>> {
         if q.len() < 12 {
             return None;
         }
         let mut r = Vec::with_capacity(q.len() + 28);
-        // Header
-        r.extend_from_slice(&q[0..2]); // Transaction ID
-        r.push(0x81); // QR=1, AA=0, TC=0, RD=1
-        r.push(0x80); // RA=1, Z=0, RCODE=0 (NOERROR)
-        r.extend_from_slice(&q[4..6]); // QDCOUNT
-        r.extend_from_slice(&[0x00, 0x01]); // ANCOUNT = 1 answer
-        r.extend_from_slice(&[0x00, 0x00]); // NSCOUNT = 0
-        r.extend_from_slice(&[0x00, 0x00]); // ARCOUNT = 0
+        r.extend_from_slice(&q[0..2]);
+        r.push(0x81);
+        r.push(0x80);
+        r.extend_from_slice(&q[4..6]);
+        r.extend_from_slice(&[0x00, 0x01]);
+        r.extend_from_slice(&[0x00, 0x00]);
+        r.extend_from_slice(&[0x00, 0x00]);
 
-        // Find end of Question section
         let mut pos = 12;
         while pos < q.len() {
             let len = q[pos] as usize;
@@ -508,16 +481,15 @@ impl DnsBlocker {
         if pos + 4 > q.len() {
             return None;
         }
-        pos += 4; // Skip QTYPE (2) + QCLASS (2)
+        pos += 4;
         r.extend_from_slice(&q[12..pos]);
 
-        // Answer section (AAAA Record)
-        r.extend_from_slice(&[0xC0, 0x0C]); // Name pointer
-        r.extend_from_slice(&[0x00, 0x1C]); // Type AAAA (28)
-        r.extend_from_slice(&[0x00, 0x01]); // Class IN
-        r.extend_from_slice(&[0x00, 0x00, 0x00, 0x0A]); // TTL 10 seconds
-        r.extend_from_slice(&[0x00, 0x10]); // Data length 16 bytes
-        r.extend_from_slice(&ip6); // e.g. [0; 16]
+        r.extend_from_slice(&[0xC0, 0x0C]);
+        r.extend_from_slice(&[0x00, 0x1C]);
+        r.extend_from_slice(&[0x00, 0x01]);
+        r.extend_from_slice(&[0x00, 0x00, 0x00, 0x0A]);
+        r.extend_from_slice(&[0x00, 0x10]);
+        r.extend_from_slice(&ip6);
 
         Some(r)
     }
@@ -528,7 +500,7 @@ impl DnsBlocker {
         }
         let mut r = q.to_vec();
         r[2] |= 0x80;
-        r[3] = (r[3] & 0xF0) | 0x02; // SERVFAIL
+        r[3] = (r[3] & 0xF0) | 0x02;
         r[6..12].fill(0);
         Some(r)
     }
@@ -605,7 +577,6 @@ impl DnsBlocker {
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
             mon.add_log(&query_name, &src_ip, true);
 
-            // Block action: Type A -> 0.0.0.0, Type AAAA -> ::, Others -> NXDOMAIN
             let resp = if qtype == 1 {
                 Self::build_sinkhole_a_record(&pkt, [0, 0, 0, 0])
                     .or_else(|| Self::build_nxdomain(&pkt))
@@ -624,7 +595,6 @@ impl DnsBlocker {
 
         mon.add_log(&query_name, &src_ip, false);
 
-        // Check in-memory DNS Cache (15 seconds TTL)
         let cached_response = {
             let cache = self.dns_cache.read().unwrap();
             if let Some((cached_resp, instant)) = cache.get(&query_name) {
@@ -646,7 +616,6 @@ impl DnsBlocker {
             return;
         }
 
-        // Parallel DNS Racing: query all DoH and UDP upstreams concurrently, take fastest response
         let fwd_resp = self.forward_parallel_racing(&pkt, &doh_urls).await;
         if let Some(resp) = fwd_resp {
             if let Ok(mut cache) = self.dns_cache.write() {
@@ -665,12 +634,9 @@ impl DnsBlocker {
         }
     }
 
-    /// Parallel DNS Racing: sends query concurrently to all DoH URLs and reliable UDP resolvers.
-    /// Returns immediately when the fastest valid response arrives.
     async fn forward_parallel_racing(&self, query_packet: &[u8], doh_urls: &[String]) -> Option<Vec<u8>> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
 
-        // 1. Race DoH Upstreams
         for url in doh_urls {
             let client = self.http_client.clone();
             let url = url.clone();
@@ -701,7 +667,6 @@ impl DnsBlocker {
             });
         }
 
-        // 2. Race Fast Public UDP Resolvers (1.1.1.1, 8.8.8.8, 9.9.9.9)
         let udp_resolvers = ["1.1.1.1:53", "8.8.8.8:53", "9.9.9.9:53"];
         for resolver in udp_resolvers {
             let pkt = query_packet.to_vec();
@@ -728,7 +693,6 @@ impl DnsBlocker {
 
         drop(tx);
 
-        // Await the fastest response with 1.2s total timeout
         match tokio::time::timeout(Duration::from_millis(1200), rx.recv()).await {
             Ok(Some(resp)) => Some(resp),
             _ => None,
@@ -773,7 +737,6 @@ mod tests {
         let _ = blocker.add_custom_domain("ads.google.com");
         let _ = blocker.add_custom_domain("tracker.net");
 
-        // Built-in video ads blocked
         assert!(blocker.should_block("s.youtube.com"));
         assert!(blocker.should_block("ad.youtube.com"));
         assert!(blocker.should_block("spclient.wg.spotify.com"));
@@ -795,17 +758,17 @@ mod tests {
     #[test]
     fn test_sinkhole_a_and_aaaa_record_builder() {
         let query_a = vec![
-            0xAB, 0xCD, // Transaction ID
-            0x01, 0x00, // Standard query
-            0x00, 0x01, // QDCOUNT = 1
-            0x00, 0x00, // ANCOUNT = 0
-            0x00, 0x00, // NSCOUNT = 0
-            0x00, 0x00, // ARCOUNT = 0
+            0xAB, 0xCD,
+            0x01, 0x00,
+            0x00, 0x01,
+            0x00, 0x00,
+            0x00, 0x00,
+            0x00, 0x00,
             0x03, b'a', b'd', b's',
             0x06, b'g', b'o', b'o', b'g', b'l', b'e',
             0x03, b'c', b'o', b'm',
             0x00,
-            0x00, 0x01, 0x00, 0x01, // Type A (1), Class IN (1)
+            0x00, 0x01, 0x00, 0x01,
         ];
 
         let (name, qtype) = DnsBlocker::parse_query_info(&query_a).expect("Parse query info");
@@ -821,19 +784,18 @@ mod tests {
         let len_a = sinkhole_a.len();
         assert_eq!(&sinkhole_a[len_a - 4..len_a], &[0, 0, 0, 0]);
 
-        // AAAA Query (Type 28)
         let query_aaaa = vec![
-            0xAB, 0xCD, // Transaction ID
-            0x01, 0x00, // Standard query
-            0x00, 0x01, // QDCOUNT = 1
-            0x00, 0x00, // ANCOUNT = 0
-            0x00, 0x00, // NSCOUNT = 0
-            0x00, 0x00, // ARCOUNT = 0
+            0xAB, 0xCD,
+            0x01, 0x00,
+            0x00, 0x01,
+            0x00, 0x00,
+            0x00, 0x00,
+            0x00, 0x00,
             0x03, b'a', b'd', b's',
             0x06, b'g', b'o', b'o', b'g', b'l', b'e',
             0x03, b'c', b'o', b'm',
             0x00,
-            0x00, 0x1C, 0x00, 0x01, // Type AAAA (28), Class IN (1)
+            0x00, 0x1C, 0x00, 0x01,
         ];
 
         let (_, qtype_aaaa) = DnsBlocker::parse_query_info(&query_aaaa).expect("Parse query info AAAA");

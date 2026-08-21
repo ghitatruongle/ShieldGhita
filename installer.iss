@@ -1,6 +1,5 @@
-; Shield Ghita Installer Script for Inno Setup 6
 #define MyAppName "Shield Ghita"
-#define MyAppVersion "0.0.0+0"
+#define MyAppVersion "0.0.1-beta"
 #define MyAppPublisher "ShieldGhita"
 #define MyAppExeName "shield_ghita.exe"
 
@@ -12,12 +11,17 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=installer_output
-OutputBaseFilename=ShieldGhita_Setup_v0.0.0+0
+OutputBaseFilename=ShieldGhita_Setup_v0.0.1-beta
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
-; SetupIconFile=
+CloseApplications=force
+CloseApplicationsFilter=*.exe,{#MyAppExeName}
+RestartApplications=no
+DirExistsWarning=no
+EnableDirDoesntExistWarning=no
+SetupIconFile=assets\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 WizardStyle=modern
 
@@ -27,6 +31,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
 Name: "autostart"; Description: "Start Shield Ghita when Windows starts"; GroupDescription: "Additional options:"
+
+[InstallDelete]
+Type: files; Name: "{app}\{#MyAppExeName}"
+Type: files; Name: "{app}\*.dll"
+Type: files; Name: "{app}\*.exe"
+Type: filesandordirs; Name: "{app}\assets"
 
 [Files]
 Source: "target\release\shield_ghita.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -41,3 +51,53 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function GetUninstallString(): String;
+var
+  sUnInstPath: String;
+  sUnInstallString: String;
+begin
+  sUnInstPath := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#emit SetupSetting("AppId")}_is1';
+  sUnInstallString := '';
+  
+  if not RegQueryStringValue(HKLM64, sUnInstPath, 'UninstallString', sUnInstallString) then
+    if not RegQueryStringValue(HKLM32, sUnInstPath, 'UninstallString', sUnInstallString) then
+      if not RegQueryStringValue(HKCU64, sUnInstPath, 'UninstallString', sUnInstallString) then
+        RegQueryStringValue(HKCU32, sUnInstPath, 'UninstallString', sUnInstallString);
+        
+  Result := sUnInstallString;
+end;
+
+function InitializeSetup(): Boolean;
+var
+  iResultCode: Integer;
+  sUnInstallString: String;
+  ErrorCode: Integer;
+begin
+  Result := True;
+
+  Exec('taskkill.exe', '/F /IM {#MyAppExeName} /T', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
+  Sleep(500);
+
+  sUnInstallString := GetUninstallString();
+  if sUnInstallString <> '' then
+  begin
+    sUnInstallString := RemoveQuotes(sUnInstallString);
+    Exec(sUnInstallString, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES', '', SW_HIDE, ewWaitUntilTerminated, iResultCode);
+    Sleep(1000);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ErrorCode: Integer;
+begin
+  if CurStep = ssInstall then
+  begin
+    Exec('taskkill.exe', '/F /IM {#MyAppExeName} /T', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
+    Sleep(300);
+    DeleteFile(ExpandConstant('{app}\{#MyAppExeName}'));
+  end;
+end;
+

@@ -48,11 +48,29 @@ fn create_default_icon() -> Result<Icon, Box<dyn std::error::Error>> {
     let mut rgba = Vec::with_capacity((width * height * 4) as usize);
     for y in 0..height {
         for x in 0..width {
-            let cx = x as f32 - 16.0;
-            let cy = y as f32 - 16.0;
-            let dist = (cx * cx + cy * cy).sqrt();
-            if dist <= 14.0 {
-                rgba.extend_from_slice(&[56, 189, 248, 255]); // Sky Blue #38bdf8
+            let u = x as f32 / 32.0;
+            let v = y as f32 / 32.0;
+            let nx = (u - 0.5) * 2.0;
+            let ny = (v - 0.5) * 2.0;
+
+            let abs_x = nx.abs();
+            let mut bound = 0.0;
+            if ny >= -0.85 && ny <= 0.0 {
+                bound = 0.82 - (ny + 0.85) * 0.05;
+            } else if ny > 0.0 && ny <= 0.92 {
+                let t = ny / 0.92;
+                bound = 0.82 * (1.0 - t * t * 0.95).max(0.0).sqrt();
+            }
+
+            let dist = bound - abs_x;
+            if dist > 0.0 {
+                if dist < 0.12 {
+                    rgba.extend_from_slice(&[56, 189, 248, 255]);
+                } else if dist < 0.18 {
+                    rgba.extend_from_slice(&[34, 197, 94, 255]);
+                } else {
+                    rgba.extend_from_slice(&[15, 23, 42, 255]);
+                }
             } else {
                 rgba.extend_from_slice(&[0, 0, 0, 0]);
             }
@@ -78,7 +96,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(in_app_layer)
         .init();
 
-    // Register emergency safety cleanup hook
+    info!("Starting Shield Ghita v0.0.1-beta Master Controller...");
+
+    if !dns_manager::is_elevated() {
+        tracing::warn!("Shield Ghita running without elevated Administrator token. Run as Administrator for full DNS proxy enforcement.");
+    }
     dns_manager::register_safety_cleanup();
 
     let cfg = AppConfig::load();
@@ -118,7 +140,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         protection_atomic: protection_atomic.clone(),
     });
 
-    // Start Silent Sinkhole HTTP background dummy server (Requirement 5)
     {
         let sinkhole_clone = state.sinkhole.clone();
         let rt = state.runtime.clone();
@@ -127,7 +148,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Start background network traffic & active connections tracker (Requirement 3)
     {
         let monitor = state.monitor.clone();
         let rt = state.runtime.clone();
@@ -136,7 +156,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Start DNS Guard Watchdog 24/7 (Requirement 4)
     {
         let prot = state.protection_atomic.clone();
         let listen_addr = cfg.dns_listen_addr.clone();
@@ -146,7 +165,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Load initial blocklists & start Master DNS proxy server
     {
         let blocker = state.blocker.clone();
         let monitor = state.monitor.clone();
@@ -161,7 +179,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rt.spawn(async move {
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
-            // 1. Start DNS proxy server on background task
             let blocker_srv = blocker.clone();
             let mon_srv = monitor.clone();
             let addr_srv = listen_addr.clone();
@@ -172,7 +189,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await;
             });
 
-            // 2. Wait for DNS server socket bind confirmation
             match ready_rx.await {
                 Ok(Ok(())) => {
                     info!("DNS Server successfully bound to {}:{}", listen_addr, listen_port);
@@ -195,7 +211,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // 3. Load blocklists
             let urls = {
                 let cfg_guard = config.read().unwrap();
                 cfg_guard.blocklist_urls.clone()
@@ -214,7 +229,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Periodic auto-update blocklist timer
     {
         let s = state.clone();
         let rt = state.runtime.clone();
@@ -261,7 +275,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui = AppWindow::new()?;
 
-    // Build System Tray
     let tray_menu = Menu::new();
     let item_show = MenuItem::new("Mở giao diện Shield Ghita", true, None);
     let item_toggle = MenuItem::new("Bật / Tắt bảo vệ", true, None);
@@ -273,7 +286,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _tray_icon = match create_default_icon() {
         Ok(icon) => TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
-            .with_tooltip("Shield Ghita v0.0.0+0 - Master Controller")
+            .with_tooltip("Shield Ghita v0.0.1-beta - Master Controller")
             .with_icon(icon)
             .build()
             .ok(),
@@ -287,7 +300,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let toggle_id = item_toggle.id().clone();
     let quit_id = item_quit.id().clone();
 
-    // Wire UI Callbacks
+    AppConfig::set_autostart_registry(cfg.start_with_windows);
+
     let s = state.clone();
     ui.on_toggle_protection(move |enabled| {
         s.protection_atomic.store(enabled, Ordering::SeqCst);
@@ -333,6 +347,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_toggle_silent_sinkhole(move |enabled| {
         s.blocker.set_silent_sinkhole(enabled);
         info!("Silent Sinkhole Mode changed: {}", if enabled { "ENABLED" } else { "DISABLED" });
+    });
+
+    let s = state.clone();
+    ui.on_toggle_autostart(move |enabled| {
+        if let Ok(mut cfg_guard) = s.config.write() {
+            cfg_guard.start_with_windows = enabled;
+            let _ = cfg_guard.save();
+        }
+        AppConfig::set_autostart_registry(enabled);
+        info!("Autostart with Windows set to: {}", if enabled { "ENABLED" } else { "DISABLED" });
+    });
+
+    let s = state.clone();
+    ui.on_toggle_minimize_to_tray(move |enabled| {
+        if let Ok(mut cfg_guard) = s.config.write() {
+            cfg_guard.minimize_to_tray = enabled;
+            let _ = cfg_guard.save();
+        }
+        info!("Minimize to tray on close set to: {}", if enabled { "ENABLED" } else { "DISABLED" });
     });
 
     let s = state.clone();
@@ -462,7 +495,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         s.monitor.apply_filter(&domain_str, &ip_str, blocked_opt);
     });
 
-    // Trigger initial LAN scan and Connection scan
     {
         let monitor = state.monitor.clone();
         state.runtime.spawn(async move {
@@ -471,7 +503,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Periodic UI Update & Tray Event Loop Timer (1000ms)
     let ui_weak = ui.as_weak();
     let s = state.clone();
     let timer = slint::Timer::default();
@@ -479,7 +510,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         slint::TimerMode::Repeated,
         std::time::Duration::from_millis(1000),
         move || {
-            // Check Tray Menu Events
             if let Ok(event) = MenuEvent::receiver().try_recv() {
                 if event.id == show_id {
                     if let Some(ui) = ui_weak.upgrade() {
@@ -517,9 +547,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let total = s.blocker.total_queries.load(Ordering::Relaxed);
                 let blocked = s.blocker.blocked_count.load(Ordering::Relaxed);
                 let absorbed = s.sinkhole.absorbed_count.load(Ordering::Relaxed);
+                let rules_count = s.blocker.get_rules_count();
                 ui.set_total_queries(total as i32);
                 ui.set_blocked_count(blocked as i32);
                 ui.set_absorbed_count(absorbed as i32);
+                ui.set_active_rules_count(rules_count as i32);
 
                 let is_locked = dns_manager::is_master_internet_locked();
                 ui.set_master_locked(is_locked);
@@ -535,12 +567,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "🔴 Đã tạm dừng".into()
                 });
 
-                // System metrics (CPU & RAM)
+                let (autostart, minimize) = s
+                    .config
+                    .read()
+                    .map(|c| (c.start_with_windows, c.minimize_to_tray))
+                    .unwrap_or((true, true));
+                ui.set_autostart_enabled(autostart);
+                ui.set_minimize_to_tray_enabled(minimize);
+
                 let (cpu, mem) = s.monitor.get_system_metrics();
                 ui.set_cpu_usage(cpu);
                 ui.set_mem_usage(mem);
+                ui.set_live_traffic_rate(s.monitor.get_live_traffic_rate().into());
 
-                // Last update timestamp
                 let last_update = s
                     .config
                     .read()
@@ -549,7 +588,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_else(|| "Chưa cập nhật".to_string());
                 ui.set_last_update_text(format!("Cập nhật: {}", last_update).into());
 
-                // Custom rules list (Blacklist)
                 let custom_rules = s
                     .config
                     .read()
@@ -559,7 +597,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     custom_rules.into_iter().map(|r| r.into()).collect();
                 ui.set_custom_rules(ModelRc::new(VecModel::from(rule_models)));
 
-                // Allowed rules list (Whitelist)
                 let allowed_rules = s
                     .config
                     .read()
@@ -569,7 +606,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     allowed_rules.into_iter().map(|r| r.into()).collect();
                 ui.set_allowed_rules(ModelRc::new(VecModel::from(allow_models)));
 
-                // Active Internet Connections list (Requirement 3)
                 let conns = s.monitor.get_active_connections();
                 let conn_models: Vec<ActiveConnection> = conns
                     .into_iter()
@@ -585,7 +621,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .collect();
                 ui.set_connections(ModelRc::new(VecModel::from(conn_models)));
 
-                // Network LAN Devices list (Requirement 2)
+                let grp_conns = s.monitor.connection_tracker.get_grouped_connections();
+                let grp_conn_models: Vec<AppConnectionGroup> = grp_conns
+                    .into_iter()
+                    .map(|g| AppConnectionGroup {
+                        process_name: g.process_name.into(),
+                        pid: g.pid as i32,
+                        connection_count: g.connection_count as i32,
+                        destinations_summary: g.destinations_summary.into(),
+                        protocol_summary: g.protocol_summary.into(),
+                        state_summary: g.state_summary.into(),
+                        is_safe: g.is_safe,
+                    })
+                    .collect();
+                ui.set_grouped_connections(ModelRc::new(VecModel::from(grp_conn_models)));
+
                 let devices = s.monitor.get_lan_devices();
                 let device_models: Vec<NetworkDevice> = devices
                     .into_iter()
@@ -602,7 +652,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .collect();
                 ui.set_devices(ModelRc::new(VecModel::from(device_models)));
 
-                // DNS Logs list
                 let logs = s.monitor.get_logs();
                 let log_models: Vec<LogEntry> = logs
                     .into_iter()
@@ -615,7 +664,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .collect();
                 ui.set_logs(ModelRc::new(VecModel::from(log_models)));
 
-                // In-App Console Logs list (Requirement 1)
+                let grp_logs = s.monitor.get_grouped_logs();
+                let grp_log_models: Vec<DomainLogGroup> = grp_logs
+                    .into_iter()
+                    .map(|g| DomainLogGroup {
+                        domain: g.domain.into(),
+                        total_queries: g.total_queries as i32,
+                        blocked_queries: g.blocked_queries as i32,
+                        is_blocked: g.is_blocked,
+                        last_seen: g.last_seen.into(),
+                        last_ip: g.last_ip.into(),
+                    })
+                    .collect();
+                ui.set_grouped_logs(ModelRc::new(VecModel::from(grp_log_models)));
+
                 let clogs = s.log_buffer.get_logs();
                 let clog_models: Vec<ConsoleLogEntry> = clogs
                     .into_iter()
@@ -630,20 +692,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // Minimize to System Tray when user clicks Close (X)
     let ui_weak_close = ui.as_weak();
+    let s_close = state.clone();
     ui.window().on_close_requested(move || {
-        if let Some(ui) = ui_weak_close.upgrade() {
-            let _ = ui.hide();
+        let minimize = s_close
+            .config
+            .read()
+            .map(|c| c.minimize_to_tray)
+            .unwrap_or(true);
+        if minimize {
+            if let Some(ui) = ui_weak_close.upgrade() {
+                let _ = ui.hide();
+            }
+            slint::CloseRequestResponse::KeepWindowShown
+        } else {
+            let _ = dns_manager::restore_system_dns();
+            std::process::exit(0);
         }
-        slint::CloseRequestResponse::KeepWindowShown
     });
 
     std::mem::forget(timer);
 
     ui.run()?;
 
-    // Final clean up on normal window loop exit
     let _ = dns_manager::restore_system_dns();
     Ok(())
 }

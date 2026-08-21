@@ -11,9 +11,17 @@ pub struct AppConfig {
     pub custom_blocked_domains: Vec<String>,
     pub custom_allowed_domains: Vec<String>,
     pub protection_enabled: bool,
+    #[serde(default = "default_true")]
+    pub start_with_windows: bool,
+    #[serde(default = "default_true")]
+    pub minimize_to_tray: bool,
     pub log_max_entries: usize,
     pub auto_update_blocklist_hours: u64,
     pub last_blocklist_update: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -35,6 +43,8 @@ impl Default for AppConfig {
             custom_blocked_domains: Vec::new(),
             custom_allowed_domains: Vec::new(),
             protection_enabled: true,
+            start_with_windows: true,
+            minimize_to_tray: true,
             log_max_entries: 1000,
             auto_update_blocklist_hours: 24,
             last_blocklist_update: None,
@@ -61,7 +71,6 @@ impl AppConfig {
             config
         };
 
-        // If an old config had port 5353, auto-fix it to standard DNS port 53
         if config.dns_listen_port == 5353 {
             config.dns_listen_port = 53;
             let _ = config.save();
@@ -79,5 +88,38 @@ impl AppConfig {
         fs::write(path, content)?;
         Ok(())
     }
-}
 
+    pub fn set_autostart_registry(enable: bool) {
+        let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("shield_ghita.exe"));
+        let exe_str = exe_path.to_string_lossy().to_string();
+
+        let mut cmd = std::process::Command::new("reg");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        if enable {
+            cmd.args([
+                "add",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "ShieldGhita",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &format!("\"{}\"", exe_str),
+                "/f",
+            ]);
+        } else {
+            cmd.args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "ShieldGhita",
+                "/f",
+            ]);
+        }
+        let _ = cmd.output();
+    }
+}

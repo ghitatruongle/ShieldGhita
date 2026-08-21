@@ -28,11 +28,39 @@ pub fn silent_command(program: &str) -> Command {
     cmd
 }
 
-/// Returns a list of active, connected physical network adapters (filtering out virtual adapters & loopback)
+#[cfg(windows)]
+pub fn is_elevated() -> bool {
+    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut token = windows::Win32::Foundation::HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_ok() {
+            let mut elevation = TOKEN_ELEVATION::default();
+            let mut return_length = 0;
+            let res = GetTokenInformation(
+                token,
+                TokenElevation,
+                Some(&mut elevation as *mut _ as *mut _),
+                std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+                &mut return_length,
+            );
+            let _ = windows::Win32::Foundation::CloseHandle(token);
+            if res.is_ok() {
+                return elevation.TokenIsElevated != 0;
+            }
+        }
+    }
+    true
+}
+
+#[cfg(not(windows))]
+pub fn is_elevated() -> bool {
+    true
+}
+
 pub fn get_active_adapters() -> Vec<String> {
     let mut adapters = Vec::new();
 
-    // 1. Try netsh interface ipv4 show interfaces
     if let Ok(output) = silent_command("netsh")
         .args(["interface", "ipv4", "show", "interfaces"])
         .output()
@@ -40,10 +68,9 @@ pub fn get_active_adapters() -> Vec<String> {
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines().skip(3) {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            // Format: Idx  Met  MTU  State  Name...
             if parts.len() >= 5 {
                 let state = parts[3].to_lowercase();
-                if state == "connected" || state == "connected." {
+                if state == "connected" || state == "connected." || state.contains("kết") {
                     let name = parts[4..].join(" ");
                     if is_valid_physical_adapter(&name) {
                         adapters.push(name);
@@ -53,29 +80,21 @@ pub fn get_active_adapters() -> Vec<String> {
         }
     }
 
-    // 2. Fallback to netsh interface show interface
     if adapters.is_empty() {
-        if let Ok(output) = silent_command("netsh")
-            .args(["interface", "show", "interface"])
+        if let Ok(output) = silent_command("powershell")
+            .args(["-NoProfile", "-Command", "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -ExpandProperty Name"])
             .output()
         {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines().skip(3) {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 4 {
-                    let state = parts[1].to_lowercase();
-                    if state.contains("connected") || state.contains("kết nối") {
-                        let name = parts[3..].join(" ");
-                        if is_valid_physical_adapter(&name) {
-                            adapters.push(name);
-                        }
-                    }
+            for line in stdout.lines() {
+                let name = line.trim();
+                if !name.is_empty() && is_valid_physical_adapter(name) {
+                    adapters.push(name.to_string());
                 }
             }
         }
     }
 
-    // 3. Fallback to standard interface names
     if adapters.is_empty() {
         adapters = vec!["Wi-Fi".into(), "Ethernet".into()];
     }
@@ -93,10 +112,10 @@ fn is_valid_physical_adapter(name: &str) -> bool {
         && !lower.contains("vethernet")
         && !lower.contains("bluetooth")
         && !lower.contains("local area connection*")
+        && !lower.contains("pseudo")
         && !lower.is_empty()
 }
 
-/// Reads the current DNS configuration for a given adapter
 pub fn get_current_adapter_dns(adapter: &str) -> AdapterDnsState {
     let output = match silent_command("netsh")
         .args(["interface", "ip", "show", "dns", &format!("name={}", adapter)])
@@ -123,7 +142,6 @@ pub fn get_current_adapter_dns(adapter: &str) -> AdapterDnsState {
                 }
             }
         } else if is_static_section {
-            // Subsequent statically configured DNS servers on new lines
             let ip = trimmed;
             if !ip.is_empty() && ip != "None" && ip != "127.0.0.1" && ip != "127.0.0.2" && ip.parse::<std::net::IpAddr>().is_ok() {
                 static_servers.push(ip.to_string());
@@ -148,7 +166,6 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
     let mut success_count = 0;
     let mut last_err = String::new();
 
-    // Backup original DNS configuration before overriding if not already backed up
     {
         let mut orig_guard = ORIGINAL_DNS_SETTINGS.write().unwrap();
         if orig_guard.is_none() {
@@ -162,19 +179,19 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
     }
 
     for adapter in &adapters {
-        // Set IPv4 DNS to our local proxy
         let output = silent_command("netsh")
             .args([
                 "interface", "ip", "set", "dns",
                 &format!("name={}", adapter),
-                "static", dns_server, "primary",
+                "static", dns_server, "primary", "validate=no"
             ])
             .output();
 
+        let mut adapter_ok = false;
         match output {
             Ok(o) if o.status.success() => {
-                info!("Master DNS Controller: IPv4 DNS set to {} on '{}'", dns_server, adapter);
-                success_count += 1;
+                info!("Master DNS Controller: Netsh set IPv4 DNS to {} on '{}'", dns_server, adapter);
+                adapter_ok = true;
             }
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr);
@@ -185,7 +202,26 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
             }
         }
 
-        // Prevent IPv6 DNS Leak: set IPv6 DNS to dhcp
+        if !adapter_ok {
+            let ps_script = format!(
+                "Set-DnsClientServerAddress -InterfaceAlias '{}' -ServerAddresses ('{}') -ErrorAction SilentlyContinue",
+                adapter, dns_server
+            );
+            if let Ok(ps_out) = silent_command("powershell")
+                .args(["-NoProfile", "-Command", &ps_script])
+                .output()
+            {
+                if ps_out.status.success() {
+                    info!("Master DNS Controller: PowerShell set IPv4 DNS to {} on '{}'", dns_server, adapter);
+                    adapter_ok = true;
+                }
+            }
+        }
+
+        if adapter_ok {
+            success_count += 1;
+        }
+
         let _ = silent_command("netsh")
             .args([
                 "interface", "ipv6", "set", "dns",
@@ -226,6 +262,12 @@ pub fn restore_system_dns() -> Result<(), String> {
                         "interface", "ip", "set", "dns",
                         &format!("name={}", adapter),
                         "dhcp",
+                    ])
+                    .output();
+                let _ = silent_command("powershell")
+                    .args([
+                        "-NoProfile", "-Command",
+                        &format!("Set-DnsClientServerAddress -InterfaceAlias '{}' -ResetServerAddresses -ErrorAction SilentlyContinue", adapter)
                     ])
                     .output();
             }
@@ -280,7 +322,6 @@ pub fn set_master_internet_lock(locked: bool) -> Result<(), String> {
     MASTER_INTERNET_LOCKED.store(locked, Ordering::SeqCst);
     if locked {
         info!("MASTER INTERNET LOCK ACTIVATED: All external DNS blackholed");
-        // Point DNS to a non-responding blackhole IP
         set_system_dns("127.0.0.2")?;
     } else {
         info!("MASTER INTERNET LOCK DEACTIVATED: Normal protection resumed");
@@ -298,13 +339,11 @@ pub fn is_dns_overridden() -> bool {
     DNS_OVERRIDDEN.load(Ordering::Relaxed)
 }
 
-/// Watchdog that runs in background to guard DNS settings against unauthorized external changes.
 pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, listen_addr: String) {
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(8)).await;
         if protection_enabled.load(Ordering::Relaxed) && !MASTER_INTERNET_LOCKED.load(Ordering::Relaxed) {
             if DNS_OVERRIDDEN.load(Ordering::Relaxed) {
-                // Ensure DNS is still active
                 let _ = set_system_dns(&listen_addr);
             }
         }
@@ -333,4 +372,3 @@ pub fn register_safety_cleanup() {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
     }
 }
-

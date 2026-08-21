@@ -1,4 +1,4 @@
 /target
-installer_output/
 *.log
 QUYTAC
+scripts/
