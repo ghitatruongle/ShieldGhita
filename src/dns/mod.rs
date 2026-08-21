@@ -73,14 +73,15 @@ pub struct DnsBlocker {
     pub total_queries: Arc<AtomicU64>,
     pub blocked_count: Arc<AtomicU64>,
     pub silent_sinkhole_enabled: Arc<AtomicBool>,
+    pub blocked_events_tx: tokio::sync::broadcast::Sender<(String, String)>,
 }
 
 impl DnsBlocker {
     pub fn new() -> Self {
         let mut builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
-            .pool_max_idle_per_host(15)
-            .pool_idle_timeout(Duration::from_secs(90));
+            .pool_max_idle_per_host(25)
+            .pool_idle_timeout(Duration::from_secs(120));
 
         if let Ok(ip_cf) = "1.1.1.1:443".parse() {
             builder = builder
@@ -104,6 +105,8 @@ impl DnsBlocker {
             initial_blocked.insert(domain.to_string());
         }
 
+        let (blocked_events_tx, _) = tokio::sync::broadcast::channel(256);
+
         Self {
             blocked_domains: Arc::new(RwLock::new(initial_blocked)),
             allowed_domains: Arc::new(RwLock::new(HashSet::new())),
@@ -114,6 +117,7 @@ impl DnsBlocker {
             total_queries: Arc::new(AtomicU64::new(0)),
             blocked_count: Arc::new(AtomicU64::new(0)),
             silent_sinkhole_enabled: Arc::new(AtomicBool::new(true)),
+            blocked_events_tx,
         }
     }
 
@@ -577,6 +581,9 @@ impl DnsBlocker {
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
             mon.add_log(&query_name, &src_ip, true);
 
+            let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
+            let _ = self.blocked_events_tx.send((query_name.clone(), timestamp));
+
             let resp = if qtype == 1 {
                 Self::build_sinkhole_a_record(&pkt, [0, 0, 0, 0])
                     .or_else(|| Self::build_nxdomain(&pkt))
@@ -598,7 +605,7 @@ impl DnsBlocker {
         let cached_response = {
             let cache = self.dns_cache.read().unwrap();
             if let Some((cached_resp, instant)) = cache.get(&query_name) {
-                if instant.elapsed() < Duration::from_secs(15) && cached_resp.len() >= 12 {
+                if instant.elapsed() < Duration::from_secs(30) && cached_resp.len() >= 12 {
                     let mut resp = cached_resp.clone();
                     resp[0] = pkt[0];
                     resp[1] = pkt[1];
@@ -619,10 +626,10 @@ impl DnsBlocker {
         let fwd_resp = self.forward_parallel_racing(&pkt, &doh_urls).await;
         if let Some(resp) = fwd_resp {
             if let Ok(mut cache) = self.dns_cache.write() {
-                if cache.len() > 2000 {
+                if cache.len() > 3000 {
                     let now = Instant::now();
-                    cache.retain(|_, (_, inst)| now.duration_since(*inst) < Duration::from_secs(45));
-                    if cache.len() > 2000 {
+                    cache.retain(|_, (_, inst)| now.duration_since(*inst) < Duration::from_secs(60));
+                    if cache.len() > 3000 {
                         cache.clear();
                     }
                 }
@@ -645,7 +652,7 @@ impl DnsBlocker {
 
             tokio::spawn(async move {
                 let res = tokio::time::timeout(
-                    Duration::from_millis(900),
+                    Duration::from_millis(800),
                     client
                         .post(&url)
                         .header("Content-Type", "application/dns-message")

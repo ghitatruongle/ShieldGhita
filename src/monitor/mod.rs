@@ -322,40 +322,33 @@ impl NetworkMonitor {
         let mut cycle: u64 = 0;
 
         loop {
-            let mut cmd = tokio::process::Command::new("netsh");
-            #[cfg(windows)]
-            cmd.creation_flags(0x08000000);
-            let output = cmd
-                .args(["interface", "ipv4", "show", "subinterfaces"])
-                .output()
-                .await;
-
-            if let Ok(output) = output {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    let line = line.trim();
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 4 {
-                        if let (Ok(bytes_in), Ok(bytes_out)) = (
-                            parts[parts.len() - 2].parse::<u64>(),
-                            parts[parts.len() - 1].parse::<u64>(),
-                        ) {
-                            self.update_device_traffic("127.0.0.1", "Cục bộ (Máy này)", bytes_in, bytes_out);
-                        }
+            // Update device traffic directly using internal kernel counters from sysinfo
+            if let Ok(mut nets) = self.networks.write() {
+                nets.refresh();
+                let mut total_rx = 0u64;
+                let mut total_tx = 0u64;
+                for (name, data) in nets.iter() {
+                    let lname = name.to_lowercase();
+                    if !lname.contains("loopback") && !lname.contains("pseudo") {
+                        total_rx += data.total_received();
+                        total_tx += data.total_transmitted();
                     }
                 }
+                self.update_device_traffic("127.0.0.1", "Cục bộ (Máy này)", total_tx, total_rx);
             }
 
-            self.connection_tracker.refresh_connections();
+            if cycle % 2 == 0 {
+                self.connection_tracker.refresh_connections();
+            }
 
-            if cycle % 20 == 0 {
+            if cycle > 0 && cycle % 100 == 0 {
                 let scanner = self.lan_scanner.clone();
                 tokio::spawn(async move {
                     let _ = scanner.scan_network().await;
                 });
             }
 
-            if cycle % 10 == 0 {
+            if cycle > 0 && cycle % 20 == 0 {
                 self.save_logs_to_disk();
             }
 

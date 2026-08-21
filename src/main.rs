@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(in_app_layer)
         .init();
 
-    info!("Starting Shield Ghita v0.0.1-beta Master Controller...");
+    info!("Starting Shield Ghita v0.0.1 Master Controller...");
 
     if !dns_manager::is_elevated() {
         tracing::warn!("Shield Ghita running without elevated Administrator token. Run as Administrator for full DNS proxy enforcement.");
@@ -275,6 +275,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui = AppWindow::new()?;
 
+    ui.set_is_vi(cfg.language == "vi");
+    ui.set_enable_notifications(cfg.enable_block_notifications);
+    ui.set_app_version("0.0.1".into());
+
     let tray_menu = Menu::new();
     let item_show = MenuItem::new("Mở giao diện Shield Ghita", true, None);
     let item_toggle = MenuItem::new("Bật / Tắt bảo vệ", true, None);
@@ -286,7 +290,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _tray_icon = match create_default_icon() {
         Ok(icon) => TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
-            .with_tooltip("Shield Ghita v0.0.1-beta - Master Controller")
+            .with_tooltip("Shield Ghita v0.0.1 - Master Controller")
             .with_icon(icon)
             .build()
             .ok(),
@@ -366,6 +370,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = cfg_guard.save();
         }
         info!("Minimize to tray on close set to: {}", if enabled { "ENABLED" } else { "DISABLED" });
+    });
+
+    let s = state.clone();
+    let ui_weak_lang = ui.as_weak();
+    ui.on_change_language(move |lang| {
+        let lang_str = lang.to_string();
+        if let Ok(mut cfg_guard) = s.config.write() {
+            cfg_guard.language = lang_str.clone();
+            let _ = cfg_guard.save();
+        }
+        if let Some(ui_inst) = ui_weak_lang.upgrade() {
+            ui_inst.set_is_vi(lang_str == "vi");
+        }
+        info!("Language preference set to: {}", lang_str);
+    });
+
+    let s = state.clone();
+    let ui_weak_notif = ui.as_weak();
+    ui.on_toggle_notifications(move |enabled| {
+        if let Ok(mut cfg_guard) = s.config.write() {
+            cfg_guard.enable_block_notifications = enabled;
+            let _ = cfg_guard.save();
+        }
+        if let Some(ui_inst) = ui_weak_notif.upgrade() {
+            ui_inst.set_enable_notifications(enabled);
+        }
+        info!("Ad blocking notifications set to: {}", if enabled { "ENABLED" } else { "DISABLED" });
+    });
+
+    let ui_weak_toast = ui.as_weak();
+    ui.on_dismiss_toast(move || {
+        if let Some(ui_inst) = ui_weak_toast.upgrade() {
+            ui_inst.set_show_toast(false);
+        }
     });
 
     let s = state.clone();
@@ -495,6 +533,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         s.monitor.apply_filter(&domain_str, &ip_str, blocked_opt);
     });
 
+    // Blocked domain toast notification subscriber
+    {
+        let mut rx = state.blocker.blocked_events_tx.subscribe();
+        let ui_weak = ui.as_weak();
+        let config = state.config.clone();
+        state.runtime.spawn(async move {
+            while let Ok((domain, time)) = rx.recv().await {
+                let notify_enabled = config
+                    .read()
+                    .map(|c| c.enable_block_notifications)
+                    .unwrap_or(true);
+                if !notify_enabled {
+                    continue;
+                }
+                let domain_clone = domain.clone();
+                let time_clone = time.clone();
+                let ui_weak_inner = ui_weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui_inst) = ui_weak_inner.upgrade() {
+                        ui_inst.set_toast_domain(domain_clone.into());
+                        ui_inst.set_toast_time(time_clone.into());
+                        ui_inst.set_show_toast(true);
+                    }
+                });
+
+                // Auto dismiss toast after 3.5s
+                let ui_weak_timer = ui_weak.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(3500)).await;
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui_inst) = ui_weak_timer.upgrade() {
+                            ui_inst.set_show_toast(false);
+                        }
+                    });
+                });
+            }
+        });
+    }
+
     {
         let monitor = state.monitor.clone();
         state.runtime.spawn(async move {
@@ -557,23 +634,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_master_locked(is_locked);
                 ui.set_silent_sinkhole(s.blocker.is_silent_sinkhole());
 
+                let is_vi = s.config.read().map(|c| c.language == "vi").unwrap_or(true);
+                ui.set_is_vi(is_vi);
+
                 let protection = s.protection_atomic.load(Ordering::Relaxed);
                 ui.set_protection_enabled(protection);
                 ui.set_status_text(if is_locked {
-                    "🔒 Đã khóa Internet".into()
+                    if is_vi { "🔒 Đã khóa Internet".into() } else { "🔒 Internet Locked".into() }
                 } else if protection {
-                    "🟢 Đang bảo vệ tối cao".into()
+                    if is_vi { "🟢 Đang bảo vệ tối cao".into() } else { "🟢 Active Protection".into() }
                 } else {
-                    "🔴 Đã tạm dừng".into()
+                    if is_vi { "🔴 Đã tạm dừng".into() } else { "🔴 Paused".into() }
                 });
 
-                let (autostart, minimize) = s
+                let (autostart, minimize, notify) = s
                     .config
                     .read()
-                    .map(|c| (c.start_with_windows, c.minimize_to_tray))
-                    .unwrap_or((true, true));
+                    .map(|c| (c.start_with_windows, c.minimize_to_tray, c.enable_block_notifications))
+                    .unwrap_or((true, true, true));
                 ui.set_autostart_enabled(autostart);
                 ui.set_minimize_to_tray_enabled(minimize);
+                ui.set_enable_notifications(notify);
 
                 let (cpu, mem) = s.monitor.get_system_metrics();
                 ui.set_cpu_usage(cpu);
@@ -585,8 +666,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .read()
                     .ok()
                     .and_then(|c| c.last_blocklist_update.clone())
-                    .unwrap_or_else(|| "Chưa cập nhật".to_string());
-                ui.set_last_update_text(format!("Cập nhật: {}", last_update).into());
+                    .unwrap_or_else(|| if is_vi { "Chưa cập nhật".to_string() } else { "Not updated".to_string() });
+                ui.set_last_update_text(if is_vi { format!("Cập nhật: {}", last_update).into() } else { format!("Updated: {}", last_update).into() });
 
                 let custom_rules = s
                     .config

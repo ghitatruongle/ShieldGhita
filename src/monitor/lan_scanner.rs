@@ -1,10 +1,17 @@
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, SocketAddr};
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::Duration;
 use tracing::info;
+
+#[cfg(windows)]
+#[link(name = "iphlpapi")]
+extern "system" {
+    fn SendARP(dest_ip: u32, src_ip: u32, p_mac_addr: *mut u8, phy_addr_len: *mut u32) -> u32;
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LanDevice {
@@ -33,6 +40,39 @@ impl LanScanner {
         self.devices.read().map(|d| d.clone()).unwrap_or_default()
     }
 
+    pub fn send_arp_probe(ip: Ipv4Addr) -> Option<String> {
+        #[cfg(windows)]
+        {
+            let octets = ip.octets();
+            let dest_ip = u32::from_ne_bytes(octets);
+            let mut mac = [0u8; 6];
+            let mut len = 6u32;
+            let res = unsafe { SendARP(dest_ip, 0, mac.as_mut_ptr(), &mut len) };
+            if res == 0 && len == 6 {
+                let mac_str = format!(
+                    "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+                );
+                if mac_str != "00:00:00:00:00:00" && mac_str != "FF:FF:FF:FF:FF:FF" {
+                    return Some(mac_str);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn get_local_outbound_ip() -> Option<Ipv4Addr> {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+        socket.connect("8.8.8.8:80").ok()?;
+        if let Ok(SocketAddr::V4(addr)) = socket.local_addr() {
+            let ip = *addr.ip();
+            if !ip.is_loopback() && !ip.is_unspecified() {
+                return Some(ip);
+            }
+        }
+        None
+    }
+
     pub async fn query_netbios_name(ip: &str) -> Option<String> {
         let target_addr: SocketAddr = format!("{}:137", ip).parse().ok()?;
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().ok()?;
@@ -55,7 +95,7 @@ impl LanScanner {
         let _ = socket.send_to(&packet, target_addr).await;
 
         let mut buf = [0u8; 1024];
-        if let Ok(Ok((len, _))) = tokio::time::timeout(Duration::from_millis(300), socket.recv_from(&mut buf)).await {
+        if let Ok(Ok((len, _))) = tokio::time::timeout(Duration::from_millis(250), socket.recv_from(&mut buf)).await {
             if len > 56 {
                 let num_names = buf[56] as usize;
                 let mut offset = 57;
@@ -107,7 +147,7 @@ impl LanScanner {
 
         for (port, dev_type) in ports_and_types {
             let addr = format!("{}:{}", ip, port);
-            if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_millis(120), TcpStream::connect(&addr)).await {
+            if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_millis(80), TcpStream::connect(&addr)).await {
                 let ms = start.elapsed().as_millis() as i32;
                 min_latency = if ms == 0 { 1 } else { ms };
                 detected_type = Some(dev_type);
@@ -121,12 +161,12 @@ impl LanScanner {
     pub fn lookup_vendor(mac: &str) -> String {
         let clean = mac.replace(['-', ':'], "").to_uppercase();
         if clean.len() < 6 {
-            return "Không xác định".into();
+            return "Không xác định / Generic".into();
         }
 
         if let Ok(first_byte) = u8::from_str_radix(&clean[0..2], 16) {
             if (first_byte & 0x02) != 0 {
-                return "Địa chỉ MAC riêng tư (Điện thoại / Thiết bị di động)".into();
+                return "Thiết bị di động (Địa chỉ MAC riêng tư)".into();
             }
         }
 
@@ -196,24 +236,25 @@ impl LanScanner {
             "00055D" | "000D88" | "000F3D" | "001195" | "001346" | "0015E9" | "00179A" => "D-Link Systems (Router)".into(),
             "000C43" | "001E8F" | "04A151" | "247F20" | "40313C" => "VNPT Technology (Modem / Router)".into(),
             "001A79" | "18622C" | "20F41B" | "88CEFA" => "Viettel Group (Router / Modem)".into(),
+            "0019A8" | "54625A" | "7488B8" | "A021B7" => "FPT Telecom (Router / Modem)".into(),
 
             "00014A" | "00041F" | "000725" | "00096E" | "001315" | "0019C5" | "00248D" => "Sony Corp. (PlayStation / Bravia TV)".into(),
             "0005C9" | "001C62" | "001E75" | "001F6B" | "0022A9" | "10F96F" | "18B79E"
-            | "203D66" | "3C25D7" | "5884B7" | "7488B8" | "88366C" | "9893CC" | "A816B2"
+            | "203D66" | "3C25D7" | "5884B7" | "9893CC" | "A816B2"
             | "B83765" | "CC2D8C" | "E4E749" | "F013C3" => "LG Electronics (webOS Smart TV)".into(),
 
             "18FE34" | "240AC4" | "246F28" | "24A160" | "24B2DE" | "2C3AE8" | "30AEA4"
             | "3C71BF" | "483FDA" | "4C11AE" | "545A46" | "5C0272" | "600194" | "68C63A"
             | "70039F" | "7C87CE" | "840D8E" | "84F3EB" | "9097D5" | "A020A6" | "AC67B2"
             | "B4E62D" | "BCDD29" | "C44F33" | "CC50E3" | "D8A01D" | "DC4F22" | "E09806"
-            | "E868E7" | "ECFABC" | "F4CFA2" => "Espressif IoT (Công tắc / Thiết bị thông minh)".into(),
+            | "E868E7" | "ECFABC" | "F4CFA2" => "Espressif IoT (Smart Device / Tuya)".into(),
             "B827EB" | "DCA632" | "E45F01" => "Raspberry Pi Foundation (Microcomputer)".into(),
 
             _ => {
                 if mac.starts_with("00:00:00") {
-                    "Cục bộ (Virtual Loopback)".into()
+                    "Cục bộ (Virtual / Loopback)".into()
                 } else {
-                    "Thiết bị mạng (Chung)".into()
+                    "Thiết bị mạng (LAN Host)".into()
                 }
             }
         }
@@ -274,69 +315,150 @@ impl LanScanner {
     }
 
     pub async fn scan_network(&self) -> Vec<LanDevice> {
-        let output = match crate::dns_manager::silent_command("arp").arg("-a").output() {
-            Ok(o) => o,
-            Err(_) => return Vec::new(),
-        };
+        let mut discovered_map: HashMap<String, String> = HashMap::new();
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut raw_list = Vec::new();
+        // 1. Identify local subnet(s)
+        let local_ip_opt = Self::get_local_outbound_ip();
+        let my_hostname = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "This PC".to_string());
 
-        for line in stdout.lines() {
-            let line = line.trim();
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 {
-                let ip = parts[0].to_string();
-                let mac_raw = parts[1];
+        if let Some(local_ip) = local_ip_opt {
+            let octets = local_ip.octets();
+            let mut join_handles = Vec::with_capacity(254);
 
-                if ip.parse::<IpAddr>().is_err() {
+            // Parallel active sweep of the entire /24 subnet (1..=254)
+            for i in 1..=254u8 {
+                let target_ip = Ipv4Addr::new(octets[0], octets[1], octets[2], i);
+                if target_ip == local_ip {
                     continue;
                 }
+                let handle = tokio::task::spawn_blocking(move || {
+                    let mac_res = Self::send_arp_probe(target_ip);
+                    (target_ip.to_string(), mac_res)
+                });
+                join_handles.push(handle);
+            }
 
-                let mac = mac_raw.replace('-', ":").to_uppercase();
-                if mac == "FF:FF:FF:FF:FF:FF" || ip.ends_with(".255") || ip.starts_with("224.") {
-                    continue;
+            for handle in join_handles {
+                if let Ok((ip_str, Some(mac_str))) = handle.await {
+                    discovered_map.insert(ip_str, mac_str);
                 }
-
-                raw_list.push((ip, mac));
             }
         }
 
-        let mut devices = Vec::new();
+        // 2. Also parse OS ARP table to capture any other network interfaces or cached hosts
+        if let Ok(output) = crate::dns_manager::silent_command("arp").arg("-a").output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let line = line.trim();
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    let ip = parts[0].to_string();
+                    let mac_raw = parts[1];
 
-        for (ip, mac) in raw_list {
-            let vendor = Self::lookup_vendor(&mac);
-            let (service_type, is_online, latency) = Self::probe_device_services(&ip).await;
-            let netbios_name = Self::query_netbios_name(&ip).await;
+                    if ip.parse::<IpAddr>().is_err() {
+                        continue;
+                    }
 
-            let (device_label, _) = Self::classify_final(
-                &ip,
-                &vendor,
-                service_type,
-                netbios_name.as_deref(),
-            );
+                    let mac = mac_raw.replace('-', ":").to_uppercase();
+                    if mac == "FF:FF:FF:FF:FF:FF"
+                        || mac == "00:00:00:00:00:00"
+                        || ip.ends_with(".255")
+                        || ip.starts_with("224.")
+                        || ip.starts_with("239.")
+                    {
+                        continue;
+                    }
 
-            let name = if ip.ends_with(".1") {
-                format!("📡 Router Wi-Fi chính ({})", vendor)
-            } else if let Some(ref host) = netbios_name {
-                format!("{} - {}", host, device_label)
-            } else {
-                format!("{} ({})", device_label, ip)
-            };
-
-            devices.push(LanDevice {
-                name,
-                ip,
-                mac,
-                vendor,
-                device_type: device_label.into(),
-                is_online,
-                latency_ms: latency,
-                traffic: "Hoạt động".into(),
-            });
+                    discovered_map.entry(ip).or_insert(mac);
+                }
+            }
         }
 
-        info!("Intelligent LAN Scanner identified {} devices with full classification", devices.len());
+        // 3. Add local machine entry
+        let local_ip_str = local_ip_opt.map(|ip| ip.to_string()).unwrap_or_else(|| "127.0.0.1".into());
+
+        // 4. Enrich discovered devices with NetBIOS, Port probes, Vendor, and Classification
+        let mut devices = Vec::new();
+
+        // Local machine device
+        devices.push(LanDevice {
+            name: format!("💻 {} (Máy tính này / This PC)", my_hostname),
+            ip: local_ip_str.clone(),
+            mac: "Cục bộ (Local Host)".into(),
+            vendor: "Hệ thống máy này".into(),
+            device_type: "💻 Máy tính (PC / Laptop)".into(),
+            is_online: true,
+            latency_ms: 0,
+            traffic: "Hoạt động".into(),
+        });
+
+        // Parallel enrichment for all remote discovered hosts
+        let mut enrich_handles = Vec::new();
+        for (ip, mac) in discovered_map {
+            if ip == local_ip_str || ip == "127.0.0.1" {
+                continue;
+            }
+
+            enrich_handles.push(tokio::spawn(async move {
+                let vendor = Self::lookup_vendor(&mac);
+                let (service_type, is_online, latency) = Self::probe_device_services(&ip).await;
+                let netbios_name = Self::query_netbios_name(&ip).await;
+
+                let (device_label, _) = Self::classify_final(
+                    &ip,
+                    &vendor,
+                    service_type,
+                    netbios_name.as_deref(),
+                );
+
+                let name = if ip.ends_with(".1") || ip.ends_with(".254") {
+                    format!("📡 Router Wi-Fi / Gateway ({})", vendor)
+                } else if let Some(ref host) = netbios_name {
+                    format!("{} - {}", host, device_label)
+                } else {
+                    format!("{} ({})", device_label, ip)
+                };
+
+                LanDevice {
+                    name,
+                    ip,
+                    mac,
+                    vendor,
+                    device_type: device_label.into(),
+                    is_online,
+                    latency_ms: latency,
+                    traffic: "Hoạt động".into(),
+                }
+            }));
+        }
+
+        for handle in enrich_handles {
+            if let Ok(dev) = handle.await {
+                devices.push(dev);
+            }
+        }
+
+        // Sort: Router (.1) first, This PC second, then by IP
+        devices.sort_by(|a, b| {
+            if a.ip.ends_with(".1") {
+                std::cmp::Ordering::Less
+            } else if b.ip.ends_with(".1") {
+                std::cmp::Ordering::Greater
+            } else if a.name.contains("This PC") {
+                std::cmp::Ordering::Less
+            } else if b.name.contains("This PC") {
+                std::cmp::Ordering::Greater
+            } else {
+                a.ip.cmp(&b.ip)
+            }
+        });
+
+        info!(
+            "Comprehensive Active LAN Scanner identified {} devices with full subnet mapping",
+            devices.len()
+        );
 
         if let Ok(mut dev_guard) = self.devices.write() {
             *dev_guard = devices.clone();
@@ -345,3 +467,33 @@ impl LanScanner {
         devices
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lookup_vendor() {
+        assert!(LanScanner::lookup_vendor("00:17:F2:11:22:33").contains("Apple"));
+        assert!(LanScanner::lookup_vendor("00:07:AB:44:55:66").contains("Samsung"));
+        assert!(LanScanner::lookup_vendor("00:18:82:77:88:99").contains("Hikvision"));
+        assert!(LanScanner::lookup_vendor("00:0A:3A:AA:BB:CC").contains("TP-Link"));
+        assert!(LanScanner::lookup_vendor("00:00:00:00:00:00").contains("Cục bộ"));
+    }
+
+    #[test]
+    fn test_classify_final() {
+        let (label, tag) = LanScanner::classify_final("192.168.1.1", "TP-Link", None, None);
+        assert_eq!(tag, "ROUTER");
+        assert!(label.contains("Router"));
+
+        let (label_cam, tag_cam) = LanScanner::classify_final("192.168.1.50", "Hikvision", None, None);
+        assert_eq!(tag_cam, "CAMERA");
+        assert!(label_cam.contains("Camera"));
+
+        let (label_phone, tag_phone) = LanScanner::classify_final("192.168.1.100", "Apple Inc.", None, Some("iPhone-15"));
+        assert_eq!(tag_phone, "PHONE");
+        assert!(label_phone.contains("Điện thoại"));
+    }
+}
+

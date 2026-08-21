@@ -15,6 +15,10 @@ pub struct AppConfig {
     pub start_with_windows: bool,
     #[serde(default = "default_true")]
     pub minimize_to_tray: bool,
+    #[serde(default = "default_language")]
+    pub language: String,
+    #[serde(default = "default_true")]
+    pub enable_block_notifications: bool,
     pub log_max_entries: usize,
     pub auto_update_blocklist_hours: u64,
     pub last_blocklist_update: Option<String>,
@@ -22,6 +26,10 @@ pub struct AppConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_language() -> String {
+    "vi".to_string()
 }
 
 impl Default for AppConfig {
@@ -45,6 +53,8 @@ impl Default for AppConfig {
             protection_enabled: true,
             start_with_windows: true,
             minimize_to_tray: true,
+            language: "vi".to_string(),
+            enable_block_notifications: true,
             log_max_entries: 1000,
             auto_update_blocklist_hours: 24,
             last_blocklist_update: None,
