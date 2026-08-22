@@ -15,6 +15,10 @@ export struct NetworkDevice {
     last-domain: string,
     last-active: string,
     risk-level: string,
+    open-ports: string,
+    port-risk: string,
+    port-advice: string,
+    confidence: int,
 }
 
 export struct ActiveConnection {
@@ -76,6 +80,7 @@ export struct ProximityDeviceItem {
     mac: string,
     vendor: string,
     discovery-method: string,
+    network-interface: string,
     signal-info: string,
     last-seen: string,
     latency-ms: int,
@@ -126,14 +131,16 @@ component TabButton inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: root.is-vi ? "Shield Ghita v0.0.5-beta1 - Trình Điều Khiển Mạng & Bảo Mật Tối Cao" : "Shield Ghita v0.0.5-beta1 - Master Network & Security Controller";
-    width: 1160px;
-    height: 800px;
+    title: root.is-vi ? "Shield Ghita v" + root.app-version + " - Trình Điều Khiển Mạng & Bảo Mật Tối Cao" : "Shield Ghita v" + root.app-version + " - Master Network & Security Controller";
+    preferred-width: 1160px;
+    preferred-height: 800px;
+    min-width: 980px;
+    min-height: 640px;
     background: #0b0f19;
     default-font-family: "Segoe UI";
 
     in-out property <bool> is-vi: true;
-    in-out property <string> app-version: "0.0.5-beta1";
+    in-out property <string> app-version: "";
     in-out property <bool> enable-notifications: true;
     in-out property <bool> show-toast: false;
     in-out property <string> toast-domain: "";
@@ -147,6 +154,7 @@ export component AppWindow inherits Window {
     in-out property <int> absorbed-count: 0;
     in-out property <int> active-rules-count: 0;
     in-out property <int> lan-devices-count: 0;
+    in-out property <bool> is-scanning: false;
     in-out property <int> threats-blocked-count: 0;
     in-out property <int> security-score: 100;
     in-out property <string> host-lan-ip: "127.0.0.1";
@@ -165,6 +173,8 @@ export component AppWindow inherits Window {
     in-out property <bool> minimize-to-tray-enabled: true;
     in-out property <string> last-update-text: "Chưa cập nhật";
     in-out property <string> live-traffic-rate: "0 KB/s";
+    in-out property <bool> minimize-to-tray-on-minimize: true;
+    in-out property <bool> start-hidden-in-tray: false;
 
     in-out property <[NetworkDevice]> devices;
     in-out property <[ActiveConnection]> connections;
@@ -220,6 +230,8 @@ export component AppWindow inherits Window {
     callback dismiss-toast();
     callback trigger-proximity-scan();
     callback refresh-admin-data();
+    callback toggle-minimize-to-tray-on-minimize(bool);
+    callback toggle-start-hidden-in-tray(bool);
 
     if root.show-toast : Rectangle {
         z: 100;
@@ -682,10 +694,18 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: 10px;
                         Button {
-                            text: root.lan-subview-mode == 0 ? (root.is-vi ? "🚨 Xem Nhật ký Cảnh báo An ninh" : "🚨 View Security Incidents") : (root.is-vi ? "🌐 Xem Danh sách Thiết bị LAN" : "🌐 View LAN Devices");
-                            clicked => { root.lan-subview-mode = root.lan-subview-mode == 0 ? 1 : 0; }
+                            text: root.lan-subview-mode == 0 ? (root.is-vi ? "● 🌐 Thiết bị LAN" : "● 🌐 LAN Devices") : (root.is-vi ? "🌐 Thiết bị LAN" : "🌐 LAN Devices");
+                            clicked => { root.lan-subview-mode = 0; }
                         }
-                        if root.lan-subview-mode == 0 : Button {
+                        Button {
+                            text: root.lan-subview-mode == 1 ? (root.is-vi ? "● 🚨 Cảnh báo An ninh" : "● 🚨 Incidents") : (root.is-vi ? "🚨 Cảnh báo An ninh" : "🚨 Incidents");
+                            clicked => { root.lan-subview-mode = 1; }
+                        }
+                        Button {
+                            text: root.lan-subview-mode == 2 ? (root.is-vi ? "● 🔓 Cổng mở LAN" : "● 🔓 Open Ports") : (root.is-vi ? "🔓 Cổng mở LAN" : "🔓 Open Ports");
+                            clicked => { root.lan-subview-mode = 2; }
+                        }
+                        if root.lan-subview-mode != 1 : Button {
                             text: root.is-vi ? "🔍 Quét lại mạng LAN" : "🔍 Rescan LAN Subnet";
                             clicked => { root.refresh-devices(); }
                         }
@@ -694,12 +714,47 @@ export component AppWindow inherits Window {
                             clicked => { root.clear-security-incidents(); }
                         }
                         Text {
-                            text: root.lan-subview-mode == 0 ? (root.is-vi ? "Giám sát thời gian thực mọi hoạt động Internet của thiết bị LAN:" : "Real-time Internet activity of LAN devices:") : (root.is-vi ? "Nhật ký cảnh báo an ninh & ngăn chặn xâm nhập thời gian thực:" : "Real-time Security Incidents & Intrusion Prevention Logs:");
+                            text: root.lan-subview-mode == 0 ? (root.is-vi ? "Giám sát thời gian thực mọi hoạt động Internet của thiết bị LAN:" : "Real-time Internet activity of LAN devices:") : (root.lan-subview-mode == 1 ? (root.is-vi ? "Nhật ký cảnh báo an ninh & ngăn chặn xâm nhập thời gian thực:" : "Real-time Security Incidents & Intrusion Prevention Logs:") : (root.is-vi ? "Cổng dịch vụ đang mở trên từng thiết bị LAN & mức độ rủi ro:" : "Open service ports per LAN device & risk level:"));
                             font-size: 13px;
                             font-weight: 600;
                             color: #94a3b8;
                             vertical-alignment: center;
+                            overflow: elide;
                         }
+                    }
+
+                    if root.is-scanning : Rectangle {
+                        height: 30px;
+                        border-radius: 8px;
+                        background: #1e1b4b;
+                        border-width: 1px;
+                        border-color: #4f46e5;
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            alignment: start;
+                            Text {
+                                text: root.is-vi ? "⏳ Đang quét mạng LAN & phân tích cổng mở…" : "⏳ Scanning LAN & analyzing open ports…";
+                                font-size: 12px;
+                                font-weight: 700;
+                                color: #a5b4fc;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    if !root.is-scanning && root.lan-subview-mode != 1 && root.devices.length == 0 : Text {
+                        text: root.is-vi ? "Chưa phát hiện thiết bị LAN nào — bấm 🔍 Quét lại mạng LAN." : "No LAN devices detected yet — press 🔍 Rescan LAN Subnet.";
+                        font-size: 12px;
+                        color: #64748b;
+                        horizontal-alignment: center;
+                    }
+
+                    if root.lan-subview-mode == 1 && root.security-incidents.length == 0 : Text {
+                        text: root.is-vi ? "✅ Chưa có cảnh báo an ninh nào — hệ thống đang hoạt động an toàn." : "✅ No security incidents yet — system is running safe.";
+                        font-size: 12px;
+                        color: #64748b;
+                        horizontal-alignment: center;
                     }
 
                     if root.lan-subview-mode == 0 : ListView {
@@ -721,6 +776,7 @@ export component AppWindow inherits Window {
                                     min-width: 250px;
                                     Text { text: device.name; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
                                     Text { text: (root.is-vi ? "Hãng: " : "Vendor: ") + device.vendor; font-size: 11px; color: #38bdf8; }
+                                    Text { text: (root.is-vi ? "Xác thực nhận diện: " : "Detection confidence: ") + device.confidence + "%"; font-size: 10px; color: #64748b; }
                                 }
 
                                 VerticalLayout {
@@ -871,6 +927,59 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+
+                    if root.lan-subview-mode == 2 : ListView {
+                        vertical-stretch: 1;
+                        for device in root.devices : Rectangle {
+                            height: 68px;
+                            background: device.port-risk == "HIGH" ? #2a0808 : (device.port-risk == "MEDIUM" ? #241405 : #111827);
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: device.port-risk == "HIGH" ? #ef4444 : (device.port-risk == "MEDIUM" ? #f59e0b : #1f2937);
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 14px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 230px;
+                                    Text { text: device.name; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
+                                    Text { text: "IP: " + device.ip + "  •  MAC: " + device.mac; font-size: 11px; color: #64748b; overflow: elide; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    Text { text: "🔓 " + device.open-ports; font-size: 12px; font-weight: 700; color: #e2e8f0; overflow: elide; }
+                                    Text {
+                                        text: device.port-advice != "" ? ((root.is-vi ? "Khuyến nghị: " : "Advice: ") + device.port-advice) : (root.is-vi ? "Không phát hiện cổng rủi ro đang mở." : "No risky open ports detected.");
+                                        font-size: 11px;
+                                        color: #94a3b8;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 130px;
+                                    height: 26px;
+                                    border-radius: 13px;
+                                    background: device.port-risk == "HIGH" ? #7f1d1d : (device.port-risk == "MEDIUM" ? #78350f : #064e3b);
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        Text {
+                                            text: device.port-risk == "HIGH" ? (root.is-vi ? "🔴 RỦI RO CAO" : "🔴 HIGH RISK") : (device.port-risk == "MEDIUM" ? (root.is-vi ? "🟡 TRUNG BÌNH" : "🟡 MEDIUM") : (root.is-vi ? "🟢 AN TOÀN" : "🟢 SAFE"));
+                                            font-size: 10px;
+                                            font-weight: 800;
+                                            color: #ffffff;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -953,6 +1062,20 @@ export component AppWindow inherits Window {
                             text: root.is-vi ? "🗑️ Xóa console log" : "🗑️ Clear Console";
                             clicked => { root.clear-console-logs(); }
                         }
+                    }
+
+                    if root.monitor-subview-mode == 0 && root.connections.length == 0 && root.grouped-connections.length == 0 : Text {
+                        text: root.is-vi ? "Chưa có kết nối mạng nào đang hoạt động — bấm 🔄 Làm mới." : "No active network connections — press 🔄 Refresh.";
+                        font-size: 12px;
+                        color: #64748b;
+                        horizontal-alignment: center;
+                    }
+
+                    if root.monitor-subview-mode == 1 && root.logs.length == 0 : Text {
+                        text: root.is-vi ? "Chưa có nhật ký DNS — nhật ký sẽ hiện khi có truy vấn." : "No DNS logs yet — entries appear as queries arrive.";
+                        font-size: 12px;
+                        color: #64748b;
+                        horizontal-alignment: center;
                     }
 
                     if root.monitor-subview-mode == 0 && root.conn-view-mode == 1 : ListView {
@@ -1379,18 +1502,32 @@ export component AppWindow inherits Window {
                                 }
                                 Button {
                                     horizontal-stretch: 1;
-                                    text: root.minimize-to-tray-enabled ? (root.is-vi ? "✅ Thu nhỏ xuống Khay: BẬT" : "✅ Minimize to Tray: ON") : (root.is-vi ? "⚪ Thu nhỏ xuống Khay: TẮT" : "⚪ Minimize to Tray: OFF");
-                                    clicked => { root.toggle-minimize-to-tray(!root.minimize-to-tray-enabled); }
+                                    text: root.enable-notifications ? (root.is-vi ? "🔔 Thông báo chặn QC: BẬT" : "🔔 Block Notifications: ON") : (root.is-vi ? "⚪ Thông báo chặn QC: TẮT" : "⚪ Block Notifications: OFF");
+                                    clicked => { root.toggle-notifications(!root.enable-notifications); }
                                 }
                                 Button {
                                     horizontal-stretch: 1;
-                                    text: root.enable-notifications ? (root.is-vi ? "🔔 Thông báo Popup: BẬT" : "🔔 Toast Alerts: ON") : (root.is-vi ? "🔕 Thông báo Popup: TẮT" : "🔕 Toast Alerts: OFF");
-                                    clicked => { root.toggle-notifications(!root.enable-notifications); }
+                                    text: root.minimize-to-tray-enabled ? (root.is-vi ? "✅ Đóng vào Khay: BẬT" : "✅ Close to Tray: ON") : (root.is-vi ? "⚪ Đóng vào Khay: TẮT" : "⚪ Close to Tray: OFF");
+                                    clicked => { root.toggle-minimize-to-tray(!root.minimize-to-tray-enabled); }
                                 }
                                 Button {
                                     horizontal-stretch: 1;
                                     text: root.is-vi ? "🇻🇳 Tiếng Việt (Chuyển EN)" : "🇬🇧 English (Switch VI)";
                                     clicked => { root.change-language(root.is-vi ? "en" : "vi"); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Button {
+                                    horizontal-stretch: 1;
+                                    text: root.minimize-to-tray-on-minimize ? (root.is-vi ? "🔽 Thu nhỏ vào Khay: BẬT" : "🔽 Minimize to Tray: ON") : (root.is-vi ? "⚪ Thu nhỏ vào Taskbar: TẮT" : "⚪ Minimize to Taskbar: OFF");
+                                    clicked => { root.toggle-minimize-to-tray-on-minimize(!root.minimize-to-tray-on-minimize); }
+                                }
+                                Button {
+                                    horizontal-stretch: 1;
+                                    text: root.start-hidden-in-tray ? (root.is-vi ? "👻 Khởi động ẩn trong Khay: BẬT" : "👻 Start Hidden in Tray: ON") : (root.is-vi ? "⚪ Khởi động hiện cửa sổ: TẮT" : "⚪ Start with Window: OFF");
+                                    clicked => { root.toggle-start-hidden-in-tray(!root.start-hidden-in-tray); }
                                 }
                             }
                         }
@@ -1529,6 +1666,20 @@ export component AppWindow inherits Window {
                         }
                     }
 
+                    if root.admin-subview-mode == 0 && root.proximity-devices.length == 0 : Text {
+                        text: root.is-vi ? "Chưa phát hiện thiết bị lân cận — bấm 🔍 Quét lân cận ngay." : "No proximity nodes yet — press 🔍 Trigger Proximity Sweep.";
+                        font-size: 12px;
+                        color: #64748b;
+                        horizontal-alignment: center;
+                    }
+
+                    if root.admin-subview-mode == 1 && root.behavior-profiles.length == 0 : Text {
+                        text: root.is-vi ? "Chưa có hồ sơ hành vi — hồ sơ hình thành khi thiết bị truy vấn DNS." : "No behavior profiles yet — profiles build as devices query DNS.";
+                        font-size: 12px;
+                        color: #64748b;
+                        horizontal-alignment: center;
+                    }
+
                     if root.admin-subview-mode == 0 : ListView {
                         vertical-stretch: 1;
                         for pdev in root.proximity-devices : Rectangle {
@@ -1560,15 +1711,15 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     alignment: center;
                                     min-width: 150px;
-                                    Text { text: "Giao thức: " + pdev.discovery-method; font-size: 11px; font-weight: 700; color: #a78bfa; }
-                                    Text { text: "Độ trễ: " + pdev.latency-ms + " ms"; font-size: 11px; color: #94a3b8; }
+                                    Text { text: (root.is-vi ? "Giao thức: " : "Proto: ") + pdev.discovery-method; font-size: 11px; font-weight: 700; color: #a78bfa; overflow: elide; }
+                                    Text { text: (root.is-vi ? "Mạng nguồn: " : "Source net: ") + pdev.network-interface; font-size: 11px; color: #94a3b8; overflow: elide; }
                                 }
 
                                 VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 1;
-                                    Text { text: "Cổng mở: " + pdev.open-ports-str; font-size: 11px; color: #e2e8f0; overflow: elide; }
-                                    Text { text: "Thấy lúc: " + pdev.last-seen; font-size: 10px; color: #64748b; }
+                                    Text { text: (root.is-vi ? "Cổng mở: " : "Ports: ") + pdev.open-ports-str; font-size: 11px; color: #e2e8f0; overflow: elide; }
+                                    Text { text: (root.is-vi ? "Thấy lúc: " : "Seen: ") + pdev.last-seen; font-size: 10px; color: #64748b; }
                                 }
 
                                 Rectangle {
@@ -1609,15 +1760,15 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     alignment: center;
                                     min-width: 160px;
-                                    Text { text: "Phân loại: " + prof.category; font-size: 12px; font-weight: 700; color: prof.risk-score >= 50 ? #f87171 : #4ade80; }
+                                    Text { text: (root.is-vi ? "Phân loại: " : "Class: ") + prof.category; font-size: 12px; font-weight: 700; color: prof.risk-score >= 50 ? #f87171 : #4ade80; }
                                     Text { text: "Burst QPS: " + prof.burst-qps; font-size: 11px; color: #94a3b8; }
                                 }
 
                                 VerticalLayout {
                                     alignment: center;
                                     min-width: 180px;
-                                    Text { text: "Tổng: " + prof.total-queries + " | Chặn: " + prof.blocked-queries; font-size: 11px; font-weight: 600; color: #cbd5e1; }
-                                    Text { text: "Mối nguy: " + prof.threat-queries + " đe dọa"; font-size: 11px; color: prof.threat-queries > 0 ? #f87171 : #64748b; }
+                                    Text { text: (root.is-vi ? "Tổng: " : "Total: ") + prof.total-queries + (root.is-vi ? " | Chặn: " : " | Blocked: ") + prof.blocked-queries; font-size: 11px; font-weight: 600; color: #cbd5e1; }
+                                    Text { text: (root.is-vi ? "Mối nguy: " : "Threats: ") + prof.threat-queries + (root.is-vi ? " mối đe dọa" : " flagged"); font-size: 11px; color: prof.threat-queries > 0 ? #f87171 : #64748b; }
                                 }
 
                                 Rectangle { horizontal-stretch: 1; }

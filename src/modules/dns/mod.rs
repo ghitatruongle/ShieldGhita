@@ -75,7 +75,7 @@ const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
     "watson.telemetry.microsoft.com",
 ];
 
-pub type DnsCacheMap = Arc<RwLock<HashMap<String, (Vec<u8>, Instant)>>>;
+pub type DnsCacheMap = Arc<RwLock<HashMap<(String, u16), (Vec<u8>, Instant, u32)>>>;
 
 pub struct DnsBlocker {
     blocked_domains: Arc<RwLock<HashSet<String>>>,
@@ -90,7 +90,62 @@ pub struct DnsBlocker {
     pub blocked_events_tx: tokio::sync::broadcast::Sender<(String, String)>,
 }
 
+const BLOCKED_PUBLIC_SUFFIXES: &[&str] = &[
+    "com.vn",
+    "net.vn",
+    "org.vn",
+    "edu.vn",
+    "gov.vn",
+    "ac.vn",
+    "co.uk",
+    "org.uk",
+    "com.au",
+    "net.au",
+    "co.jp",
+    "com.cn",
+    "com.br",
+    "co.in",
+    "com.mx",
+    "github.io",
+    "gitlab.io",
+    "pages.dev",
+    "vercel.app",
+    "netlify.app",
+];
+
 impl DnsBlocker {
+    pub fn validate_domain(domain: &str) -> Result<String, String> {
+        let d = domain.trim().trim_end_matches('.').to_lowercase();
+        if d.is_empty() {
+            return Err("Tên miền trống".into());
+        }
+        if d.len() > 253 {
+            return Err("Tên miền dài quá 253 ký tự".into());
+        }
+        if !d.contains('.') {
+            return Err(format!(
+                "'{}' thiếu dấu chấm — chặn cả TLD sẽ làm gãy toàn bộ trình duyệt",
+                d
+            ));
+        }
+        if BLOCKED_PUBLIC_SUFFIXES.contains(&d.as_str()) {
+            return Err(format!("'{}' là public suffix — phạm vi chặn quá rộng", d));
+        }
+        for label in d.split('.') {
+            if label.is_empty() || label.len() > 63 {
+                return Err("Label không hợp lệ (rỗng hoặc dài hơn 63 ký tự)".into());
+            }
+            if label
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                continue;
+            }
+            return Err("Tên miền chứa ký tự không hợp lệ".into());
+        }
+        Ok(d)
+    }
+
     pub fn new() -> Self {
         let mut builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
@@ -233,39 +288,59 @@ impl DnsBlocker {
     }
 
     pub async fn load_blocklists(&self, urls: &[String]) -> Result<usize, String> {
+        let fetch_start = Instant::now();
         let _ = self.load_cache();
-        let mut set = HashSet::new();
-
-        for domain in BUILTIN_VIDEO_AUDIO_AD_DOMAINS {
-            set.insert(domain.to_string());
-        }
+        let mut set: tokio::task::JoinSet<Result<String, String>> = tokio::task::JoinSet::new();
 
         for url in urls {
-            match self.http_client.get(url).send().await {
-                Ok(resp) => {
-                    if resp.status().is_success() {
-                        if let Ok(text) = resp.text().await {
-                            for line in text.lines() {
-                                if let Some(d) = Self::parse_line(line) {
-                                    set.insert(d);
-                                }
-                            }
+            let client = self.http_client.clone();
+            let url = url.clone();
+            set.spawn(async move {
+                match client.get(&url).send().await {
+                    Ok(resp) => {
+                        if resp.status().is_success() {
+                            resp.text().await.map_err(|e| format!("{}: {}", url, e))
+                        } else {
+                            Err(format!("{}: HTTP {}", url, resp.status()))
                         }
-                    } else {
-                        warn!("HTTP {} for blocklist: {}", resp.status(), url);
+                    }
+                    Err(e) => Err(format!("{}: {}", url, e)),
+                }
+            });
+        }
+
+        let mut domains = HashSet::new();
+        for domain in BUILTIN_VIDEO_AUDIO_AD_DOMAINS {
+            domains.insert(domain.to_string());
+        }
+
+        let mut any_success = false;
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(Ok(text)) => {
+                    any_success = true;
+                    for line in text.lines() {
+                        if let Some(d) = Self::parse_line(line) {
+                            domains.insert(d);
+                        }
                     }
                 }
-                Err(e) => warn!("Failed to fetch blocklist {}: {}", url, e),
+                Ok(Err(e)) => warn!("Failed to fetch blocklist: {}", e),
+                Err(e) => warn!("Blocklist fetch task failed: {}", e),
             }
         }
 
-        let count = set.len();
-        if count > 0 {
+        let count = domains.len();
+        if count > 0 && any_success {
             if let Ok(mut blocked) = self.blocked_domains.write() {
-                *blocked = set;
+                *blocked = domains;
             }
             let _ = self.save_cache();
-            info!("Loaded {} unique domains into blocklist", count);
+            info!(
+                "Loaded {} unique domains into blocklist in {} ms",
+                count,
+                fetch_start.elapsed().as_millis()
+            );
         }
         Ok(count)
     }
@@ -274,24 +349,19 @@ impl DnsBlocker {
         if let Ok(mut cb) = self.custom_blocked.write() {
             *cb = blocked
                 .iter()
-                .map(|s| s.trim().to_lowercase())
-                .filter(|s| !s.is_empty())
+                .filter_map(|s| Self::validate_domain(s).ok())
                 .collect();
         }
         if let Ok(mut ca) = self.custom_allowed.write() {
             *ca = allowed
                 .iter()
-                .map(|s| s.trim().to_lowercase())
-                .filter(|s| !s.is_empty())
+                .filter_map(|s| Self::validate_domain(s).ok())
                 .collect();
         }
     }
 
     pub fn add_custom_domain(&self, domain: &str) -> Result<(), String> {
-        let d = domain.trim().to_lowercase();
-        if d.is_empty() {
-            return Ok(());
-        }
+        let d = Self::validate_domain(domain)?;
         let mut cb = self.custom_blocked.write().map_err(|e| e.to_string())?;
         cb.insert(d);
         Ok(())
@@ -305,10 +375,7 @@ impl DnsBlocker {
     }
 
     pub fn add_allowed_domain(&self, domain: &str) -> Result<(), String> {
-        let d = domain.trim().to_lowercase();
-        if d.is_empty() {
-            return Ok(());
-        }
+        let d = Self::validate_domain(domain)?;
         let mut ca = self.custom_allowed.write().map_err(|e| e.to_string())?;
         ca.insert(d);
         Ok(())
@@ -435,6 +502,138 @@ impl DnsBlocker {
     #[allow(dead_code)]
     pub fn parse_query_name(pkt: &[u8]) -> Option<String> {
         Self::parse_query_info(pkt).map(|(name, _)| name)
+    }
+
+    pub fn response_matches_query(resp: &[u8], query: &[u8]) -> bool {
+        if resp.len() < 12 || query.len() < 12 {
+            return false;
+        }
+        if resp[0] != query[0] || resp[1] != query[1] {
+            return false;
+        }
+        if resp[2] & 0x80 == 0 {
+            return false;
+        }
+        match (Self::parse_query_info(query), Self::parse_query_info(resp)) {
+            (Some((q_name, q_type)), Some((r_name, r_type))) => {
+                r_name == q_name && r_type == q_type
+            }
+            _ => false,
+        }
+    }
+
+    pub fn extract_min_ttl(resp: &[u8]) -> Option<u32> {
+        if resp.len() < 12 {
+            return None;
+        }
+        let an_count = u16::from_be_bytes([resp[6], resp[7]]);
+        if an_count == 0 {
+            return None;
+        }
+        let mut pos = 12;
+        let mut guard = 0;
+        while pos < resp.len() {
+            guard += 1;
+            if guard > 128 {
+                return None;
+            }
+            let len_byte = resp[pos];
+            if len_byte & 0xC0 == 0xC0 {
+                pos += 2;
+                break;
+            } else if len_byte == 0 {
+                pos += 1;
+                break;
+            } else {
+                pos += 1 + len_byte as usize;
+            }
+        }
+        pos += 4;
+        let mut min_ttl = u32::MAX;
+        for _ in 0..an_count {
+            guard += 1;
+            if guard > 256 {
+                break;
+            }
+            if pos >= resp.len() {
+                break;
+            }
+            if resp[pos] & 0xC0 == 0xC0 {
+                pos += 2;
+            } else {
+                let mut label_guard = 0;
+                while pos < resp.len() {
+                    label_guard += 1;
+                    if label_guard > 128 {
+                        return None;
+                    }
+                    let l = resp[pos];
+                    if l == 0 {
+                        pos += 1;
+                        break;
+                    }
+                    pos += 1 + l as usize;
+                }
+            }
+            if pos + 10 > resp.len() {
+                break;
+            }
+            let ttl =
+                u32::from_be_bytes([resp[pos + 4], resp[pos + 5], resp[pos + 6], resp[pos + 7]]);
+            min_ttl = min_ttl.min(ttl);
+            let rdlength = u16::from_be_bytes([resp[pos + 8], resp[pos + 9]]) as usize;
+            pos += 10 + rdlength;
+        }
+        if min_ttl == u32::MAX {
+            None
+        } else {
+            Some(min_ttl)
+        }
+    }
+
+    fn cache_ttl_seconds(resp: &[u8]) -> u64 {
+        let ttl = Self::extract_min_ttl(resp).unwrap_or(10);
+        ttl.clamp(1, 60) as u64
+    }
+
+    pub fn cached_response_for(&self, name: &str, qtype: u16, pkt: &[u8]) -> Option<Vec<u8>> {
+        let cache = self.dns_cache.read().unwrap_or_else(|e| e.into_inner());
+        let (cached_resp, inserted, ttl) = cache.get(&(name.to_string(), qtype))?;
+        if inserted.elapsed() < Duration::from_secs(*ttl as u64) && cached_resp.len() >= 12 {
+            let mut resp = cached_resp.clone();
+            resp[0] = pkt[0];
+            resp[1] = pkt[1];
+            Some(resp)
+        } else {
+            None
+        }
+    }
+
+    pub fn store_cache_response(&self, name: &str, qtype: u16, resp: &[u8]) {
+        if let Ok(mut cache) = self.dns_cache.write() {
+            if cache.len() > 5000 {
+                let now = Instant::now();
+                cache.retain(|_, (_, inserted, ttl)| {
+                    now.duration_since(*inserted) < Duration::from_secs((*ttl as u64).max(1))
+                });
+                if cache.len() > 5000 {
+                    let mut entries: Vec<((String, u16), Instant)> = cache
+                        .iter()
+                        .map(|(k, (_, inserted, _))| (k.clone(), *inserted))
+                        .collect();
+                    entries.sort_by_key(|(_, inserted)| *inserted);
+                    let excess = cache.len().saturating_sub(4000);
+                    for (key, _) in entries.into_iter().take(excess) {
+                        cache.remove(&key);
+                    }
+                }
+            }
+            let ttl = Self::cache_ttl_seconds(resp) as u32;
+            cache.insert(
+                (name.to_string(), qtype),
+                (resp.to_vec(), Instant::now(), ttl),
+            );
+        }
     }
 
     pub fn build_nxdomain(q: &[u8]) -> Option<Vec<u8>> {
@@ -626,6 +825,14 @@ impl DnsBlocker {
 
         let src_ip = src.ip().to_string();
 
+        if mon.security_engine.enforce_hard_rate_limit(&src_ip) {
+            warn!(
+                "Security Hard Rate Limit: dropping query burst from {}",
+                src_ip
+            );
+            return;
+        }
+
         if mon.security_engine.is_ip_temporarily_blocked(&src_ip) {
             warn!(
                 "Security IPS: Dropping query from blacklisted IP {}",
@@ -657,8 +864,13 @@ impl DnsBlocker {
             let _ = self.blocked_events_tx.send((query_name.clone(), timestamp));
 
             let resp = if qtype == 1 {
-                Self::build_sinkhole_a_record(&pkt, [0, 0, 0, 0])
-                    .or_else(|| Self::build_nxdomain(&pkt))
+                if self.is_silent_sinkhole() {
+                    Self::build_sinkhole_a_record(&pkt, [127, 0, 0, 1])
+                        .or_else(|| Self::build_nxdomain(&pkt))
+                } else {
+                    Self::build_sinkhole_a_record(&pkt, [0, 0, 0, 0])
+                        .or_else(|| Self::build_nxdomain(&pkt))
+                }
             } else if qtype == 28 {
                 Self::build_sinkhole_aaaa_record(&pkt, [0u8; 16])
                     .or_else(|| Self::build_nxdomain(&pkt))
@@ -674,40 +886,14 @@ impl DnsBlocker {
 
         mon.add_log(&query_name, &src_ip, false);
 
-        let cached_response = {
-            let cache = self.dns_cache.read().unwrap_or_else(|e| e.into_inner());
-            if let Some((cached_resp, instant)) = cache.get(&query_name) {
-                if instant.elapsed() < Duration::from_secs(30) && cached_resp.len() >= 12 {
-                    let mut resp = cached_resp.clone();
-                    resp[0] = pkt[0];
-                    resp[1] = pkt[1];
-                    Some(resp)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
-        if let Some(resp) = cached_response {
+        if let Some(resp) = self.cached_response_for(&query_name, qtype, &pkt) {
             let _ = sock.send_to(&resp, src).await;
             return;
         }
 
         let fwd_resp = self.forward_parallel_racing(&pkt, &doh_urls).await;
         if let Some(resp) = fwd_resp {
-            if let Ok(mut cache) = self.dns_cache.write() {
-                if cache.len() > 3000 {
-                    let now = Instant::now();
-                    cache
-                        .retain(|_, (_, inst)| now.duration_since(*inst) < Duration::from_secs(60));
-                    if cache.len() > 3000 {
-                        cache.clear();
-                    }
-                }
-                cache.insert(query_name, (resp.clone(), Instant::now()));
-            }
+            self.store_cache_response(&query_name, qtype, &resp);
             let _ = sock.send_to(&resp, src).await;
         } else if let Some(servfail) = Self::build_servfail(&pkt) {
             let _ = sock.send_to(&servfail, src).await;
@@ -721,7 +907,7 @@ impl DnsBlocker {
     ) -> Option<Vec<u8>> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
 
-        for url in doh_urls {
+        for url in doh_urls.iter().take(2) {
             let client = self.http_client.clone();
             let url = url.clone();
             let pkt = query_packet.to_vec();
@@ -742,7 +928,7 @@ impl DnsBlocker {
                 if let Ok(Ok(resp)) = res {
                     if resp.status().is_success() {
                         if let Ok(bytes) = resp.bytes().await {
-                            if bytes.len() >= 12 && bytes[0] == pkt[0] && bytes[1] == pkt[1] {
+                            if Self::response_matches_query(&bytes, &pkt) {
                                 let _ = tx_clone.send(bytes.to_vec()).await;
                             }
                         }
@@ -751,24 +937,25 @@ impl DnsBlocker {
             });
         }
 
-        let udp_resolvers = ["1.1.1.1:53", "8.8.8.8:53", "9.9.9.9:53"];
-        for resolver in udp_resolvers {
+        {
             let pkt = query_packet.to_vec();
             let tx_clone = tx.clone();
 
             tokio::spawn(async move {
-                if let Ok(sock) = UdpSocket::bind("0.0.0.0:0").await {
-                    if sock.send_to(&pkt, resolver).await.is_ok() {
-                        let mut buf = [0u8; 4096];
-                        if let Ok(Ok((len, _))) = tokio::time::timeout(
-                            Duration::from_millis(800),
-                            sock.recv_from(&mut buf),
-                        )
-                        .await
-                        {
-                            if len >= 12 && buf[0] == pkt[0] && buf[1] == pkt[1] {
-                                let _ = tx_clone.send(buf[..len].to_vec()).await;
-                            }
+                let sock = match UdpSocket::bind("0.0.0.0:0").await {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                if sock.connect("1.1.1.1:53").await.is_err() {
+                    return;
+                }
+                if sock.send(&pkt).await.is_ok() {
+                    let mut buf = [0u8; 4096];
+                    if let Ok(Ok(len)) =
+                        tokio::time::timeout(Duration::from_millis(800), sock.recv(&mut buf)).await
+                    {
+                        if Self::response_matches_query(&buf[..len], &pkt) {
+                            let _ = tx_clone.send(buf[..len].to_vec()).await;
                         }
                     }
                 }
@@ -874,5 +1061,125 @@ mod tests {
             .expect("Build Sinkhole AAAA record");
         let len_aaaa = sinkhole_aaaa.len();
         assert_eq!(&sinkhole_aaaa[len_aaaa - 16..len_aaaa], &[0u8; 16]);
+    }
+
+    #[test]
+    fn test_validate_domain() {
+        assert!(DnsBlocker::validate_domain("ads.example.com").is_ok());
+        assert_eq!(
+            DnsBlocker::validate_domain("  Tracker.NET.  ").unwrap(),
+            "tracker.net"
+        );
+        assert!(DnsBlocker::validate_domain("").is_err());
+        assert!(DnsBlocker::validate_domain("com").is_err());
+        assert!(DnsBlocker::validate_domain("com.vn").is_err());
+        assert!(DnsBlocker::validate_domain("netlify.app").is_err());
+        assert!(DnsBlocker::validate_domain("a..b").is_err());
+        assert!(DnsBlocker::validate_domain("bad domain.com").is_err());
+        assert!(DnsBlocker::validate_domain(&"x".repeat(300)).is_err());
+    }
+
+    #[test]
+    fn test_add_custom_domain_rejects_invalid() {
+        let blocker = DnsBlocker::new();
+        assert!(blocker.add_custom_domain("com").is_err());
+        assert!(blocker.add_custom_domain("").is_err());
+        assert!(blocker.add_allowed_domain("com.vn").is_err());
+        assert!(blocker.add_custom_domain("ads.example.com").is_ok());
+    }
+
+    #[test]
+    fn test_set_custom_rules_filters_invalid_entries() {
+        let blocker = DnsBlocker::new();
+        let blocked = vec![
+            "ads.example.com".to_string(),
+            "com".to_string(),
+            "tracker.test".to_string(),
+        ];
+        let allowed = vec!["ok.example.com".to_string(), "com.vn".to_string()];
+        blocker.set_custom_rules(&blocked, &allowed);
+
+        assert!(blocker.should_block("ads.example.com"));
+        assert!(blocker.should_block("sub.tracker.test"));
+        assert!(
+            !blocker.should_block("anything.com"),
+            "bare TLD 'com' must never be accepted from persisted config"
+        );
+        assert!(
+            !blocker.should_block("site.com.vn"),
+            "public suffix must never be accepted into whitelist"
+        );
+    }
+
+    #[test]
+    fn test_response_matches_query() {
+        let query_a = vec![
+            0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, b'a',
+            b'd', b's', 0x06, b'g', b'o', b'o', b'g', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00,
+            0x00, 0x01, 0x00, 0x01,
+        ];
+        let query_aaaa = vec![
+            0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, b'a',
+            b'd', b's', 0x06, b'g', b'o', b'o', b'g', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00,
+            0x00, 0x1C, 0x00, 0x01,
+        ];
+
+        let resp = DnsBlocker::build_sinkhole_a_record(&query_a, [0, 0, 0, 0]).unwrap();
+        assert!(DnsBlocker::response_matches_query(&resp, &query_a));
+
+        let mut wrong_id = resp.clone();
+        wrong_id[0] = 0xFF;
+        assert!(!DnsBlocker::response_matches_query(&wrong_id, &query_a));
+
+        assert!(!DnsBlocker::response_matches_query(&resp, &query_aaaa));
+
+        assert!(!DnsBlocker::response_matches_query(&query_a, &query_a));
+    }
+
+    #[test]
+    fn test_extract_min_ttl() {
+        let query_a = vec![
+            0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, b'a',
+            b'd', b's', 0x06, b'g', b'o', b'o', b'g', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00,
+            0x00, 0x01, 0x00, 0x01,
+        ];
+        let resp = DnsBlocker::build_sinkhole_a_record(&query_a, [0, 0, 0, 0]).unwrap();
+        assert_eq!(DnsBlocker::extract_min_ttl(&resp), Some(10));
+        assert_eq!(DnsBlocker::extract_min_ttl(&query_a), None);
+    }
+
+    #[test]
+    fn test_cache_keyed_by_qtype_and_ttl() {
+        let blocker = DnsBlocker::new();
+        let query_a = vec![
+            0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, b'a',
+            b'd', b's', 0x06, b'g', b'o', b'o', b'g', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00,
+            0x00, 0x01, 0x00, 0x01,
+        ];
+        let resp = DnsBlocker::build_sinkhole_a_record(&query_a, [0, 0, 0, 0]).unwrap();
+
+        blocker.store_cache_response("ads.google.com", 1, &resp);
+
+        let cached_a = blocker
+            .cached_response_for("ads.google.com", 1, &query_a)
+            .expect("A record must be cached under qtype 1");
+        assert_eq!(cached_a[0], 0xAB);
+        assert_eq!(cached_a[1], 0xCD);
+
+        assert!(blocker
+            .cached_response_for("ads.google.com", 28, &query_a)
+            .is_none());
+
+        let expired = Instant::now()
+            .checked_sub(Duration::from_secs(61))
+            .expect("checked_sub on Windows");
+        blocker
+            .dns_cache
+            .write()
+            .unwrap()
+            .insert(("stale.test".to_string(), 1), (resp.clone(), expired, 60));
+        assert!(blocker
+            .cached_response_for("stale.test", 1, &query_a)
+            .is_none());
     }
 }

@@ -73,7 +73,11 @@ pub struct AppConnectionGroup {
 pub struct ConnectionTracker {
     connections: Arc<RwLock<Vec<ActiveConnection>>>,
     system: Arc<RwLock<System>>,
+    proc_map_cache: Arc<RwLock<HashMap<u32, String>>>,
+    last_proc_refresh: Arc<RwLock<Option<std::time::Instant>>>,
 }
+
+const PROC_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl ConnectionTracker {
     pub fn new() -> Self {
@@ -82,6 +86,8 @@ impl ConnectionTracker {
         Self {
             connections: Arc::new(RwLock::new(Vec::new())),
             system: Arc::new(RwLock::new(sys)),
+            proc_map_cache: Arc::new(RwLock::new(HashMap::new())),
+            last_proc_refresh: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -287,13 +293,34 @@ impl ConnectionTracker {
     }
 
     pub fn refresh_connections(&self) {
-        let mut proc_map: HashMap<u32, String> = HashMap::new();
-        if let Ok(mut sys) = self.system.write() {
-            sys.refresh_processes();
-            for (pid, proc) in sys.processes() {
-                proc_map.insert(pid.as_u32(), proc.name().to_string());
+        let need_refresh = self
+            .last_proc_refresh
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|t| t.elapsed() >= PROC_REFRESH_INTERVAL)
+            .unwrap_or(true);
+
+        if need_refresh {
+            let mut proc_map: HashMap<u32, String> = HashMap::new();
+            if let Ok(mut sys) = self.system.write() {
+                sys.refresh_processes();
+                for (pid, proc) in sys.processes() {
+                    proc_map.insert(pid.as_u32(), proc.name().to_string());
+                }
+            }
+            if let Ok(mut cache) = self.proc_map_cache.write() {
+                *cache = proc_map;
+            }
+            if let Ok(mut last) = self.last_proc_refresh.write() {
+                *last = Some(std::time::Instant::now());
             }
         }
+
+        let proc_map = self
+            .proc_map_cache
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         #[cfg(windows)]
         {

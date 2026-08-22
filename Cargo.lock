@@ -5107,7 +5107,7 @@ dependencies = [
 
 [[package]]
 name = "shield_ghita"
-version = "0.0.1"
+version = "0.0.5-beta2"
 dependencies = [
  "chrono",
  "reqwest",

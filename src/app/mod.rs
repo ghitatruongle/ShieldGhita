@@ -10,7 +10,7 @@ use crate::modules::sinkhole::SilentSinkhole;
 use crate::modules::system::dns_manager;
 use crate::modules::system::SelfDefense;
 use chrono::Local;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tracing::info;
 
@@ -25,6 +25,8 @@ pub struct AppState {
     pub runtime: Arc<tokio::runtime::Runtime>,
     pub self_defense: Arc<RwLock<SelfDefense>>,
     pub protection_atomic: Arc<AtomicBool>,
+    pub rules_dirty: AtomicBool,
+    pub logs_ui_version: AtomicU64,
     #[cfg(feature = "admin")]
     pub local_manager: Arc<crate::modules::local::LocalManager>,
 }
@@ -69,7 +71,7 @@ impl AppState {
         ));
 
         #[cfg(feature = "admin")]
-        let local_manager = Arc::new(crate::modules::local::LocalManager::new());
+        let local_manager = Arc::new(crate::modules::local::LocalManager::new(monitor.clone()));
 
         let state = Arc::new(Self {
             blocker: dns_blocker,
@@ -82,6 +84,8 @@ impl AppState {
             runtime,
             self_defense: Arc::new(RwLock::new(self_def)),
             protection_atomic,
+            rules_dirty: AtomicBool::new(true),
+            logs_ui_version: AtomicU64::new(0),
             #[cfg(feature = "admin")]
             local_manager,
         });
@@ -100,6 +104,30 @@ impl AppState {
         #[cfg(feature = "admin")]
         {
             state.local_manager.start(&state.runtime);
+
+            let local = state.local_manager.clone();
+            let mon = state.monitor.clone();
+            state.runtime.spawn(async move {
+                let mut seen = 0usize;
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let logs = mon.get_logs();
+                    if logs.len() > seen {
+                        let delta = logs.len() - seen;
+                        for entry in logs[..delta].iter() {
+                            local.record_dns_event(
+                                &entry.source_ip,
+                                &entry.domain,
+                                entry.is_blocked,
+                                false,
+                            );
+                        }
+                        seen = logs.len();
+                    } else if logs.len() < seen {
+                        seen = logs.len();
+                    }
+                }
+            });
         }
 
         {

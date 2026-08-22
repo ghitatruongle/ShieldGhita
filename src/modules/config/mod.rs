@@ -4,12 +4,19 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    #[serde(default = "default_listen_addr")]
     pub dns_listen_addr: String,
+    #[serde(default = "default_listen_port")]
     pub dns_listen_port: u16,
+    #[serde(default = "default_upstream_dns")]
     pub upstream_dns: Vec<String>,
+    #[serde(default = "default_blocklist_urls")]
     pub blocklist_urls: Vec<String>,
+    #[serde(default)]
     pub custom_blocked_domains: Vec<String>,
+    #[serde(default)]
     pub custom_allowed_domains: Vec<String>,
+    #[serde(default = "default_true")]
     pub protection_enabled: bool,
     #[serde(default = "default_true")]
     pub start_with_windows: bool,
@@ -19,8 +26,11 @@ pub struct AppConfig {
     pub language: String,
     #[serde(default = "default_true")]
     pub enable_block_notifications: bool,
+    #[serde(default = "default_log_max_entries")]
     pub log_max_entries: usize,
+    #[serde(default = "default_auto_update_hours")]
     pub auto_update_blocklist_hours: u64,
+    #[serde(default)]
     pub last_blocklist_update: Option<String>,
     #[serde(default = "default_false")]
     pub network_wide_adblock_enabled: bool,
@@ -32,6 +42,54 @@ pub struct AppConfig {
     pub arp_spoof_detection: bool,
     #[serde(default = "default_rate_limit")]
     pub dns_flood_rate_limit: u32,
+    #[serde(default = "default_window_width")]
+    pub window_width: u32,
+    #[serde(default = "default_window_height")]
+    pub window_height: u32,
+    #[serde(default = "default_window_coord")]
+    pub window_x: i32,
+    #[serde(default = "default_window_coord")]
+    pub window_y: i32,
+    #[serde(default)]
+    pub window_maximized: bool,
+    #[serde(default = "default_true")]
+    pub minimize_to_tray_on_minimize: bool,
+    #[serde(default)]
+    pub start_hidden_in_tray: bool,
+}
+
+fn default_listen_addr() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_listen_port() -> u16 {
+    53
+}
+
+fn default_upstream_dns() -> Vec<String> {
+    vec![
+        "https://1.1.1.1/dns-query".to_string(),
+        "https://8.8.8.8/dns-query".to_string(),
+        "https://9.9.9.9/dns-query".to_string(),
+    ]
+}
+
+fn default_blocklist_urls() -> Vec<String> {
+    vec![
+        "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt".to_string(),
+        "https://small.oisd.nl".to_string(),
+        "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
+        "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt".to_string(),
+        "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts".to_string(),
+    ]
+}
+
+fn default_log_max_entries() -> usize {
+    1000
+}
+
+fn default_auto_update_hours() -> u64 {
+    24
 }
 
 fn default_true() -> bool {
@@ -44,6 +102,18 @@ fn default_false() -> bool {
 
 fn default_rate_limit() -> u32 {
     80
+}
+
+fn default_window_width() -> u32 {
+    1160
+}
+
+fn default_window_height() -> u32 {
+    800
+}
+
+fn default_window_coord() -> i32 {
+    -1
 }
 
 fn default_language() -> String {
@@ -83,6 +153,13 @@ impl Default for AppConfig {
             auto_block_attacks: false,
             arp_spoof_detection: false,
             dns_flood_rate_limit: 80,
+            window_width: 1160,
+            window_height: 800,
+            window_x: -1,
+            window_y: -1,
+            window_maximized: false,
+            minimize_to_tray_on_minimize: true,
+            start_hidden_in_tray: false,
         }
     }
 }
@@ -146,7 +223,7 @@ impl AppConfig {
                 "/t",
                 "REG_SZ",
                 "/d",
-                &format!("\"{}\"", exe_str),
+                &format!("\"{}\" --autostart", exe_str),
                 "/f",
             ]);
         } else {
@@ -159,5 +236,58 @@ impl AppConfig {
             ]);
         }
         let _ = cmd.output();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_window_fields_roundtrip() {
+        let cfg = AppConfig {
+            window_width: 1280,
+            window_height: 720,
+            window_x: 55,
+            window_y: 66,
+            window_maximized: true,
+            minimize_to_tray_on_minimize: false,
+            start_hidden_in_tray: true,
+            ..AppConfig::default()
+        };
+
+        let serialized = toml::to_string_pretty(&cfg).unwrap();
+        let parsed: AppConfig = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(parsed.window_width, 1280);
+        assert_eq!(parsed.window_height, 720);
+        assert_eq!(parsed.window_x, 55);
+        assert_eq!(parsed.window_y, 66);
+        assert!(parsed.window_maximized);
+        assert!(!parsed.minimize_to_tray_on_minimize);
+        assert!(parsed.start_hidden_in_tray);
+    }
+
+    #[test]
+    fn test_legacy_config_without_window_fields_parses() {
+        let legacy = r#"
+dns_listen_addr = "127.0.0.1"
+dns_listen_port = 53
+upstream_dns = ["https://1.1.1.1/dns-query"]
+blocklist_urls = ["https://example.invalid/hosts"]
+custom_blocked_domains = []
+custom_allowed_domains = []
+protection_enabled = true
+log_max_entries = 500
+auto_update_blocklist_hours = 24
+"#;
+        let parsed: AppConfig = toml::from_str(legacy).expect("legacy config must parse");
+        assert_eq!(parsed.window_width, 1160);
+        assert_eq!(parsed.window_height, 800);
+        assert_eq!(parsed.window_x, -1);
+        assert_eq!(parsed.window_y, -1);
+        assert!(!parsed.window_maximized);
+        assert!(parsed.minimize_to_tray_on_minimize);
+        assert!(!parsed.start_hidden_in_tray);
     }
 }

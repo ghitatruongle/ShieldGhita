@@ -1,5 +1,8 @@
 pub mod connections;
+pub mod discovery;
 pub mod lan_scanner;
+pub mod oui_db;
+pub mod port_scanner;
 
 use chrono::Local;
 use connections::{ActiveConnection, ConnectionTracker};
@@ -8,34 +11,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use sysinfo::{Networks, System};
 use tracing::{info, warn};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkDevice {
-    pub name: String,
-    pub ip: String,
-    pub mac: String,
-    pub bytes_sent: u64,
-    pub bytes_received: u64,
-}
-
-impl NetworkDevice {
-    #[allow(dead_code)]
-    pub fn traffic_display(&self) -> String {
-        let total = self.bytes_sent + self.bytes_received;
-        if total > 1_073_741_824 {
-            format!("{:.1} GB", total as f64 / 1_073_741_824.0)
-        } else if total > 1_048_576 {
-            format!("{:.1} MB", total as f64 / 1_048_576.0)
-        } else if total > 1024 {
-            format!("{:.1} KB", total as f64 / 1024.0)
-        } else {
-            format!("{} B", total)
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -56,13 +35,14 @@ pub struct DomainLogGroup {
 }
 
 pub struct NetworkMonitor {
-    devices: Arc<RwLock<HashMap<String, NetworkDevice>>>,
     logs: Arc<RwLock<Vec<LogEntry>>>,
     filtered_cache: Arc<RwLock<Option<Vec<LogEntry>>>>,
+    pub logs_version: Arc<AtomicU64>,
     max_logs: usize,
     log_file_path: PathBuf,
     system_info: Arc<RwLock<System>>,
     networks: Arc<RwLock<Networks>>,
+    last_traffic_sample: Mutex<(std::time::Instant, u64)>,
     pub connection_tracker: Arc<ConnectionTracker>,
     pub lan_scanner: Arc<LanScanner>,
     pub security_engine: Arc<crate::modules::security::SecurityEngine>,
@@ -83,13 +63,14 @@ impl NetworkMonitor {
         nets.refresh();
 
         let monitor = Self {
-            devices: Arc::new(RwLock::new(HashMap::new())),
             logs: Arc::new(RwLock::new(Vec::new())),
             filtered_cache: Arc::new(RwLock::new(None)),
+            logs_version: Arc::new(AtomicU64::new(1)),
             max_logs,
             log_file_path,
             system_info: Arc::new(RwLock::new(sys)),
             networks: Arc::new(RwLock::new(nets)),
+            last_traffic_sample: Mutex::new((std::time::Instant::now(), 0)),
             connection_tracker: Arc::new(ConnectionTracker::new()),
             lan_scanner: Arc::new(LanScanner::new()),
             security_engine: sec_engine,
@@ -143,6 +124,7 @@ impl NetworkMonitor {
                 logs.truncate(self.max_logs);
             }
         }
+        let _ = self.logs_version.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn get_logs(&self) -> Vec<LogEntry> {
@@ -184,6 +166,7 @@ impl NetworkMonitor {
         if let Ok(mut fc) = self.filtered_cache.write() {
             *fc = Some(filtered);
         }
+        let _ = self.logs_version.fetch_add(1, Ordering::Relaxed);
     }
 
     #[allow(dead_code)]
@@ -200,6 +183,7 @@ impl NetworkMonitor {
         if let Ok(mut fc) = self.filtered_cache.write() {
             *fc = None;
         }
+        let _ = self.logs_version.fetch_add(1, Ordering::Relaxed);
         self.save_logs_to_disk();
     }
 
@@ -220,30 +204,6 @@ impl NetworkMonitor {
         fs::write(&export_path, &csv).map_err(|e| e.to_string())?;
         info!("Exported {} log entries to {:?}", logs.len(), export_path);
         Ok(export_path.to_string_lossy().to_string())
-    }
-
-    pub fn update_device_traffic(&self, ip: &str, mac: &str, bytes_sent: u64, bytes_received: u64) {
-        if let Ok(mut devices) = self.devices.write() {
-            let device = devices
-                .entry(ip.to_string())
-                .or_insert_with(|| NetworkDevice {
-                    name: format!("Thiết bị {}", ip),
-                    ip: ip.to_string(),
-                    mac: mac.to_string(),
-                    bytes_sent: 0,
-                    bytes_received: 0,
-                });
-            device.bytes_sent += bytes_sent;
-            device.bytes_received += bytes_received;
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn get_devices(&self) -> Vec<NetworkDevice> {
-        self.devices
-            .read()
-            .map(|d| d.values().cloned().collect())
-            .unwrap_or_default()
     }
 
     pub fn get_grouped_logs(&self) -> Vec<DomainLogGroup> {
@@ -290,6 +250,14 @@ impl NetworkMonitor {
         self.lan_scanner.get_devices()
     }
 
+    pub fn get_lan_device_count(&self) -> usize {
+        self.lan_scanner.devices_len()
+    }
+
+    pub fn is_lan_scanning(&self) -> bool {
+        self.lan_scanner.is_scanning()
+    }
+
     pub fn get_system_metrics(&self) -> (f32, f32) {
         if let Ok(mut sys) = self.system_info.write() {
             sys.refresh_cpu();
@@ -305,22 +273,40 @@ impl NetworkMonitor {
     pub fn get_live_traffic_rate(&self) -> String {
         if let Ok(mut nets) = self.networks.write() {
             nets.refresh();
-            let mut total_rx = 0u64;
-            let mut total_tx = 0u64;
+            let mut total = 0u64;
             for (interface_name, data) in nets.iter() {
                 let name = interface_name.to_lowercase();
                 if !name.contains("loopback") && !name.contains("pseudo") {
-                    total_rx += data.received();
-                    total_tx += data.transmitted();
+                    total += data.total_received() + data.total_transmitted();
                 }
             }
-            let total = total_rx + total_tx;
-            if total > 1024 * 1024 {
-                format!("{:.1} MB/s", total as f64 / (1024.0 * 1024.0))
-            } else if total > 1024 {
-                format!("{} KB/s", total / 1024)
-            } else if total > 0 {
-                format!("{} B/s", total)
+
+            if let Ok(mut sample) = self.last_traffic_sample.lock() {
+                let (last_instant, last_total) = *sample;
+                if last_total == 0 {
+                    *sample = (std::time::Instant::now(), total);
+                    return "0 KB/s".to_string();
+                }
+                let elapsed = last_instant.elapsed().as_secs_f64();
+                if elapsed < 0.1 {
+                    return "0 KB/s".to_string();
+                }
+                let bytes_per_sec = if total >= last_total {
+                    (total - last_total) as f64 / elapsed
+                } else {
+                    0.0
+                };
+                *sample = (std::time::Instant::now(), total);
+
+                if bytes_per_sec > 1024.0 * 1024.0 {
+                    format!("{:.1} MB/s", bytes_per_sec / (1024.0 * 1024.0))
+                } else if bytes_per_sec > 1024.0 {
+                    format!("{:.0} KB/s", bytes_per_sec / 1024.0)
+                } else if bytes_per_sec > 0.0 {
+                    format!("{:.0} B/s", bytes_per_sec)
+                } else {
+                    "0 KB/s".to_string()
+                }
             } else {
                 "0 KB/s".to_string()
             }
@@ -335,20 +321,6 @@ impl NetworkMonitor {
         let mut cycle: u64 = 0;
 
         loop {
-            if let Ok(mut nets) = self.networks.write() {
-                nets.refresh();
-                let mut total_rx = 0u64;
-                let mut total_tx = 0u64;
-                for (name, data) in nets.iter() {
-                    let lname = name.to_lowercase();
-                    if !lname.contains("loopback") && !lname.contains("pseudo") {
-                        total_rx += data.total_received();
-                        total_tx += data.total_transmitted();
-                    }
-                }
-                self.update_device_traffic("127.0.0.1", "Cục bộ (Máy này)", total_tx, total_rx);
-            }
-
             if cycle % 2 == 0 {
                 self.connection_tracker.refresh_connections();
             }
@@ -363,6 +335,11 @@ impl NetworkMonitor {
 
             if cycle > 0 && cycle % 20 == 0 {
                 self.save_logs_to_disk();
+            }
+
+            if cycle > 0 && cycle % 200 == 0 {
+                let (cpu, mem) = self.get_system_metrics();
+                info!("Resource baseline: CPU {:.1}% | RAM {:.1} GB", cpu, mem);
             }
 
             cycle = cycle.wrapping_add(1);

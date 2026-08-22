@@ -1,0 +1,51 @@
+name: Shield Ghita Release Build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-public-release:
+    name: Build Public Release Binary
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout clean repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Test Suite
+        run: cargo test --release --verbose
+
+      - name: Build Public Release Binary
+        run: cargo build --release --verbose
+
+      - name: Verify public binary has no admin markers
+        shell: pwsh
+        run: |
+          $exe = "target\release\shield_ghita.exe"
+          $markers = @("Cross-Subnet Port Sweep", "WS-Discovery UDP 3702", "BehaviorProfile", "AmbientWifiNode")
+          foreach ($m in $markers) {
+            $found = Select-String -Path $exe -Pattern $m -SimpleMatch -Quiet
+            if ($found) {
+              Write-Error "ADMIN MARKER LEAKED INTO PUBLIC BUILD: $m"
+              exit 1
+            }
+          }
+          Write-Host "Public binary clean: no admin module markers found."
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shield_ghita_public_${{ github.ref_name }}
+          path: target/release/shield_ghita.exe
+          if-no-files-found: error

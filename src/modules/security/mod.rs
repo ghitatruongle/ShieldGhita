@@ -24,6 +24,8 @@ pub struct SecurityEngine {
     pub arp_spoof_detection_enabled: Arc<AtomicBool>,
     pub dns_flood_rate_limit: Arc<RwLock<u32>>,
     ip_query_history: Arc<RwLock<HashMap<String, Vec<Instant>>>>,
+    hard_query_history: Arc<RwLock<HashMap<String, Vec<Instant>>>>,
+    pub hard_drop_count: Arc<AtomicU64>,
     blocked_ips: Arc<RwLock<HashMap<String, Instant>>>,
     incidents: Arc<RwLock<Vec<SecurityIncident>>>,
     incident_counter: Arc<AtomicU64>,
@@ -40,6 +42,8 @@ impl SecurityEngine {
             arp_spoof_detection_enabled: Arc::new(AtomicBool::new(false)),
             dns_flood_rate_limit: Arc::new(RwLock::new(80)),
             ip_query_history: Arc::new(RwLock::new(HashMap::new())),
+            hard_query_history: Arc::new(RwLock::new(HashMap::new())),
+            hard_drop_count: Arc::new(AtomicU64::new(0)),
             blocked_ips: Arc::new(RwLock::new(HashMap::new())),
             incidents: Arc::new(RwLock::new(Vec::new())),
             incident_counter: Arc::new(AtomicU64::new(1)),
@@ -50,6 +54,42 @@ impl SecurityEngine {
 
     pub fn is_detection_enabled(&self) -> bool {
         self.attack_detection_enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn enforce_hard_rate_limit(&self, source_ip: &str) -> bool {
+        if source_ip == "127.0.0.1" || source_ip == "::1" {
+            return false;
+        }
+        let base = self.dns_flood_rate_limit.read().map(|g| *g).unwrap_or(80);
+        let hard_limit = (base.saturating_mul(4)).max(200) as usize;
+        let now = Instant::now();
+
+        let mut exceeded = false;
+        if let Ok(mut hist) = self.hard_query_history.write() {
+            if hist.len() > 1000 {
+                hist.retain(|_, v| {
+                    v.iter()
+                        .any(|t| now.duration_since(*t) < Duration::from_secs(2))
+                });
+            }
+            let timestamps = hist.entry(source_ip.to_string()).or_default();
+            timestamps.retain(|t| now.duration_since(*t) < Duration::from_secs(2));
+            timestamps.push(now);
+            if timestamps.len() > hard_limit {
+                timestamps.clear();
+                exceeded = true;
+            }
+        }
+
+        if exceeded {
+            self.hard_drop_count.fetch_add(1, Ordering::SeqCst);
+            self.block_ip_temporarily(source_ip, Duration::from_secs(60));
+            warn!(
+                "Security Hard Rate Limit: {} exceeded {} queries/2s — isolating source for 60s",
+                source_ip, hard_limit
+            );
+        }
+        exceeded
     }
 
     pub fn is_auto_block_enabled(&self) -> bool {
@@ -159,6 +199,10 @@ impl SecurityEngine {
 
     pub fn get_incidents(&self) -> Vec<SecurityIncident> {
         self.incidents.read().map(|l| l.clone()).unwrap_or_default()
+    }
+
+    pub fn incidents_count(&self) -> usize {
+        self.incidents.read().map(|l| l.len()).unwrap_or(0)
     }
 
     pub fn clear_incidents(&self) {
@@ -378,5 +422,33 @@ mod tests {
         let alert = sec.inspect_dns_query("192.168.1.55", tunneling_domain);
         assert!(alert.is_some());
         assert!(alert.unwrap().incident_type.contains("Tunneling"));
+    }
+
+    #[test]
+    fn test_hard_rate_limit_without_ids() {
+        let sec = SecurityEngine::new();
+        sec.set_detection_enabled(false);
+
+        let test_ip = "192.168.1.77";
+        let mut tripped = false;
+        for _ in 0..400 {
+            if sec.enforce_hard_rate_limit(test_ip) {
+                tripped = true;
+                break;
+            }
+        }
+        assert!(tripped);
+        assert!(sec.is_ip_temporarily_blocked(test_ip));
+        assert_eq!(sec.hard_drop_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_hard_rate_limit_ignores_loopback() {
+        let sec = SecurityEngine::new();
+        sec.set_detection_enabled(false);
+        for _ in 0..500 {
+            assert!(!sec.enforce_hard_rate_limit("127.0.0.1"));
+        }
+        assert_eq!(sec.hard_drop_count.load(Ordering::SeqCst), 0);
     }
 }

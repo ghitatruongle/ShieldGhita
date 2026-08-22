@@ -30,7 +30,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(in_app_layer)
         .init();
 
-    info!("Starting Shield Ghita v0.0.5-beta1 Master Controller...");
+    info!(
+        "Starting Shield Ghita v{} Master Controller...",
+        env!("CARGO_PKG_VERSION")
+    );
 
     if !dns_manager::is_elevated() {
         tracing::warn!("Shield Ghita running without elevated Administrator token. Run as Administrator for full DNS & Firewall proxy enforcement.");
@@ -40,9 +43,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(log_buffer)?;
     let ui = AppWindow::new()?;
 
+    let _single_instance_guard = match modules::system::SingleInstanceGuard::try_acquire(
+        ui.as_weak(),
+    ) {
+        Some(guard) => guard,
+        None => {
+            tracing::info!("Another instance of Shield Ghita is already running. Signaled existing instance to show window.");
+            return Ok(());
+        }
+    };
+
+    let args: Vec<String> = std::env::args().collect();
+    let is_autostart = args
+        .iter()
+        .any(|arg| arg == "--autostart" || arg == "--hidden");
+
+    let should_hide = is_autostart
+        && state
+            .config
+            .read()
+            .map(|c| c.start_hidden_in_tray)
+            .unwrap_or(false);
+
     let _tray_icon = app::ui_bridge::setup_ui_bridge(&ui, state)?;
 
-    ui.run()?;
+    if !should_hide {
+        ui.show()?;
+        app::ui_bridge::poller::WINDOW_VISIBLE.store(true, std::sync::atomic::Ordering::SeqCst);
+    } else {
+        app::ui_bridge::poller::WINDOW_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    slint::run_event_loop_until_quit()?;
 
     let _ = dns_manager::restore_system_dns();
     Ok(())

@@ -395,6 +395,24 @@ pub fn is_dns_overridden() -> bool {
     DNS_OVERRIDDEN.load(Ordering::Relaxed)
 }
 
+fn system_dns_matches(target: &str) -> bool {
+    let adapters = get_active_adapters();
+    if adapters.is_empty() {
+        return false;
+    }
+    for adapter in &adapters {
+        match get_current_adapter_dns(adapter) {
+            AdapterDnsState::Static(ips) => {
+                if !ips.iter().any(|ip| ip == target) {
+                    return false;
+                }
+            }
+            AdapterDnsState::Dhcp => return false,
+        }
+    }
+    true
+}
+
 pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, listen_addr: String) {
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(8)).await;
@@ -402,6 +420,9 @@ pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, liste
             && !MASTER_INTERNET_LOCKED.load(Ordering::Relaxed)
             && DNS_OVERRIDDEN.load(Ordering::Relaxed)
         {
+            if system_dns_matches(&listen_addr) {
+                continue;
+            }
             let _ = set_system_dns(&listen_addr);
         }
     }
