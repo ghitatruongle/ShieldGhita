@@ -5,12 +5,15 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build-public-release:
-    name: Build Public Release Binary
+    name: Build Public Release & Installer
     runs-on: windows-latest
 
     steps:
@@ -20,6 +23,11 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
@@ -28,6 +36,10 @@ jobs:
 
       - name: Build Public Release Binary
         run: cargo build --release --verbose
+
+      - name: Embed icons, manifest and versioninfo
+        shell: pwsh
+        run: python scripts/embed_resources.py target/release/shield_ghita.exe
 
       - name: Verify public binary has no admin markers
         shell: pwsh
@@ -43,9 +55,39 @@ jobs:
           }
           Write-Host "Public binary clean: no admin module markers found."
 
-      - name: Upload Release Artifact
+      - name: Stage binary for installer packaging
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/release_std | Out-Null
+          Copy-Item target/release/shield_ghita.exe target/release_std/shield_ghita.exe -Force
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Compile public installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force installer_output | Out-Null
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /O"installer_output" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem installer_output
+
+      - name: Create GitHub Release with installer
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ShieldGhita ${{ github.ref_name }}
+          files: installer_output/ShieldGhita_Setup_*.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Upload raw binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: shield_ghita_public_${{ github.ref_name }}
-          path: target/release/shield_ghita.exe
+          path: target/release_std/shield_ghita.exe
           if-no-files-found: error

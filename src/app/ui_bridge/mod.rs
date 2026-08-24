@@ -44,7 +44,9 @@ pub fn setup_ui_bridge(
         .unwrap_or_else(|e| e.into_inner())
         .clone();
 
-    ui.set_is_vi(cfg.language == "vi");
+    crate::modules::i18n::set_language(&cfg.language);
+    ui.global::<crate::I18n>()
+        .set_lang(crate::modules::i18n::current_index() as i32);
     ui.set_enable_notifications(cfg.enable_block_notifications);
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
     ui.set_host_lan_ip(dns_manager::get_lan_ip_address().into());
@@ -61,12 +63,26 @@ pub fn setup_ui_bridge(
     #[cfg(not(feature = "admin"))]
     ui.set_is_admin_edition(false);
 
-    poller::restore_window_geom(ui, &cfg);
-
     let tray_menu = Menu::new();
-    let item_show = MenuItem::new("Mở giao diện Shield Ghita", true, None);
-    let item_toggle = MenuItem::new("Bật / Tắt bảo vệ", true, None);
-    let item_quit = MenuItem::new("Thoát hoàn toàn", true, None);
+    let item_show = MenuItem::new(
+        crate::modules::i18n::tr(
+            "Mở giao diện Shield Ghita",
+            "Open Shield Ghita",
+            "打开 Shield Ghita 界面",
+        ),
+        true,
+        None,
+    );
+    let item_toggle = MenuItem::new(
+        crate::modules::i18n::tr("Bật / Tắt bảo vệ", "Toggle Protection", "开启 / 关闭防护"),
+        true,
+        None,
+    );
+    let item_quit = MenuItem::new(
+        crate::modules::i18n::tr("Thoát hoàn toàn", "Quit Completely", "彻底退出"),
+        true,
+        None,
+    );
     let _ = tray_menu.append(&item_show);
     let _ = tray_menu.append(&item_toggle);
     let _ = tray_menu.append(&item_quit);
@@ -95,13 +111,19 @@ pub fn setup_ui_bridge(
 
     handlers::register(ui, &state);
 
+    crate::app::hotkey::spawn_protection_hotkey(state.clone());
+
     #[cfg(feature = "admin")]
     admin::register(ui, &state);
-
     #[cfg(not(feature = "admin"))]
     {
         ui.on_trigger_proximity_scan(|| {});
         ui.on_refresh_admin_data(|| {});
+        ui.on_launch_attack(|_, _, _, _, _| {});
+        ui.on_cancel_attack(|_| {});
+        ui.on_scan_cameras(|| {});
+        ui.on_open_camera_stream(|_| {});
+        ui.on_copy_camera_url(|_| {});
     }
 
     spawn_toast_forwarders(ui, &state);
@@ -162,12 +184,11 @@ fn spawn_toast_forwarders(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 }
                 let domain_clone = domain.clone();
                 let time_clone = time.clone();
-                let is_vi = config.read().map(|c| c.language == "vi").unwrap_or(true);
-                let title = if is_vi {
-                    "ĐÃ CHẶN QUẢNG CÁO & TRACKER"
-                } else {
-                    "AD & TRACKER BLOCKED"
-                }
+                let title = crate::modules::i18n::tr(
+                    "ĐÃ CHẶN QUẢNG CÁO & TRACKER",
+                    "AD & TRACKER BLOCKED",
+                    "已拦截广告和跟踪器",
+                )
                 .to_string();
 
                 let ui_weak_inner = ui_weak.clone();

@@ -21,13 +21,31 @@ impl SingleInstanceGuard {
         const EVENT_NAME: windows::core::PCWSTR = w!("Local\\ShieldGhita_ShowWindowEvent");
 
         unsafe {
-            let mutex = CreateMutexW(None, true, MUTEX_NAME).ok()?;
-            if GetLastError() == ERROR_ALREADY_EXISTS {
-                let _ = CloseHandle(mutex);
-                if let Ok(event) = OpenEventW(EVENT_MODIFY_STATE, false, EVENT_NAME) {
-                    let _ = SetEvent(event);
-                    let _ = CloseHandle(event);
+            let mut signaled_existing = false;
+            let mut mutex = HANDLE::default();
+            let mut acquired_fresh = false;
+
+            for _ in 0..21u32 {
+                mutex = CreateMutexW(None, true, MUTEX_NAME).unwrap_or_default();
+                if mutex.is_invalid() {
+                    return None;
                 }
+                if GetLastError() != ERROR_ALREADY_EXISTS {
+                    acquired_fresh = true;
+                    break;
+                }
+                let _ = CloseHandle(mutex);
+                if !signaled_existing {
+                    signaled_existing = true;
+                    if let Ok(event) = OpenEventW(EVENT_MODIFY_STATE, false, EVENT_NAME) {
+                        let _ = SetEvent(event);
+                        let _ = CloseHandle(event);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+
+            if !acquired_fresh {
                 return None;
             }
 
@@ -45,6 +63,9 @@ impl SingleInstanceGuard {
                             let weak_clone = ui_weak.clone();
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(ui_inst) = weak_clone.upgrade() {
+                                    tracing::info!(
+                                        "Second instance detected: revealing existing window"
+                                    );
                                     ui_inst.window().set_minimized(false);
                                     let _ = ui_inst.show();
                                     crate::app::ui_bridge::poller::WINDOW_VISIBLE

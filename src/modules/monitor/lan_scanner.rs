@@ -8,6 +8,7 @@ use tokio::time::Duration;
 use tracing::info;
 
 use super::port_scanner::{self, OpenPort, PortRisk};
+use crate::modules::i18n;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LanDevice {
@@ -121,13 +122,24 @@ impl LanScanner {
                     d.last_domain = last_domain.clone();
                     d.last_active = last_time.clone();
                     d.risk_level = if *threats > 0 {
-                        "🚨 Nguy hiểm (Phát hiện mối đe dọa)".to_string()
+                        i18n::tr(
+                            "🚨 Nguy hiểm (Phát hiện mối đe dọa)",
+                            "🚨 Dangerous (Threats detected)",
+                            "🚨 危险 (检测到威胁)",
+                        )
+                        .to_string()
                     } else if *blocked > 10 {
-                        "🛡️ An toàn (Đã lọc quảng cáo)".to_string()
+                        i18n::tr(
+                            "🛡️ An toàn (Đã lọc quảng cáo)",
+                            "🛡️ Safe (Ads filtered)",
+                            "🛡️ 安全 (已过滤广告)",
+                        )
+                        .to_string()
                     } else {
-                        "🟢 An toàn".to_string()
+                        i18n::tr("🟢 An toàn", "🟢 Safe", "🟢 安全").to_string()
                     };
-                } else if d.ip == "127.0.0.1" || d.mac.contains("Local") {
+                } else if d.ip == "127.0.0.1" || d.mac.contains(i18n::tr("Local", "Local", "本地"))
+                {
                     if let Some((total, blocked, threats, last_domain, last_time)) =
                         activity.get("127.0.0.1")
                     {
@@ -198,24 +210,150 @@ impl LanScanner {
 
     pub async fn probe_device_services(ip: &str) -> (Option<&'static str>, Option<i32>) {
         let ports_and_types = [
-            (554, "📷 Camera an ninh (RTSP/CCTV)"),
-            (8000, "📷 Camera Hikvision / DVR"),
-            (37777, "📷 Camera Dahua / KBVision"),
-            (8899, "📷 Camera ONVIF IP"),
-            (9100, "🖨️ Máy in mạng (RAW/JetDirect)"),
-            (631, "🖨️ Máy in mạng (IPP)"),
-            (8008, "📺 Smart TV / Google Cast"),
-            (8009, "📺 Smart TV / Chromecast"),
-            (7000, "📺 Smart TV / AirPlay"),
-            (445, "💻 Máy tính (Windows PC)"),
-            (139, "💻 Máy tính (NetBIOS)"),
-            (3389, "💻 Máy tính (Remote Desktop)"),
-            (22, "🖥️ Máy tính / Server (Linux/Mac)"),
-            (62078, "📱 iPhone / iPad (Apple iOS)"),
-            (5555, "📱 Điện thoại Android (ADB)"),
-            (80, "🌐 Thiết bị mạng / Web"),
-            (443, "🌐 Thiết bị mạng (HTTPS)"),
-            (8080, "🌐 Thiết bị thông minh (Web Port)"),
+            (
+                554,
+                i18n::tr(
+                    "📷 Camera an ninh (RTSP/CCTV)",
+                    "📷 Security Camera (RTSP/CCTV)",
+                    "📷 安防摄像机 (IP Camera / RTSP)",
+                ),
+            ),
+            (
+                8000,
+                i18n::tr(
+                    "📷 Camera Hikvision / DVR",
+                    "📷 Hikvision Camera / DVR",
+                    "📷 海康威视摄像机 (Hikvision Camera / DVR)",
+                ),
+            ),
+            (
+                37777,
+                i18n::tr(
+                    "📷 Camera Dahua / KBVision",
+                    "📷 Dahua / KBVision Camera",
+                    "📷 大华摄像机 (Dahua / KBVision Camera)",
+                ),
+            ),
+            (
+                8899,
+                i18n::tr(
+                    "📷 Camera ONVIF IP",
+                    "📷 ONVIF IP Camera",
+                    "📷 ONVIF 网络摄像机 (ONVIF IP Camera)",
+                ),
+            ),
+            (
+                9100,
+                i18n::tr(
+                    "🖨️ Máy in mạng (Printer - RAW/JetDirect)",
+                    "🖨️ Network Printer (RAW/JetDirect)",
+                    "🖨️ 网络打印机 (Printer - RAW/JetDirect)",
+                ),
+            ),
+            (
+                631,
+                i18n::tr(
+                    "🖨️ Máy in mạng (Printer - IPP)",
+                    "🖨️ Network Printer (IPP)",
+                    "🖨️ 网络打印机 (Printer - IPP)",
+                ),
+            ),
+            (
+                8008,
+                i18n::tr(
+                    "📺 Smart TV / Google Cast",
+                    "📺 Smart TV / Google Cast",
+                    "📺 智能电视 (Smart TV / Google Cast)",
+                ),
+            ),
+            (
+                8009,
+                i18n::tr(
+                    "📺 Smart TV / Chromecast",
+                    "📺 Smart TV / Chromecast",
+                    "📺 智能电视 (Smart TV / Chromecast)",
+                ),
+            ),
+            (
+                7000,
+                i18n::tr(
+                    "📺 Smart TV / AirPlay",
+                    "📺 Smart TV / AirPlay",
+                    "📺 智能电视 (Smart TV / AirPlay)",
+                ),
+            ),
+            (
+                445,
+                i18n::tr(
+                    "💻 Máy tính (Windows PC)",
+                    "💻 Computer (Windows PC)",
+                    "💻 电脑 (Windows PC)",
+                ),
+            ),
+            (
+                139,
+                i18n::tr(
+                    "💻 Máy tính (PC - NetBIOS)",
+                    "💻 Computer (PC - NetBIOS)",
+                    "💻 电脑 (PC - NetBIOS)",
+                ),
+            ),
+            (
+                3389,
+                i18n::tr(
+                    "💻 Máy tính (PC - Remote Desktop)",
+                    "💻 Computer (PC - Remote Desktop)",
+                    "💻 电脑 (PC - 远程桌面)",
+                ),
+            ),
+            (
+                22,
+                i18n::tr(
+                    "🖥️ Máy chủ / Server (Linux/Mac)",
+                    "🖥️ Computer / Server (Linux/Mac)",
+                    "🖥️ 电脑 / 服务器 (Server - Linux/Mac)",
+                ),
+            ),
+            (
+                62078,
+                i18n::tr(
+                    "📱 iPhone / iPad (Apple iOS)",
+                    "📱 iPhone / iPad (Apple iOS)",
+                    "📱 iPhone / iPad (苹果 iOS)",
+                ),
+            ),
+            (
+                5555,
+                i18n::tr(
+                    "📱 Điện thoại Android (ADB)",
+                    "📱 Android Phone (ADB)",
+                    "📱 安卓手机 (Android Phone - ADB)",
+                ),
+            ),
+            (
+                80,
+                i18n::tr(
+                    "🌐 Thiết bị mạng / Web",
+                    "🌐 Network Device / Web",
+                    "🌐 网络设备 / Web",
+                ),
+            ),
+            (
+                443,
+                i18n::tr(
+                    "🌐 Thiết bị mạng (HTTPS)",
+                    "🌐 Network Device (HTTPS)",
+                    "🌐 网络设备 (HTTPS)",
+                ),
+            ),
+            (
+                8080,
+                i18n::tr(
+                    "🌐 Thiết bị thông minh (Web Port)",
+                    "🌐 Smart Device (Web Port)",
+                    "🌐 智能设备 (Web Port)",
+                ),
+            ),
         ];
 
         let start = Instant::now();
@@ -274,20 +412,58 @@ impl LanScanner {
             || vendor.contains("Router")
             || vendor.contains("Modem")
         {
-            return ("📡 Router Wi-Fi / Gateway", "ROUTER");
+            return (
+                i18n::tr(
+                    "📡 Router Wi-Fi / Gateway",
+                    "📡 Wi-Fi Router / Gateway",
+                    "📡 Wi-Fi 路由器 / 网关",
+                ),
+                "ROUTER",
+            );
         }
 
         if let Some(st) = service_type {
             if st.contains("Camera") {
-                return ("📷 Camera an ninh (CCTV / IP Cam)", "CAMERA");
-            } else if st.contains("Máy in") {
-                return ("🖨️ Máy in mạng (Printer)", "PRINTER");
+                return (
+                    i18n::tr(
+                        "📷 Camera an ninh (CCTV / IP Cam)",
+                        "📷 Security Camera (CCTV / IP Cam)",
+                        "📷 安防摄像头 (CCTV / IP Cam)",
+                    ),
+                    "CAMERA",
+                );
+            } else if st.contains("Printer") {
+                return (
+                    i18n::tr(
+                        "🖨️ Máy in mạng (Printer)",
+                        "🖨️ Network Printer",
+                        "🖨️ 网络打印机",
+                    ),
+                    "PRINTER",
+                );
             } else if st.contains("Smart TV") {
-                return ("📺 Smart TV / Thiết bị truyền hình", "TV");
+                return (
+                    i18n::tr(
+                        "📺 Smart TV / Thiết bị truyền hình",
+                        "📺 Smart TV / TV Device",
+                        "📺 智能电视 / 电视设备",
+                    ),
+                    "TV",
+                );
             } else if st.contains("iPhone") || st.contains("Android") {
-                return ("📱 Điện thoại thông minh", "PHONE");
-            } else if st.contains("Máy tính") {
-                return ("💻 Máy tính (PC / Laptop)", "PC");
+                return (
+                    i18n::tr("📱 Điện thoại thông minh", "📱 Smartphone", "📱 智能手机"),
+                    "PHONE",
+                );
+            } else if st.contains("PC") || st.contains("Server") {
+                return (
+                    i18n::tr(
+                        "💻 Máy tính (PC / Laptop)",
+                        "💻 Computer (PC / Laptop)",
+                        "💻 电脑 (PC / 笔记本)",
+                    ),
+                    "PC",
+                );
             }
         }
 
@@ -298,25 +474,41 @@ impl LanScanner {
                 || lower.contains("dvr")
                 || lower.contains("nvr")
             {
-                return ("📷 Camera an ninh", "CAMERA");
+                return (
+                    i18n::tr("📷 Camera an ninh", "📷 Security Camera", "📷 安防摄像头"),
+                    "CAMERA",
+                );
             } else if lower.contains("phone")
                 || lower.contains("iphone")
                 || lower.contains("galaxy")
                 || lower.contains("redmi")
                 || lower.contains("xiaomi")
             {
-                return ("📱 Điện thoại thông minh", "PHONE");
+                return (
+                    i18n::tr("📱 Điện thoại thông minh", "📱 Smartphone", "📱 智能手机"),
+                    "PHONE",
+                );
             } else if lower.contains("desktop")
                 || lower.contains("laptop")
                 || lower.contains("pc")
                 || lower.contains("macbook")
             {
-                return ("💻 Máy tính (PC / Laptop)", "PC");
+                return (
+                    i18n::tr(
+                        "💻 Máy tính (PC / Laptop)",
+                        "💻 Computer (PC / Laptop)",
+                        "💻 电脑 (PC / 笔记本)",
+                    ),
+                    "PC",
+                );
             } else if lower.contains("tv") || lower.contains("box") || lower.contains("chromecast")
             {
-                return ("📺 Smart TV", "TV");
+                return (i18n::tr("📺 Smart TV", "📺 Smart TV", "📺 智能电视"), "TV");
             } else if lower.contains("print") {
-                return ("🖨️ Máy in mạng", "PRINTER");
+                return (
+                    i18n::tr("🖨️ Máy in mạng", "🖨️ Network Printer", "🖨️ 网络打印机"),
+                    "PRINTER",
+                );
             }
         }
 
@@ -326,7 +518,10 @@ impl LanScanner {
             || vendor.contains("Ezviz")
             || vendor.contains("Imou")
         {
-            ("📷 Camera an ninh", "CAMERA")
+            (
+                i18n::tr("📷 Camera an ninh", "📷 Security Camera", "📷 安防摄像头"),
+                "CAMERA",
+            )
         } else if vendor.contains("iPhone")
             || vendor.contains("Galaxy")
             || vendor.contains("OPPO")
@@ -334,7 +529,10 @@ impl LanScanner {
             || vendor.contains("Realme")
             || vendor.contains("Điện thoại")
         {
-            ("📱 Điện thoại thông minh", "PHONE")
+            (
+                i18n::tr("📱 Điện thoại thông minh", "📱 Smartphone", "📱 智能手机"),
+                "PHONE",
+            )
         } else if vendor.contains("Dell")
             || vendor.contains("HP")
             || vendor.contains("ASUS")
@@ -342,17 +540,41 @@ impl LanScanner {
             || vendor.contains("Lenovo")
             || vendor.contains("Intel")
         {
-            ("💻 Máy tính (PC / Laptop)", "PC")
+            (
+                i18n::tr(
+                    "💻 Máy tính (PC / Laptop)",
+                    "💻 Computer (PC / Laptop)",
+                    "💻 电脑 (PC / 笔记本)",
+                ),
+                "PC",
+            )
         } else if vendor.contains("TV")
             || vendor.contains("Google")
             || vendor.contains("Sony")
             || vendor.contains("LG")
         {
-            ("📺 Smart TV / Thiết bị thông minh", "TV")
+            (
+                i18n::tr(
+                    "📺 Smart TV / Thiết bị thông minh",
+                    "📺 Smart TV / Smart Device",
+                    "📺 智能电视 / 智能设备",
+                ),
+                "TV",
+            )
         } else if vendor.contains("Espressif") || vendor.contains("Tuya") {
-            ("💡 Thiết bị thông minh (Smart Home)", "IOT")
+            (
+                i18n::tr(
+                    "💡 Thiết bị thông minh (Smart Home)",
+                    "💡 Smart Device (Smart Home)",
+                    "💡 智能设备 (智能家居)",
+                ),
+                "IOT",
+            )
         } else {
-            ("🌐 Thiết bị mạng LAN", "DEVICE")
+            (
+                i18n::tr("🌐 Thiết bị mạng LAN", "🌐 LAN Device", "🌐 局域网设备"),
+                "DEVICE",
+            )
         }
     }
 
@@ -439,20 +661,29 @@ impl LanScanner {
         let mut devices = Vec::new();
 
         devices.push(LanDevice {
-            name: format!("💻 {} (Máy tính này / This PC)", my_hostname),
+            name: format!(
+                "💻 {} ({})",
+                my_hostname,
+                i18n::tr("Máy tính này / This PC", "This PC", "本机")
+            ),
             ip: local_ip_str.clone(),
-            mac: "Cục bộ (Local Host)".into(),
-            vendor: "Hệ thống máy này".into(),
-            device_type: "💻 Máy tính (PC / Laptop)".into(),
+            mac: i18n::tr("Cục bộ (Local Host)", "Local Host", "本地主机").into(),
+            vendor: i18n::tr("Hệ thống máy này", "This System", "本机系统").into(),
+            device_type: i18n::tr(
+                "💻 Máy tính (PC / Laptop)",
+                "💻 Computer (PC / Laptop)",
+                "💻 电脑 (PC / 笔记本)",
+            )
+            .into(),
             is_online: true,
             latency_ms: 0,
-            traffic: "Hoạt động".into(),
+            traffic: i18n::tr("Hoạt động", "Active", "活跃").into(),
             total_queries: 0,
             blocked_queries: 0,
             threats_detected: 0,
             last_domain: "-".into(),
             last_active: "-".into(),
-            risk_level: "🟢 An toàn".into(),
+            risk_level: i18n::tr("🟢 An toàn", "🟢 Safe", "🟢 安全").into(),
             open_ports: Vec::new(),
             port_risk: String::new(),
             port_advice: String::new(),
@@ -471,9 +702,13 @@ impl LanScanner {
 
             enrich_handles.push(tokio::spawn(async move {
                 let vendor = Self::lookup_vendor(&mac);
-                let vendor_known = !vendor.contains("Thiết bị mạng (LAN Host)")
-                    && !vendor.contains("Không xác định")
-                    && !vendor.contains("MAC riêng tư");
+                let vendor_unknown = i18n::tr("Không xác định", "Unknown", "未知");
+                let vendor_private_mac = i18n::tr("MAC riêng tư", "Private MAC", "随机 MAC");
+                let vendor_lan_host =
+                    i18n::tr("Thiết bị mạng (LAN Host)", "LAN Host", "局域网主机");
+                let vendor_known = !vendor.contains(vendor_lan_host)
+                    && !vendor.contains(vendor_unknown)
+                    && !vendor.contains(vendor_private_mac);
                 let (service_type, measured_latency) = Self::probe_device_services(&ip).await;
                 let netbios_name = Self::query_netbios_name(&ip).await;
 
@@ -515,7 +750,7 @@ impl LanScanner {
                     device_type: device_label.into(),
                     is_online: true,
                     latency_ms: measured_latency.unwrap_or(-1),
-                    traffic: "Hoạt động".into(),
+                    traffic: i18n::tr("Hoạt động", "Active", "活跃").into(),
                     total_queries: 0,
                     blocked_queries: 0,
                     threats_detected: 0,
@@ -538,7 +773,9 @@ impl LanScanner {
 
         if let Some(sec) = sec_engine {
             for dev in &devices {
-                if dev.ip.ends_with(".1") || dev.ip.ends_with(".254") || dev.name.contains("Router")
+                if dev.ip.ends_with(".1")
+                    || dev.ip.ends_with(".254")
+                    || dev.name.contains(i18n::tr("Router", "Router", "路由器"))
                 {
                     sec.inspect_arp_gateway(&dev.ip, &dev.mac);
                     break;
@@ -554,9 +791,18 @@ impl LanScanner {
                     notified.insert(dev.ip.clone());
                     let summary = port_scanner::format_ports_summary(&dev.open_ports);
                     sec.record_incident(
-                        "Cổng rủi ro cao đang mở trên thiết bị LAN",
+                        i18n::tr(
+                            "Cổng rủi ro cao đang mở trên thiết bị LAN",
+                            "High-risk ports open on LAN device",
+                            "局域网设备存在高危开放端口",
+                        ),
                         &dev.ip,
-                        &format!("{} — phát hiện cổng: {}", dev.name, summary),
+                        &format!(
+                            "{} — {}{}",
+                            dev.name,
+                            i18n::tr("phát hiện cổng: ", "open ports: ", "发现开放端口: "),
+                            summary
+                        ),
                         "HIGH",
                         &dev.port_advice,
                     );
@@ -644,5 +890,17 @@ mod tests {
             LanScanner::classify_final("192.168.1.100", "Apple Inc.", None, Some("iPhone-15"));
         assert_eq!(tag_phone, "PHONE");
         assert!(label_phone.contains("Điện thoại"));
+    }
+
+    #[test]
+    fn test_perf_classify_final() {
+        crate::modules::perf::measure("lan_scanner::classify_final", 200_000, || {
+            std::hint::black_box(LanScanner::classify_final(
+                "192.0.2.77",
+                "Espressif Inc.",
+                None,
+                None,
+            ));
+        });
     }
 }

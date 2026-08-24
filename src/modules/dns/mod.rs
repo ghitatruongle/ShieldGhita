@@ -88,6 +88,35 @@ pub struct DnsBlocker {
     pub blocked_count: Arc<AtomicU64>,
     pub silent_sinkhole_enabled: Arc<AtomicBool>,
     pub blocked_events_tx: tokio::sync::broadcast::Sender<(String, String)>,
+    response_policy: Arc<RwLock<Option<ResponsePolicyFn>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResponseOverride {
+    pub ipv4: [u8; 4],
+    pub ipv6: [u8; 16],
+}
+
+pub type ResponsePolicyFn = Arc<dyn Fn(&str, &str, u16) -> Option<ResponseOverride> + Send + Sync>;
+
+impl DnsBlocker {
+    #[cfg_attr(not(feature = "admin"), allow(dead_code))]
+    pub fn set_response_policy(&self, policy: ResponsePolicyFn) {
+        if let Ok(mut guard) = self.response_policy.write() {
+            *guard = Some(policy);
+        }
+    }
+
+    fn apply_response_policy(
+        &self,
+        src_ip: &str,
+        name: &str,
+        qtype: u16,
+    ) -> Option<ResponseOverride> {
+        let guard = self.response_policy.read().ok()?;
+        let policy = guard.as_ref()?;
+        policy(src_ip, name, qtype)
+    }
 }
 
 const BLOCKED_PUBLIC_SUFFIXES: &[&str] = &[
@@ -115,25 +144,52 @@ const BLOCKED_PUBLIC_SUFFIXES: &[&str] = &[
 
 impl DnsBlocker {
     pub fn validate_domain(domain: &str) -> Result<String, String> {
+        use crate::modules::i18n;
         let d = domain.trim().trim_end_matches('.').to_lowercase();
         if d.is_empty() {
-            return Err("Tên miền trống".into());
+            return Err(i18n::tr("Tên miền trống", "Domain is empty", "域名为空").into());
         }
         if d.len() > 253 {
-            return Err("Tên miền dài quá 253 ký tự".into());
+            return Err(i18n::tr(
+                "Tên miền dài quá 253 ký tự",
+                "Domain exceeds 253 characters",
+                "域名超过 253 个字符",
+            )
+            .into());
         }
         if !d.contains('.') {
-            return Err(format!(
-                "'{}' thiếu dấu chấm — chặn cả TLD sẽ làm gãy toàn bộ trình duyệt",
-                d
-            ));
+            let msg = match i18n::current_index() {
+                i18n::EN => format!(
+                    "'{}' is missing a dot — blocking a whole TLD would break all browsers",
+                    d
+                ),
+                i18n::ZH => format!(
+                    "'{}' 缺少点号 — 屏蔽整个顶级域名会导致所有浏览器无法上网",
+                    d
+                ),
+                _ => format!(
+                    "'{}' thiếu dấu chấm — chặn cả TLD sẽ làm gãy toàn bộ trình duyệt",
+                    d
+                ),
+            };
+            return Err(msg);
         }
         if BLOCKED_PUBLIC_SUFFIXES.contains(&d.as_str()) {
-            return Err(format!("'{}' là public suffix — phạm vi chặn quá rộng", d));
+            let msg = match i18n::current_index() {
+                i18n::EN => format!("'{}' is a public suffix — block scope too broad", d),
+                i18n::ZH => format!("'{}' 属于公共后缀 — 屏蔽范围过宽", d),
+                _ => format!("'{}' là public suffix — phạm vi chặn quá rộng", d),
+            };
+            return Err(msg);
         }
         for label in d.split('.') {
             if label.is_empty() || label.len() > 63 {
-                return Err("Label không hợp lệ (rỗng hoặc dài hơn 63 ký tự)".into());
+                return Err(i18n::tr(
+                    "Label không hợp lệ (rỗng hoặc dài hơn 63 ký tự)",
+                    "Invalid label (empty or longer than 63 characters)",
+                    "标签无效（为空或超过 63 个字符）",
+                )
+                .into());
             }
             if label
                 .chars()
@@ -141,7 +197,12 @@ impl DnsBlocker {
             {
                 continue;
             }
-            return Err("Tên miền chứa ký tự không hợp lệ".into());
+            return Err(i18n::tr(
+                "Tên miền chứa ký tự không hợp lệ",
+                "Domain contains invalid characters",
+                "域名包含无效字符",
+            )
+            .into());
         }
         Ok(d)
     }
@@ -187,6 +248,7 @@ impl DnsBlocker {
             blocked_count: Arc::new(AtomicU64::new(0)),
             silent_sinkhole_enabled: Arc::new(AtomicBool::new(true)),
             blocked_events_tx,
+            response_policy: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -398,10 +460,15 @@ impl DnsBlocker {
     }
 
     pub fn should_block(&self, domain: &str) -> bool {
-        let clean = domain.trim_end_matches('.').to_lowercase();
-        if clean.is_empty() {
+        let trimmed = domain.trim_end_matches('.');
+        if trimmed.is_empty() {
             return false;
         }
+        let clean = if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+            std::borrow::Cow::Owned(trimmed.to_lowercase())
+        } else {
+            std::borrow::Cow::Borrowed(trimmed)
+        };
 
         {
             let ca = self
@@ -856,6 +923,20 @@ impl DnsBlocker {
 
         self.total_queries.fetch_add(1, Ordering::Relaxed);
 
+        if let Some(over) = self.apply_response_policy(&src_ip, &query_name, qtype) {
+            let resp = if qtype == 28 {
+                Self::build_sinkhole_aaaa_record(&pkt, over.ipv6)
+                    .or_else(|| Self::build_nxdomain(&pkt))
+            } else {
+                Self::build_sinkhole_a_record(&pkt, over.ipv4)
+                    .or_else(|| Self::build_nxdomain(&pkt))
+            };
+            if let Some(r) = resp {
+                let _ = sock.send_to(&r, src).await;
+            }
+            return;
+        }
+
         if self.should_block(&query_name) {
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
             mon.add_log(&query_name, &src_ip, true);
@@ -1064,6 +1145,108 @@ mod tests {
     }
 
     #[test]
+    fn test_response_policy_override_applied_per_source() {
+        use std::sync::Arc;
+
+        let blocker = DnsBlocker::new();
+        assert!(blocker
+            .apply_response_policy("192.0.2.50", "example.com", 1)
+            .is_none());
+
+        blocker.set_response_policy(Arc::new(|src_ip, _name, _qtype| {
+            if src_ip == "192.0.2.50" {
+                Some(crate::modules::dns::ResponseOverride {
+                    ipv4: [192, 0, 2, 10],
+                    ipv6: [0u8; 16],
+                })
+            } else {
+                None
+            }
+        }));
+
+        let over = blocker
+            .apply_response_policy("192.0.2.50", "any.site", 28)
+            .expect("policy must fire for targeted source");
+        assert_eq!(over.ipv4, [192, 0, 2, 10]);
+        assert_eq!(over.ipv6, [0u8; 16]);
+        assert!(blocker
+            .apply_response_policy("192.0.2.99", "any.site", 1)
+            .is_none());
+
+        let query = vec![
+            0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, b'w',
+            b'w', b'w', 0x04, b't', b'e', b's', b't', 0x00, 0x00, 0x01, 0x00, 0x01,
+        ];
+        let redirected = DnsBlocker::build_sinkhole_a_record(&query, over.ipv4)
+            .expect("Build redirect A record");
+        let len_r = redirected.len();
+        assert_eq!(&redirected[len_r - 4..len_r], &[192, 0, 2, 10]);
+    }
+
+    #[tokio::test]
+    async fn test_dns_server_applies_response_policy_live() {
+        use std::sync::Arc;
+
+        let blocker = Arc::new(DnsBlocker::new());
+        blocker.set_response_policy(Arc::new(|src_ip, _name, _qtype| {
+            if src_ip == "127.0.0.1" {
+                Some(crate::modules::dns::ResponseOverride {
+                    ipv4: [192, 0, 2, 123],
+                    ipv6: [0u8; 16],
+                })
+            } else {
+                None
+            }
+        }));
+
+        let sec = Arc::new(crate::modules::security::SecurityEngine::new());
+        let mon = Arc::new(crate::modules::monitor::NetworkMonitor::new(50, sec));
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let server_blocker = blocker.clone();
+        let server_mon = mon.clone();
+        let server_task = tokio::spawn(async move {
+            server_blocker
+                .run_dns_server(
+                    "127.0.0.1",
+                    15395,
+                    vec!["https://1.1.1.1/dns-query".to_string()],
+                    server_mon,
+                    Some(ready_tx),
+                )
+                .await;
+        });
+
+        let bound = tokio::time::timeout(std::time::Duration::from_secs(5), ready_rx)
+            .await
+            .expect("server startup timeout")
+            .expect("ready channel closed");
+        assert!(bound.is_ok(), "DNS test server failed to bind: {:?}", bound);
+
+        let query = vec![
+            0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, b'r',
+            b'e', b'd', b'i', b'r', b'e', b'c', b't', 0x04, b't', b'e', b's', b't', 0x00, 0x00,
+            0x01, 0x00, 0x01,
+        ];
+
+        let sock = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("client bind");
+        sock.send_to(&query, "127.0.0.1:15395").await.expect("send");
+
+        let mut buf = vec![0u8; 512];
+        let (len, _) =
+            tokio::time::timeout(std::time::Duration::from_secs(3), sock.recv_from(&mut buf))
+                .await
+                .expect("response timeout")
+                .expect("recv response");
+
+        assert_eq!(&buf[len - 4..len], &[192, 0, 2, 123]);
+        assert_eq!(buf[0], 0xAB);
+        server_task.abort();
+    }
+
+    #[test]
     fn test_validate_domain() {
         assert!(DnsBlocker::validate_domain("ads.example.com").is_ok());
         assert_eq!(
@@ -1181,5 +1364,21 @@ mod tests {
         assert!(blocker
             .cached_response_for("stale.test", 1, &query_a)
             .is_none());
+    }
+
+    #[test]
+    fn test_perf_validate_domain() {
+        crate::modules::perf::measure("dns::validate_domain", 200_000, || {
+            let _ = std::hint::black_box(DnsBlocker::validate_domain("ads.example.com"));
+        });
+    }
+
+    #[test]
+    fn test_perf_should_block() {
+        let blocker = DnsBlocker::new();
+        blocker.set_custom_rules(&["ads.example.com".to_string()], &[]);
+        crate::modules::perf::measure("dns::should_block", 500_000, || {
+            std::hint::black_box(blocker.should_block("sub.ads.example.com"));
+        });
     }
 }

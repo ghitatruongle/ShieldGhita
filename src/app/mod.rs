@@ -1,3 +1,4 @@
+pub mod hotkey;
 pub mod ui_bridge;
 
 use crate::modules::blocker::WfpBlocker;
@@ -72,6 +73,9 @@ impl AppState {
 
         #[cfg(feature = "admin")]
         let local_manager = Arc::new(crate::modules::local::LocalManager::new(monitor.clone()));
+
+        #[cfg(feature = "admin")]
+        local_manager.attach_dns_policy(&dns_blocker);
 
         let state = Arc::new(Self {
             blocker: dns_blocker,

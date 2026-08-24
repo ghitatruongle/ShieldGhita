@@ -6,35 +6,44 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tracing::info;
 
+static APPLY_PROTECTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn apply_protection(s: &Arc<AppState>, enabled: bool) {
+    let _sequence_guard = APPLY_PROTECTION_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    s.protection_atomic.store(enabled, Ordering::SeqCst);
+    if let Ok(mut cfg_guard) = s.config.write() {
+        cfg_guard.protection_enabled = enabled;
+        let _ = cfg_guard.save();
+    }
+    if enabled {
+        if let Err(e) = dns_manager::set_system_dns("127.0.0.1") {
+            tracing::error!("Failed to enable master DNS: {}", e);
+        }
+        if let Err(e) = s.wfp_blocker.enable() {
+            tracing::warn!("WFP enable notice: {}", e);
+        }
+        if let Ok(mut sd) = s.self_defense.write() {
+            let _ = sd.enable();
+        }
+    } else {
+        if let Err(e) = dns_manager::restore_system_dns() {
+            tracing::error!("Failed to restore DNS: {}", e);
+        }
+        if let Err(e) = s.wfp_blocker.disable() {
+            tracing::warn!("WFP disable notice: {}", e);
+        }
+        if let Ok(mut sd) = s.self_defense.write() {
+            let _ = sd.disable();
+        }
+    }
+}
+
 pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
     let s = state.clone();
     ui.on_toggle_protection(move |enabled| {
-        s.protection_atomic.store(enabled, Ordering::SeqCst);
-        if let Ok(mut cfg_guard) = s.config.write() {
-            cfg_guard.protection_enabled = enabled;
-            let _ = cfg_guard.save();
-        }
-        if enabled {
-            if let Err(e) = dns_manager::set_system_dns("127.0.0.1") {
-                tracing::error!("Failed to enable master DNS: {}", e);
-            }
-            if let Err(e) = s.wfp_blocker.enable() {
-                tracing::warn!("WFP enable notice: {}", e);
-            }
-            if let Ok(mut sd) = s.self_defense.write() {
-                let _ = sd.enable();
-            }
-        } else {
-            if let Err(e) = dns_manager::restore_system_dns() {
-                tracing::error!("Failed to restore DNS: {}", e);
-            }
-            if let Err(e) = s.wfp_blocker.disable() {
-                tracing::warn!("WFP disable notice: {}", e);
-            }
-            if let Ok(mut sd) = s.self_defense.write() {
-                let _ = sd.disable();
-            }
-        }
+        apply_protection(&s, enabled);
     });
 
     ui.on_toggle_master_lock(move |locked| {
@@ -148,13 +157,20 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
     let s = state.clone();
     let ui_weak_lang = ui.as_weak();
     ui.on_change_language(move |lang| {
-        let lang_str = lang.to_string();
+        let lang_str = match lang.as_str() {
+            "en" => "en".to_string(),
+            "zh" => "zh".to_string(),
+            _ => "vi".to_string(),
+        };
         if let Ok(mut cfg_guard) = s.config.write() {
             cfg_guard.language = lang_str.clone();
             let _ = cfg_guard.save();
         }
+        crate::modules::i18n::set_language(&lang_str);
         if let Some(ui_inst) = ui_weak_lang.upgrade() {
-            ui_inst.set_is_vi(lang_str == "vi");
+            ui_inst
+                .global::<crate::I18n>()
+                .set_lang(crate::modules::i18n::current_index() as i32);
         }
         info!("Language preference set to: {}", lang_str);
     });
@@ -211,6 +227,12 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         s_sec.security_engine.clear_incidents();
     });
 
+    let s_exp = state.clone();
+    ui.on_export_incidents(move || match s_exp.security_engine.export_incidents_csv() {
+        Ok(path) => info!("Incidents exported to CSV: {}", path),
+        Err(e) => tracing::error!("Failed to export incidents: {}", e),
+    });
+
     let s = state.clone();
     ui.on_add_custom_rule(move |rule| {
         let rule_str = rule.to_string();
@@ -220,7 +242,15 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         let normalized = match crate::modules::dns::DnsBlocker::validate_domain(&rule_str) {
             Ok(d) => d,
             Err(e) => {
-                tracing::error!("Từ chối rule chặn không hợp lệ: {}", e);
+                tracing::error!(
+                    "{}: {}",
+                    crate::modules::i18n::tr(
+                        "Từ chối rule chặn không hợp lệ",
+                        "Rejected invalid block rule",
+                        "拒绝了无效的屏蔽规则"
+                    ),
+                    e
+                );
                 return;
             }
         };
@@ -260,7 +290,15 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         let normalized = match crate::modules::dns::DnsBlocker::validate_domain(&rule_str) {
             Ok(d) => d,
             Err(e) => {
-                tracing::error!("Từ chối rule cho phép không hợp lệ: {}", e);
+                tracing::error!(
+                    "{}: {}",
+                    crate::modules::i18n::tr(
+                        "Từ chối rule cho phép không hợp lệ",
+                        "Rejected invalid allow rule",
+                        "拒绝了无效的允许规则"
+                    ),
+                    e
+                );
                 return;
             }
         };

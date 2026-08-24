@@ -21,14 +21,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let fmt_layer = tracing_subscriber::fmt::layer();
 
+    let logs_dir =
+        std::path::PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string()))
+            .join("ShieldGhita")
+            .join("logs");
+    let file_appender = tracing_appender::rolling::daily(&logs_dir, "shield_ghita.log");
+    let (file_writer, log_guard) = tracing_appender::non_blocking(file_appender);
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(file_writer);
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("shield_ghita=info".parse()?),
         )
         .with(fmt_layer)
+        .with(file_layer)
         .with(in_app_layer)
         .init();
+
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("PANIC: {}", info);
+        default_panic_hook(info);
+    }));
+    std::mem::forget(log_guard);
 
     info!(
         "Starting Shield Ghita v{} Master Controller...",
@@ -69,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if !should_hide {
         ui.show()?;
+        ui.window().set_minimized(false);
         app::ui_bridge::poller::WINDOW_VISIBLE.store(true, std::sync::atomic::Ordering::SeqCst);
     } else {
         app::ui_bridge::poller::WINDOW_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);

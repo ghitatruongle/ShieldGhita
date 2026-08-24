@@ -4,7 +4,7 @@
 
 **Master Internet Controller & Ultra-Fast Network Security Shield for Windows**
 
-[![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
+[![Version](https://img.shields.io/badge/version-0.0.5-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com)
 
@@ -38,8 +38,17 @@
 ### 3. Active Local Area Network (LAN) Scanner
 - **Active Layer 2 ARP Subnet Sweep**: Concurrently scans all 254 IP addresses across the local `/24` subnet using fast native `SendARP` Win32 API.
 - **Detailed Hardware & Service Discovery**: Inspects IP address, MAC address, Hardware Manufacturer (OUI/Vendor), ICMP ping latency, NetBIOS hostnames, and open service ports (CCTV Camera, Smart TV, Mobile Phone, PC/Laptop, IoT).
+- **Open Ports Risk Audit**: Probes 38 common service ports per device with HIGH / MEDIUM / SAFE risk badges and actionable hardening advice.
+- **Detection Confidence Score**: Every device row shows how confidently it was identified (vendor + mDNS + SSDP + NetBIOS signals).
 
-### 4. Real-time Traffic & Connection Inspector
+### 4. Intrusion Detection & Prevention (IDS / IPS)
+- **DNS Flood / DoS Detection**: Flags abnormal per-client query bursts with an always-on hard rate limit that stays active even when IDS is toggled off.
+- **DNS Tunneling & Data Exfiltration Watch**: Entropy analysis flags suspiciously encoded subdomains used for covert tunnels.
+- **Botnet / C2 Domain Blocking**: Auto-isolates queries to `.onion`, `.bit`, `.bazar` underground networks via NXDOMAIN drops.
+- **ARP Spoofing / MITM Watchdog**: Alerts the moment your gateway's MAC address changes unexpectedly.
+- **Real-Time Incident Feed**: Color-coded incident log (CRITICAL / HIGH) with the exact IPS action taken for each threat, plus a live Security Score (0–100).
+
+### 5. Real-time Traffic & Connection Inspector
 - Live upload and download bandwidth throughput metrics read directly from kernel counters.
 - Comprehensive active socket inspector tracking processes (PID, Process Name, Protocol, Local and Remote IP/Port tuples).
 
@@ -48,17 +57,24 @@
 - **100% Fail-Safe DNS Restoration**: Backs up and automatically restores original network DNS settings (DHCP or Static) upon graceful shutdown or crash recovery.
 - **Stealth Background Execution**: Zero black console window flashes or flickering during startup and background operation.
 
-### 6. Settings & Multi-Language Support
-- In-app dynamic language switching between **English 🇬🇧** and **Tiếng Việt 🇻🇳**.
-- Configurable settings for Windows autostart, minimize to tray, ad-blocking notifications, and custom filter rules.
+### 6. Master Internet Lock & Fail-Safe DNS Restoration
+- **Master Internet Lock**: Instantly isolate and block all outbound internet traffic with one click during security incidents.
+- **100% Fail-Safe DNS Restoration**: Backs up and automatically restores original network DNS settings (DHCP or Static) upon graceful shutdown or crash recovery.
+- **Stealth Background Execution**: Zero black console window flashes or flickering during startup and background operation.
+
+### 7. Settings, Multi-Language Support & Desktop Comfort
+- In-app dynamic language switching between **English 🇬🇧**, **Tiếng Việt 🇻🇳** and **简体中文 🇨🇳**; the setup installer also lets you pick the app language (or follow Windows).
+- Configurable settings for Windows autostart, close-to-tray / minimize-to-tray, start hidden in tray, ad-blocking notifications, and custom filter rules (blacklist + whitelist with validation).
+- Resizable main window that remembers its position and size between sessions.
+- One-click CSV export of the full DNS query log.
 
 ---
 
 ## Installation & Getting Started
 
 ### 1. Pre-built Setup Installer
-- Download `ShieldGhita_Setup_v0.0.1.exe` and execute with **Administrator** privileges.
-- The installer automatically terminates running instances, cleanly uninstalls previous versions, and deploys the new release safely.
+- Download `ShieldGhita_Setup_v0.0.5.exe` and execute with **Administrator** privileges.
+- The installer itself runs in English, Tiếng Việt or 简体中文, lets you choose the application language, automatically terminates running instances, cleanly uninstalls previous versions, and deploys the new release safely.
 
 ### 2. Build From Source (For Developers)
 Requires **Rust** (Cargo toolchain) and an elevated **Administrator** terminal:
@@ -111,27 +127,38 @@ cargo run --release
 ### 3. Quét chủ động thiết bị mạng LAN (Active LAN Scanner)
 - **Quét toàn bộ dải mạng /24**: Sử dụng `SendARP` Win32 API quét đồng thời 254 IP trong mạng nội bộ, khắc phục hoàn toàn tình trạng thiếu thiết bị của bảng ARP thụ động.
 - **Nhận diện thiết bị thông minh**: Hiển thị chi tiết IP, MAC, nhà sản xuất (Vendor/OUI), độ trễ (Ping latency), tên NetBIOS và phân loại Camera, Smart TV, Điện thoại, Máy tính, IoT.
+- **Kiểm toán cổng mở & rủi ro**: Quét 38 cổng dịch vụ phổ biến trên từng thiết bị, gắn nhãn rủi ro CAO / TRUNG BÌNH / AN TOÀN kèm khuyến nghị khắc phục cụ thể.
+- **Điểm tin cậy nhận diện (Confidence)**: Mỗi thiết bị hiển thị độ tin cậy nhận dạng dựa trên tín hiệu Vendor + mDNS + SSDP + NetBIOS.
 
-### 4. Giám sát kết nối & Lưu lượng thời gian thực (Traffic Monitor)
+### 4. Phát hiện & Ngăn chặn xâm nhập (IDS / IPS)
+- **Phát hiện DNS Flood / DoS**: Cảnh báo truy vấn bất thường theo từng máy client với cơ chế giới hạn tần suất nền tảng luôn hoạt động kể cả khi IDS đang tắt.
+- **Giám sát DNS Tunneling & Rò rỉ dữ liệu**: Phân tích Entropy phát hiện subdomain mã hóa bất thường dùng để đào hầm dữ liệu trái phép.
+- **Chặn miền Botnet / C2**: Tự động cách ly truy vấn tới các mạng ngầm `.onion`, `.bit`, `.bazar` bằng NXDOMAIN Drop.
+- **Giám sát ARP Spoofing / MITM**: Cảnh báo ngay khi địa chỉ MAC của Gateway thay đổi bất thường.
+- **Nhật ký sự cố thời gian thực**: Ghi log phân màu theo mức độ (CRITICAL / HIGH) kèm biện pháp IPS đã thực thi và Điểm An ninh trực tiếp (0–100).
+
+### 5. Giám sát kết nối & Lưu lượng thời gian thực (Traffic Monitor)
 - Thống kê chi tiết băng thông Tải về (Download) và Tải lên (Upload) trực tiếp từ Kernel không gây tốn CPU.
 - Theo dõi toàn bộ các kết nối mạng đang hoạt động theo từng tiến trình (PID, Process Name, Protocol, Local/Remote IP & Port).
 
-### 5. Khóa mạng khẩn cấp & Cơ chế hoàn nguyên DNS an toàn 100%
+### 6. Khóa mạng khẩn cấp & Cơ chế hoàn nguyên DNS an toàn 100%
 - **Master Internet Lock**: Khóa toàn bộ truy cập Internet ra bên ngoài chỉ với một click khi phát hiện nguy cơ bảo mật.
 - **Khôi phục DNS thông minh 100%**: Tự động sao lưu và hoàn nguyên cấu hình DNS gốc (DHCP hoặc IP tĩnh) của máy khi đóng app hoặc khi gặp sự cố, đảm bảo máy tính không bao giờ bị mất mạng.
 - **Chạy ngầm hoàn toàn êm ái (Stealth Execution)**: Loại bỏ triệt để các cửa sổ console đen nhấp nháy khi app chạy nền.
 
-### 6. Cài đặt & Chuyển đổi ngôn ngữ Tiếng Anh / Tiếng Việt
-- Tích hợp tab Cài đặt trong app giúp chuyển đổi linh hoạt giữa **Tiếng Việt 🇻🇳** và **Tiếng Anh 🇬🇧**.
-- Tùy chỉnh tự khởi động cùng Windows, thu nhỏ xuống khay hệ thống, bật/tắt thông báo chặn quảng cáo.
+### 7. Cài đặt, Đa ngôn ngữ & Trải nghiệm Desktop
+- Chuyển đổi ngôn ngữ linh hoạt ngay trong app giữa **Tiếng Việt 🇻🇳**, **English 🇬🇧** và **简体中文 🇨🇳**; trình cài đặt cũng cho phép chọn ngôn ngữ ứng dụng (hoặc theo ngôn ngữ Windows).
+- Tùy chỉnh tự khởi động cùng Windows, đóng/thu nhỏ vào khay hệ thống, khởi động ẩn trong khay, bật/tắt thông báo chặn quảng cáo và bộ lọc tùy chỉnh (Blacklist + Whitelist có kiểm tra hợp lệ).
+- Cửa sổ thay đổi kích thước tự do, ghi nhớ vị trí và kích thước giữa các lần chạy.
+- Xuất nhật ký truy vấn DNS ra file CSV chỉ với một nút bấm.
 
 ---
 
 ## Hướng dẫn cài đặt & Sử dụng
 
 ### 1. Cài đặt nhanh qua bộ Setup
-- Tải tệp cài đặt `ShieldGhita_Setup_v0.0.1.exe` và chạy với quyền **Administrator**.
-- Trình cài đặt sẽ tự động dừng ứng dụng cũ, dọn sạch phiên bản trước và cập nhật phiên bản mới một cách an toàn.
+- Tải tệp cài đặt `ShieldGhita_Setup_v0.0.5.exe` và chạy với quyền **Administrator**.
+- Trình cài đặt hỗ trợ tiếng Việt / English / 简体中文, cho phép chọn ngôn ngữ ứng dụng, tự động dừng ứng dụng cũ, dọn sạch phiên bản trước và cập nhật phiên bản mới một cách an toàn.
 
 ### 2. Chạy từ mã nguồn (Dành cho Developer)
 Yêu cầu đã cài đặt **Rust** (Cargo) và chạy Terminal với quyền **Administrator**:

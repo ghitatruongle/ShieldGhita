@@ -1,6 +1,7 @@
 use crate::app::AppState;
+use crate::modules::i18n;
 use crate::modules::system::dns_manager;
-use slint::{ModelRc, VecModel};
+use slint::{ComponentHandle, ModelRc, VecModel};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -18,59 +19,73 @@ pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
     ui_win.set_master_locked(is_locked);
     ui_win.set_silent_sinkhole(s.blocker.is_silent_sinkhole());
 
-    let is_vi = s.config.read().map(|c| c.language == "vi").unwrap_or(true);
-    ui_win.set_is_vi(is_vi);
-
-    let protection = s.protection_atomic.load(Ordering::Relaxed);
-    ui_win.set_protection_enabled(protection);
-    ui_win.set_status_text(if is_locked {
-        if is_vi {
-            "🔒 Đã khóa Internet".into()
-        } else {
-            "🔒 Internet Locked".into()
-        }
-    } else if protection {
-        if is_vi {
-            "🟢 Đang bảo vệ tối cao".into()
-        } else {
-            "🟢 Active Protection".into()
-        }
-    } else {
-        if is_vi {
-            "🔴 Đã tạm dừng".into()
-        } else {
-            "🔴 Paused".into()
-        }
-    });
-
-    let (autostart, minimize, notify) = s
+    let (
+        lang_code,
+        autostart,
+        minimize,
+        notify,
+        net_adblock,
+        attack_det,
+        auto_blk,
+        arp_det,
+        min_tray_mode,
+        start_hidden,
+        last_blocklist_update,
+    ) = s
         .config
         .read()
         .map(|c| {
             (
+                c.language.clone(),
                 c.start_with_windows,
                 c.minimize_to_tray,
                 c.enable_block_notifications,
-            )
-        })
-        .unwrap_or((true, true, true));
-    let (net_adblock, attack_det, auto_blk, arp_det) = s
-        .config
-        .read()
-        .map(|c| {
-            (
                 c.network_wide_adblock_enabled,
                 c.attack_detection_enabled,
                 c.auto_block_attacks,
                 c.arp_spoof_detection,
+                c.minimize_to_tray_on_minimize,
+                c.start_hidden_in_tray,
+                c.last_blocklist_update.clone(),
             )
         })
-        .unwrap_or((false, false, false, false));
-    let (min_tray_mode, start_hidden) = s
-        .config
-        .read()
-        .map(|c| (c.minimize_to_tray_on_minimize, c.start_hidden_in_tray))
-        .unwrap_or((true, false));
+        .unwrap_or((
+            "vi".to_string(),
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            None,
+        ));
+    i18n::set_language(&lang_code);
+    ui_win
+        .global::<crate::I18n>()
+        .set_lang(i18n::current_index() as i32);
+
+    let protection = s.protection_atomic.load(Ordering::Relaxed);
+    ui_win.set_protection_enabled(protection);
+    ui_win.set_status_text(if is_locked {
+        i18n::tr(
+            "🔒 Đã khóa Internet",
+            "🔒 Internet Locked",
+            "🔒 已锁定互联网",
+        )
+        .into()
+    } else if protection {
+        i18n::tr(
+            "🟢 Đang bảo vệ tối cao",
+            "🟢 Active Protection",
+            "🟢 高级防护中",
+        )
+        .into()
+    } else {
+        i18n::tr("🔴 Đã tạm dừng", "🔴 Paused", "🔴 已暂停").into()
+    });
 
     ui_win.set_autostart_enabled(autostart);
     ui_win.set_minimize_to_tray_enabled(minimize);
@@ -93,23 +108,18 @@ pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
     ui_win.set_lan_devices_count(s.monitor.get_lan_device_count() as i32);
     ui_win.set_is_scanning(s.monitor.is_lan_scanning());
 
-    let last_update = s
-        .config
-        .read()
-        .ok()
-        .and_then(|c| c.last_blocklist_update.clone())
-        .unwrap_or_else(|| {
-            if is_vi {
-                "Chưa cập nhật".to_string()
-            } else {
-                "Not updated".to_string()
-            }
-        });
-    ui_win.set_last_update_text(if is_vi {
-        format!("Cập nhật: {}", last_update).into()
-    } else {
-        format!("Updated: {}", last_update).into()
-    });
+    let last_update = last_blocklist_update
+        .unwrap_or_else(|| i18n::tr("Chưa cập nhật", "Not updated", "尚未更新").to_string());
+    ui_win.set_last_update_text(
+        if lang_code == "vi" {
+            format!("Cập nhật: {}", last_update)
+        } else if lang_code == "zh" {
+            format!("更新时间: {}", last_update)
+        } else {
+            format!("Updated: {}", last_update)
+        }
+        .into(),
+    );
 
     let active_tab = ui_win.get_active_tab();
     match active_tab {

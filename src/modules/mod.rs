@@ -1,8 +1,10 @@
 pub mod blocker;
 pub mod config;
 pub mod dns;
+pub mod i18n;
 pub mod logger;
 pub mod monitor;
+pub mod perf;
 pub mod security;
 pub mod sinkhole;
 pub mod system;

@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
+use crate::modules::i18n;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityIncident {
     pub id: u64,
@@ -216,17 +218,32 @@ impl SecurityEngine {
         if char_count == 0 {
             return 0.0;
         }
-        let mut map = HashMap::new();
-        for ch in s.chars() {
-            *map.entry(ch).or_insert(0usize) += 1;
-        }
         let len = char_count as f64;
-        let mut entropy = 0.0;
-        for (_, count) in map {
-            let p = count as f64 / len;
-            entropy -= p * p.log2();
+        if s.is_ascii() {
+            let mut counts = [0u32; 128];
+            for b in s.bytes() {
+                counts[b as usize] += 1;
+            }
+            let mut entropy = 0.0;
+            for count in counts {
+                if count > 0 {
+                    let p = f64::from(count) / len;
+                    entropy -= p * p.log2();
+                }
+            }
+            entropy
+        } else {
+            let mut map = HashMap::new();
+            for ch in s.chars() {
+                *map.entry(ch).or_insert(0usize) += 1;
+            }
+            let mut entropy = 0.0;
+            for (_, count) in map {
+                let p = count as f64 / len;
+                entropy -= p * p.log2();
+            }
+            entropy
         }
-        entropy
     }
 
     pub fn inspect_dns_query(&self, source_ip: &str, domain: &str) -> Option<SecurityIncident> {
@@ -265,18 +282,42 @@ impl SecurityEngine {
         if is_flooding {
             let mitigation = if auto_block {
                 self.block_ip_temporarily(source_ip, Duration::from_secs(300));
-                "Đã tự động khóa IP nguồn trong 5 phút (IPS Mitigation)"
+                i18n::tr(
+                    "Đã tự động khóa IP nguồn trong 5 phút (IPS Mitigation)",
+                    "Source IP auto-blocked for 5 minutes (IPS Mitigation)",
+                    "已自动封锁源 IP 5 分钟 (IPS 处置)",
+                )
             } else {
-                "Cảnh báo bảo mật (Auto-block chưa kích hoạt)"
+                i18n::tr(
+                    "Cảnh báo bảo mật (Auto-block chưa kích hoạt)",
+                    "Security alert (Auto-block not enabled)",
+                    "安全告警 (未启用自动封锁)",
+                )
             };
 
-            return Some(self.record_incident(
-                "Tấn công từ chối dịch vụ (DNS Flood / DoS)",
-                source_ip,
-                &format!(
+            let details = match i18n::current_index() {
+                i18n::EN => format!(
+                    "Abnormal query rate: {} req/2s (threshold {}/s)",
+                    query_count_last_sec, limit
+                ),
+                i18n::ZH => format!(
+                    "异常查询频率：{} 次/2秒（超过阈值 {}/s）",
+                    query_count_last_sec, limit
+                ),
+                _ => format!(
                     "Tần suất truy vấn bất thường: {} yêu cầu/2s (vượt ngưỡng {}/s)",
                     query_count_last_sec, limit
                 ),
+            };
+
+            return Some(self.record_incident(
+                i18n::tr(
+                    "Tấn công từ chối dịch vụ (DNS Flood / DoS)",
+                    "Denial-of-Service attack (DNS Flood / DoS)",
+                    "拒绝服务攻击 (DNS Flood / DoS)",
+                ),
+                source_ip,
+                &details,
                 "CRITICAL",
                 mitigation,
             ));
@@ -290,15 +331,42 @@ impl SecurityEngine {
                     if entropy >= 3.85 {
                         let mitigation = if auto_block {
                             self.block_ip_temporarily(source_ip, Duration::from_secs(180));
-                            "Đã hủy gói tin & cô lập kết nối nguồn 3 phút"
+                            i18n::tr(
+                                "Đã hủy gói tin & cô lập kết nối nguồn 3 phút",
+                                "Packets dropped & source isolated for 3 minutes",
+                                "已丢弃数据包并隔离源连接 3 分钟",
+                            )
                         } else {
-                            "Đã ghi nhận mối nguy rò rỉ dữ liệu"
+                            i18n::tr(
+                                "Đã ghi nhận mối nguy rò rỉ dữ liệu",
+                                "Data-exfiltration risk logged",
+                                "已记录数据泄露风险",
+                            )
+                        };
+
+                        let details = match i18n::current_index() {
+                            i18n::EN => format!(
+                                "Suspicious subdomain carries encoded payload: '{}' (Entropy: {:.2}, Length: {})",
+                                sub, entropy, sub.len()
+                            ),
+                            i18n::ZH => format!(
+                                "可疑子域名包含编码负载：'{}'（熵：{:.2}，长度：{}）",
+                                sub, entropy, sub.len()
+                            ),
+                            _ => format!(
+                                "Subdomain nghi vấn chứa payload mã hóa: '{}' (Entropy: {:.2}, Độ dài: {})",
+                                sub, entropy, sub.len()
+                            ),
                         };
 
                         return Some(self.record_incident(
-                            "Phát hiện DNS Tunneling / Rò rỉ dữ liệu",
+                            i18n::tr(
+                                "Phát hiện DNS Tunneling / Rò rỉ dữ liệu",
+                                "DNS Tunneling / Data Exfiltration detected",
+                                "检测到 DNS 隧道 / 数据泄露",
+                            ),
                             source_ip,
-                            &format!("Subdomain nghi vấn chứa payload mã hóa: '{}' (Entropy: {:.2}, Độ dài: {})", sub, entropy, sub.len()),
+                            &details,
                             "HIGH",
                             mitigation,
                         ));
@@ -310,18 +378,36 @@ impl SecurityEngine {
         let lower = domain.to_lowercase();
         if lower.ends_with(".onion") || lower.ends_with(".bit") || lower.ends_with(".bazar") {
             let mitigation = if auto_block {
-                "Đã tự động cách ly tên miền độc hại (NXDOMAIN Drop)"
+                i18n::tr(
+                    "Đã tự động cách ly tên miền độc hại (NXDOMAIN Drop)",
+                    "Malicious domain auto-isolated (NXDOMAIN Drop)",
+                    "已自动隔离恶意域名 (NXDOMAIN 丢弃)",
+                )
             } else {
-                "Cảnh báo truy cập Darknet/Botnet"
+                i18n::tr(
+                    "Cảnh báo truy cập Darknet/Botnet",
+                    "Darknet/Botnet access alert",
+                    "Darknet/僵尸网络访问告警",
+                )
             };
 
-            return Some(self.record_incident(
-                "Máy chủ điều khiển Botnet / C2 độc hại",
-                source_ip,
-                &format!(
+            let details = match i18n::current_index() {
+                i18n::EN => format!("Query to botnet underground domain detected: {}", domain),
+                i18n::ZH => format!("检测到访问僵尸网络隐蔽域名的查询：{}", domain),
+                _ => format!(
                     "Phát hiện truy vấn domain thuộc mạng lưới ngầm botnet: {}",
                     domain
                 ),
+            };
+
+            return Some(self.record_incident(
+                i18n::tr(
+                    "Máy chủ điều khiển Botnet / C2 độc hại",
+                    "Botnet / Malicious C2 Server",
+                    "僵尸网络 / 恶意 C2 控制服务器",
+                ),
+                source_ip,
+                &details,
                 "HIGH",
                 mitigation,
             ));
@@ -346,12 +432,34 @@ impl SecurityEngine {
                 && !current_gateway_mac.is_empty()
                 && current_gateway_mac != "00:00:00:00:00:00"
             {
+                let details = match i18n::current_index() {
+                    i18n::EN => format!(
+                        "Gateway {} MAC suddenly changed from {} to {}. A rogue device may be sniffing traffic!",
+                        gateway_ip, last_mac, current_gateway_mac
+                    ),
+                    i18n::ZH => format!(
+                        "网关 {} 的 MAC 地址突然从 {} 变为 {}。疑似存在陌生设备正在窃听流量！",
+                        gateway_ip, last_mac, current_gateway_mac
+                    ),
+                    _ => format!(
+                        "Địa chỉ MAC của Gateway {} bất ngờ bị thay đổi từ {} sang {}. Nghi vấn có thiết bị lạ đang nghe lén dữ liệu!",
+                        gateway_ip, last_mac, current_gateway_mac
+                    ),
+                };
                 let incident = self.record_incident(
-                    "Tấn công giả mạo địa chỉ ARP (ARP Spoofing / MITM)",
+                    i18n::tr(
+                        "Tấn công giả mạo địa chỉ ARP (ARP Spoofing / MITM)",
+                        "ARP address spoofing attack (ARP Spoofing / MITM)",
+                        "ARP 地址伪造攻击 (ARP 欺骗 / 中间人)",
+                    ),
                     gateway_ip,
-                    &format!("Địa chỉ MAC của Gateway {} bất ngờ bị thay đổi từ {} sang {}. Nghi vấn có thiết bị lạ đang nghe lén dữ liệu!", gateway_ip, last_mac, current_gateway_mac),
+                    &details,
                     "CRITICAL",
-                    "Cảnh báo khẩn cấp: Đã phát hiện cuộc tấn công chuyển hướng mạng",
+                    i18n::tr(
+                        "Cảnh báo khẩn cấp: Đã phát hiện cuộc tấn công chuyển hướng mạng",
+                        "Emergency alert: Network redirection attack detected",
+                        "紧急告警：检测到网络流量劫持攻击",
+                    ),
                 );
                 *gw_guard = Some((gateway_ip.to_string(), current_gateway_mac.to_string()));
                 return Some(incident);
@@ -361,6 +469,32 @@ impl SecurityEngine {
         }
 
         None
+    }
+
+    pub fn export_incidents_csv(&self) -> Result<String, String> {
+        let incidents = self.incidents.read().map_err(|e| e.to_string())?;
+        let mut csv = String::from("time,severity,incident_type,source_ip,details,mitigation\n");
+        for inc in incidents.iter() {
+            csv.push_str(&format!(
+                "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
+                inc.time,
+                inc.severity,
+                inc.incident_type,
+                inc.source_ip,
+                inc.details.replace('"', "\"\""),
+                inc.mitigation.replace('"', "\"\"")
+            ));
+        }
+        let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        let path = std::path::PathBuf::from(app_data)
+            .join("ShieldGhita")
+            .join(format!(
+                "incidents_export_{}.csv",
+                Local::now().format("%Y%m%d_%H%M%S")
+            ));
+        std::fs::write(&path, &csv).map_err(|e| e.to_string())?;
+        info!("Exported {} incidents to {:?}", incidents.len(), path);
+        Ok(path.to_string_lossy().to_string())
     }
 
     pub fn get_security_score(&self) -> i32 {
@@ -450,5 +584,14 @@ mod tests {
             assert!(!sec.enforce_hard_rate_limit("127.0.0.1"));
         }
         assert_eq!(sec.hard_drop_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_perf_calc_entropy() {
+        crate::modules::perf::measure("security::calc_entropy", 200_000, || {
+            std::hint::black_box(SecurityEngine::calc_entropy(
+                "xkf83kadfjw93jdakslfjq2984ujdkslfjq93udjasdk123",
+            ));
+        });
     }
 }

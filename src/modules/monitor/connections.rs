@@ -123,12 +123,26 @@ impl ConnectionTracker {
                 let destinations_summary = if remotes.len() <= 2 {
                     remotes.join(", ")
                 } else {
-                    format!(
-                        "{}, {} (+{} khác)",
-                        remotes[0],
-                        remotes[1],
-                        remotes.len() - 2
-                    )
+                    match crate::modules::i18n::current_index() {
+                        crate::modules::i18n::EN => format!(
+                            "{}, {} (+{} more)",
+                            remotes[0],
+                            remotes[1],
+                            remotes.len() - 2
+                        ),
+                        crate::modules::i18n::ZH => format!(
+                            "{}, {}（及其他 {} 个）",
+                            remotes[0],
+                            remotes[1],
+                            remotes.len() - 2
+                        ),
+                        _ => format!(
+                            "{}, {} (+{} khác)",
+                            remotes[0],
+                            remotes[1],
+                            remotes.len() - 2
+                        ),
+                    }
                 };
 
                 let has_tcp = list.iter().any(|c| c.protocol == "TCP");

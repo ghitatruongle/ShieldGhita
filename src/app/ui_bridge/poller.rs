@@ -117,6 +117,7 @@ pub fn restore_window_geom(ui: &crate::AppWindow, cfg: &crate::modules::config::
 
     if cfg.window_maximized {
         win.set_maximized(true);
+        win.set_minimized(false);
     }
 }
 
@@ -125,6 +126,8 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
     let ui_weak = ui.as_weak();
     let mut last_seen_geom = sample_window_geom(ui);
     let mut geom_dirty_since: Option<Instant> = None;
+    let mut tray_hide_armed = false;
+    let mut geom_applied = false;
 
     let timer = slint::Timer::default();
     timer.start(
@@ -135,9 +138,21 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
                 return;
             };
 
+            if !geom_applied
+                && WINDOW_VISIBLE.load(Ordering::SeqCst)
+                && !ui_win.window().is_minimized()
+            {
+                if let Ok(cfg) = state.config.read() {
+                    restore_window_geom(&ui_win, &cfg);
+                }
+                ui_win.window().set_minimized(false);
+                geom_applied = true;
+                tray_hide_armed = false;
+            }
+
             handle_menu_events(&ui_win, &state, &show_id, &toggle_id, &quit_id);
             handle_tray_icon_events(&ui_win);
-            handle_minimize_to_tray(&ui_win, &state);
+            handle_minimize_to_tray(&ui_win, &state, &mut tray_hide_armed);
             track_window_geom(&ui_win, &state, &mut last_seen_geom, &mut geom_dirty_since);
             super::refresh::refresh_ui_state(&ui_win, &state);
         },
@@ -191,9 +206,11 @@ fn handle_tray_icon_events(ui_win: &crate::AppWindow) {
                 ..
             } => {
                 if WINDOW_VISIBLE.load(Ordering::SeqCst) {
+                    tracing::info!("Tray click: window visible -> hiding to tray");
                     let _ = ui_win.hide();
                     WINDOW_VISIBLE.store(false, Ordering::SeqCst);
                 } else {
+                    tracing::info!("Tray click: window hidden -> showing");
                     ui_win.window().set_minimized(false);
                     let _ = ui_win.show();
                     WINDOW_VISIBLE.store(true, Ordering::SeqCst);
@@ -203,6 +220,7 @@ fn handle_tray_icon_events(ui_win: &crate::AppWindow) {
                 button: MouseButton::Left,
                 ..
             } => {
+                tracing::info!("Tray double-click: showing window");
                 ui_win.window().set_minimized(false);
                 let _ = ui_win.show();
                 WINDOW_VISIBLE.store(true, Ordering::SeqCst);
@@ -212,15 +230,26 @@ fn handle_tray_icon_events(ui_win: &crate::AppWindow) {
     }
 }
 
-fn handle_minimize_to_tray(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
-    let min_to_tray = s
-        .config
-        .read()
-        .map(|c| c.minimize_to_tray_on_minimize)
-        .unwrap_or(true);
-    if min_to_tray && ui_win.window().is_minimized() {
-        let _ = ui_win.hide();
-        WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+fn handle_minimize_to_tray(
+    ui_win: &crate::AppWindow,
+    s: &Arc<AppState>,
+    tray_hide_armed: &mut bool,
+) {
+    let is_min = ui_win.window().is_minimized();
+    if is_min {
+        let min_to_tray = s
+            .config
+            .read()
+            .map(|c| c.minimize_to_tray_on_minimize)
+            .unwrap_or(true);
+        let visible = WINDOW_VISIBLE.load(Ordering::SeqCst);
+        if *tray_hide_armed && visible && min_to_tray {
+            tracing::info!("Window minimized while running: hiding to tray");
+            let _ = ui_win.hide();
+            WINDOW_VISIBLE.store(false, Ordering::SeqCst);
+        }
+    } else {
+        *tray_hide_armed = true;
     }
 }
 

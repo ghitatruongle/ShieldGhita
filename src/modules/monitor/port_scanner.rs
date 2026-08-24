@@ -1,3 +1,4 @@
+use crate::modules::i18n;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -30,244 +31,406 @@ pub struct OpenPort {
     pub advice: String,
 }
 
-const COMMON_PORTS: &[(u16, &str, PortRisk, &str)] = &[
+pub struct AdviceTexts {
+    pub vi: &'static str,
+    pub en: &'static str,
+    pub zh: &'static str,
+}
+
+const COMMON_PORTS: &[(u16, &str, PortRisk, AdviceTexts)] = &[
     (
         21,
         "FTP",
         PortRisk::High,
-        "Đóng FTP — giao thức truyền mật khẩu không mã hóa.",
+        AdviceTexts {
+            vi: "Đóng FTP — giao thức truyền mật khẩu không mã hóa.",
+            en: "Close FTP — protocol transmits passwords unencrypted.",
+            zh: "关闭 FTP — 明文传输密码的协议。",
+        },
     ),
     (
         23,
         "Telnet",
         PortRisk::High,
-        "Đóng Telnet ngay — không mã hóa, dễ bị nghe lén.",
+        AdviceTexts {
+            vi: "Đóng Telnet ngay — không mã hóa, dễ bị nghe lén.",
+            en: "Disable Telnet immediately — unencrypted, easy to eavesdrop.",
+            zh: "立即关闭 Telnet — 无加密，易被窃听。",
+        },
     ),
     (
         445,
         "SMB",
         PortRisk::High,
-        "Hạn chế chia sẻ file SMB chỉ cho mạng tin cậy.",
+        AdviceTexts {
+            vi: "Hạn chế chia sẻ file SMB chỉ cho mạng tin cậy.",
+            en: "Restrict SMB file sharing to trusted networks only.",
+            zh: "仅在可信网络中开放 SMB 文件共享。",
+        },
     ),
     (
         3389,
         "RDP",
         PortRisk::High,
-        "Đóng Remote Desktop nếu không dùng, hoặc bật Network Level Authentication.",
+        AdviceTexts {
+            vi: "Đóng Remote Desktop nếu không dùng, hoặc bật Network Level Authentication.",
+            en: "Close Remote Desktop if unused, or enable Network Level Authentication.",
+            zh: "不使用时请关闭远程桌面，或启用网络级身份验证 (NLA)。",
+        },
     ),
     (
         554,
         "RTSP",
         PortRisk::High,
-        "Camera an ninh phát trực tiếp — đặt mật khẩu mạnh, isolate VLAN.",
+        AdviceTexts {
+            vi: "Camera an ninh phát trực tiếp — đặt mật khẩu mạnh, isolate VLAN.",
+            en: "Security camera streaming live — set a strong password, isolate VLAN.",
+            zh: "安防摄像头正在直播 — 设置强密码并隔离 VLAN。",
+        },
     ),
     (
         5900,
         "VNC",
         PortRisk::High,
-        "VNC không mã hóa — tắt hoặc chuyển sang tunnel SSH.",
+        AdviceTexts {
+            vi: "VNC không mã hóa — tắt hoặc chuyển sang tunnel SSH.",
+            en: "Unencrypted VNC — turn off or switch to SSH tunnel.",
+            zh: "VNC 无加密 — 关闭或改用 SSH 隧道。",
+        },
     ),
     (
         5901,
         "VNC-alt",
         PortRisk::High,
-        "VNC phiên bản phụ — tắt nếu không dùng.",
+        AdviceTexts {
+            vi: "VNC phiên bản phụ — tắt nếu không dùng.",
+            en: "Secondary VNC port — disable if unused.",
+            zh: "辅助 VNC 端口 — 不使用请关闭。",
+        },
     ),
     (
         5555,
         "ADB",
         PortRisk::High,
-        "Chế độ debug Android đang mở — tắt USB/Wi-Fi debugging.",
+        AdviceTexts {
+            vi: "Chế độ debug Android đang mở — tắt USB/Wi-Fi debugging.",
+            en: "Android debugging mode open — disable USB/Wi-Fi debugging.",
+            zh: "Android 调试模式已开启 — 关闭 USB/Wi-Fi 调试。",
+        },
     ),
     (
         7547,
         "TR-069",
         PortRisk::High,
-        "Cổng quản lý ISP trên router — liên hệ nhà mạng đóng (lỗ hổng Mirai).",
+        AdviceTexts {
+            vi: "Cổng quản lý ISP trên router — liên hệ nhà mạng đóng (lỗ hổng Mirai).",
+            en: "ISP management port on router — ask carrier to close (Mirai flaw).",
+            zh: "路由器上的 ISP 管理端口 — 请联系运营商关闭 (Mirai 漏洞)。",
+        },
     ),
     (
         1433,
         "MSSQL",
         PortRisk::High,
-        "Database SQL Server lộ ra LAN — giới hạn firewall.",
+        AdviceTexts {
+            vi: "Database SQL Server lộ ra LAN — giới hạn firewall.",
+            en: "SQL Server database exposed to LAN — restrict with firewall.",
+            zh: "SQL Server 数据库暴露于局域网 — 用防火墙限制。",
+        },
     ),
     (
         3306,
         "MySQL",
         PortRisk::High,
-        "Database MySQL lộ ra LAN — giới hạn firewall.",
+        AdviceTexts {
+            vi: "Database MySQL lộ ra LAN — giới hạn firewall.",
+            en: "MySQL database exposed to LAN — restrict with firewall.",
+            zh: "MySQL 数据库暴露于局域网 — 用防火墙限制。",
+        },
     ),
     (
         5432,
         "PostgreSQL",
         PortRisk::High,
-        "Database PostgreSQL lộ ra LAN — giới hạn firewall.",
+        AdviceTexts {
+            vi: "Database PostgreSQL lộ ra LAN — giới hạn firewall.",
+            en: "PostgreSQL database exposed to LAN — restrict with firewall.",
+            zh: "PostgreSQL 数据库暴露于局域网 — 用防火墙限制。",
+        },
     ),
     (
         6379,
         "Redis",
         PortRisk::High,
-        "Redis thường không mật khẩu — đóng ngay.",
+        AdviceTexts {
+            vi: "Redis thường không mật khẩu — đóng ngay.",
+            en: "Redis usually has no password — close immediately.",
+            zh: "Redis 通常无密码 — 立即关闭。",
+        },
     ),
     (
         27017,
         "MongoDB",
         PortRisk::High,
-        "Database MongoDB lộ ra LAN — giới hạn firewall.",
+        AdviceTexts {
+            vi: "Database MongoDB lộ ra LAN — giới hạn firewall.",
+            en: "MongoDB database exposed to LAN — restrict with firewall.",
+            zh: "MongoDB 数据库暴露于局域网 — 用防火墙限制。",
+        },
     ),
     (
         5985,
         "WinRM",
         PortRisk::High,
-        "Windows Remote Management HTTP — chỉ mở khi cần, ưu tiên HTTPS 5986.",
+        AdviceTexts {
+            vi: "Windows Remote Management HTTP — chỉ mở khi cần, ưu tiên HTTPS 5986.",
+            en: "Windows Remote Management HTTP — only when needed, prefer HTTPS 5986.",
+            zh: "Windows 远程管理 HTTP — 非必要不开放，优先 HTTPS 5986。",
+        },
     ),
     (
         5986,
         "WinRM-TLS",
         PortRisk::High,
-        "WinRM qua TLS — đảm bảo chứng chỉ hợp lệ.",
+        AdviceTexts {
+            vi: "WinRM qua TLS — đảm bảo chứng chỉ hợp lệ.",
+            en: "WinRM over TLS — ensure valid certificate.",
+            zh: "基于 TLS 的 WinRM — 确保证书有效。",
+        },
     ),
     (
         1723,
         "PPTP",
         PortRisk::High,
-        "VPN PPTP lỗi thời — chuyển sang L2TP/WireGuard.",
+        AdviceTexts {
+            vi: "VPN PPTP lỗi thời — chuyển sang L2TP/WireGuard.",
+            en: "Outdated PPTP VPN — switch to L2TP/WireGuard.",
+            zh: "过时的 PPTP VPN — 改用 L2TP/WireGuard。",
+        },
     ),
     (
         8000,
         "Hikvision",
         PortRisk::High,
-        "Web camera Hikvision — đổi mật khẩu mặc định, cập nhật firmware.",
+        AdviceTexts {
+            vi: "Web camera Hikvision — đổi mật khẩu mặc định, cập nhật firmware.",
+            en: "Hikvision camera web — change default password, update firmware.",
+            zh: "海康威视摄像头网页 — 更改默认密码并升级固件。",
+        },
     ),
     (
         37777,
         "Dahua",
         PortRisk::High,
-        "Web camera Dahua/KBVision — đổi mật khẩu mặc định, cập nhật firmware.",
+        AdviceTexts {
+            vi: "Web camera Dahua/KBVision — đổi mật khẩu mặc định, cập nhật firmware.",
+            en: "Dahua/KBVision camera web — change default password, update firmware.",
+            zh: "大华/KBVision 摄像头网页 — 更改默认密码并升级固件。",
+        },
     ),
     (
         22,
         "SSH",
         PortRisk::Medium,
-        "SSH mở — đảm bảo cấm đăng nhập root bằng mật khẩu.",
+        AdviceTexts {
+            vi: "SSH mở — đảm bảo cấm đăng nhập root bằng mật khẩu.",
+            en: "SSH open — ensure root password login is disabled.",
+            zh: "SSH 已开放 — 确保禁止 root 密码登录。",
+        },
     ),
     (
         80,
         "HTTP",
         PortRisk::Medium,
-        "Trang web quản trị thiết bị — kiểm tra cần thiết.",
+        AdviceTexts {
+            vi: "Trang web quản trị thiết bị — kiểm tra cần thiết.",
+            en: "Device admin web page — verify necessity.",
+            zh: "设备管理网页 — 按需检查。",
+        },
     ),
     (
         443,
         "HTTPS",
         PortRisk::Medium,
-        "Quản trị HTTPS của thiết bị — kiểm tra cần thiết.",
+        AdviceTexts {
+            vi: "Quản trị HTTPS của thiết bị — kiểm tra cần thiết.",
+            en: "Device HTTPS administration — verify necessity.",
+            zh: "设备 HTTPS 管理 — 按需检查。",
+        },
     ),
     (
         8080,
         "HTTP-alt",
         PortRisk::Medium,
-        "Cổng web phụ — kiểm tra cần thiết.",
+        AdviceTexts {
+            vi: "Cổng web phụ — kiểm tra cần thiết.",
+            en: "Auxiliary web port — verify necessity.",
+            zh: "辅助网页端口 — 按需检查。",
+        },
     ),
     (
         8081,
         "HTTP-alt2",
         PortRisk::Medium,
-        "Cổng web phụ — kiểm tra cần thiết.",
+        AdviceTexts {
+            vi: "Cổng web phụ — kiểm tra cần thiết.",
+            en: "Auxiliary web port — verify necessity.",
+            zh: "辅助网页端口 — 按需检查。",
+        },
     ),
     (
         8443,
         "HTTPS-alt",
         PortRisk::Medium,
-        "Cổng web HTTPS phụ — kiểm tra cần thiết.",
+        AdviceTexts {
+            vi: "Cổng web HTTPS phụ — kiểm tra cần thiết.",
+            en: "Auxiliary HTTPS web port — verify necessity.",
+            zh: "辅助 HTTPS 网页端口 — 按需检查。",
+        },
     ),
     (
         8008,
         "Google-Cast",
         PortRisk::Medium,
-        "Smart TV / Chromecast lắng nghe — bình thường nếu chủ động dùng.",
+        AdviceTexts {
+            vi: "Smart TV / Chromecast lắng nghe — bình thường nếu chủ động dùng.",
+            en: "Smart TV / Chromecast listening — normal if intentionally used.",
+            zh: "智能电视 / Chromecast 监听中 — 主动使用则属正常。",
+        },
     ),
     (
         8009,
         "Chromecast",
         PortRisk::Medium,
-        "Chromecast mở — bình thường nếu chủ động dùng.",
+        AdviceTexts {
+            vi: "Chromecast mở — bình thường nếu chủ động dùng.",
+            en: "Chromecast open — normal if intentionally used.",
+            zh: "Chromecast 开放 — 主动使用则属正常。",
+        },
     ),
     (
         7000,
         "AirPlay",
         PortRisk::Medium,
-        "AirPlay mở — bình thường nếu chủ động dùng.",
+        AdviceTexts {
+            vi: "AirPlay mở — bình thường nếu chủ động dùng.",
+            en: "AirPlay open — normal if intentionally used.",
+            zh: "AirPlay 开放 — 主动使用则属正常。",
+        },
     ),
     (
         8899,
         "ONVIF",
         PortRisk::Medium,
-        "Giao thức camera ONVIF — đặt mật khẩu mạnh.",
+        AdviceTexts {
+            vi: "Giao thức camera ONVIF — đặt mật khẩu mạnh.",
+            en: "ONVIF camera protocol — set a strong password.",
+            zh: "ONVIF 摄像头协议 — 设置强密码。",
+        },
     ),
     (
         1883,
         "MQTT",
         PortRisk::Medium,
-        "IoT MQTT không mã hóa — cân nhắc bật TLS.",
+        AdviceTexts {
+            vi: "IoT MQTT không mã hóa — cân nhắc bật TLS.",
+            en: "Unencrypted IoT MQTT — consider enabling TLS.",
+            zh: "未加密的 IoT MQTT — 考虑启用 TLS。",
+        },
     ),
     (
         8883,
         "MQTT-TLS",
         PortRisk::Medium,
-        "MQTT có mã hóa — đảm bảo chứng chỉ hợp lệ.",
+        AdviceTexts {
+            vi: "MQTT có mã hóa — đảm bảo chứng chỉ hợp lệ.",
+            en: "Encrypted MQTT — ensure valid certificate.",
+            zh: "加密的 MQTT — 确保证书有效。",
+        },
     ),
     (
         5060,
         "SIP",
         PortRisk::Medium,
-        "VoIP SIP — đảm bảo PBX có xác thực.",
+        AdviceTexts {
+            vi: "VoIP SIP — đảm bảo PBX có xác thực.",
+            en: "VoIP SIP — ensure PBX has authentication.",
+            zh: "VoIP SIP — 确保 PBX 已启用认证。",
+        },
     ),
     (
         111,
         "RPC",
         PortRisk::Medium,
-        "portmap/rpcbind — thường không cần trên desktop.",
+        AdviceTexts {
+            vi: "portmap/rpcbind — thường không cần trên desktop.",
+            en: "portmap/rpcbind — rarely needed on desktops.",
+            zh: "portmap/rpcbind — 桌面电脑通常不需要。",
+        },
     ),
     (
         5000,
         "UPnP",
         PortRisk::Medium,
-        "UPnP thiết bị — tắt trên router nếu không tin tưởng.",
+        AdviceTexts {
+            vi: "UPnP thiết bị — tắt trên router nếu không tin tưởng.",
+            en: "Device UPnP — disable on router if not trusted.",
+            zh: "设备 UPnP — 不信任时请在路由器上关闭。",
+        },
     ),
     (
         631,
         "IPP",
         PortRisk::Low,
-        "Máy in mạng (AirPrint/IPP) — bình thường.",
+        AdviceTexts {
+            vi: "Máy in mạng (AirPrint/IPP) — bình thường.",
+            en: "Network printer (AirPrint/IPP) — normal.",
+            zh: "网络打印机 (AirPrint/IPP) — 属正常。",
+        },
     ),
     (
         9100,
         "JetDirect",
         PortRisk::Low,
-        "Cổng in thô — bình thường với máy in.",
+        AdviceTexts {
+            vi: "Cổng in thô — bình thường với máy in.",
+            en: "Raw printing port — normal for printers.",
+            zh: "原始打印端口 — 对打印机属正常。",
+        },
     ),
     (
         139,
         "NetBIOS",
         PortRisk::Low,
-        "NetBIOS Windows truyền thống — bình thường.",
+        AdviceTexts {
+            vi: "NetBIOS Windows truyền thống — bình thường.",
+            en: "Legacy Windows NetBIOS — normal.",
+            zh: "传统 Windows NetBIOS — 属正常。",
+        },
     ),
     (
         62078,
         "iOS-Sync",
         PortRisk::Low,
-        "Cổng đồng bộ iPhone/iPad — bình thường.",
+        AdviceTexts {
+            vi: "Cổng đồng bộ iPhone/iPad — bình thường.",
+            en: "iPhone/iPad sync port — normal.",
+            zh: "iPhone/iPad 同步端口 — 属正常。",
+        },
     ),
     (
         5357,
         "WSD",
         PortRisk::Low,
-        "Web Services for Devices — bình thường trên Windows.",
+        AdviceTexts {
+            vi: "Web Services for Devices — bình thường trên Windows.",
+            en: "Web Services for Devices — normal on Windows.",
+            zh: "Windows 设备 Web 服务 (WSD) — 属正常。",
+        },
     ),
 ];
 
-pub fn port_entry(port: u16) -> Option<&'static (u16, &'static str, PortRisk, &'static str)> {
+pub fn port_entry(port: u16) -> Option<&'static (u16, &'static str, PortRisk, AdviceTexts)> {
     COMMON_PORTS.iter().find(|(p, _, _, _)| *p == port)
 }
 
@@ -288,7 +451,12 @@ pub fn worst_port_advice(ports: &[OpenPort]) -> String {
 
 pub fn format_ports_summary(ports: &[OpenPort]) -> String {
     if ports.is_empty() {
-        return "Không có cổng rủi ro được phát hiện".to_string();
+        return i18n::tr(
+            "Không có cổng rủi ro được phát hiện",
+            "No risky open ports detected",
+            "未发现存在风险的开放端口",
+        )
+        .to_string();
     }
     ports
         .iter()
@@ -315,11 +483,18 @@ pub async fn scan_ports_by_numbers(ip: IpAddr, ports: &[u16]) -> Vec<OpenPort> {
                 .is_ok_and(|r| r.is_ok());
             if open {
                 let (label, risk, advice) = match port_entry(port) {
-                    Some((_, l, r, a)) => ((*l).to_string(), *r, (*a).to_string()),
+                    Some((_, l, r, a)) => {
+                        ((*l).to_string(), *r, i18n::tr(a.vi, a.en, a.zh).to_string())
+                    }
                     None => (
                         format!("svc-{}", port),
                         PortRisk::Medium,
-                        "Cổng mở bất thường — kiểm tra dịch vụ đang lắng nghe.".to_string(),
+                        i18n::tr(
+                            "Cổng mở bất thường — kiểm tra dịch vụ đang lắng nghe.",
+                            "Unusual open port — check the listening service.",
+                            "异常开放端口 — 请检查监听中的服务。",
+                        )
+                        .to_string(),
                     ),
                 };
                 Some(OpenPort {

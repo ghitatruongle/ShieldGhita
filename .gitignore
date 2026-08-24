@@ -12,7 +12,8 @@
 *.iws
 
 QUYTAC
-scripts/
+scripts/*
+!scripts/embed_resources.py
 
 config.json
 rules.json
@@ -36,3 +37,13 @@ installer_admin_output/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+__pycache__/
+*.pyc
+.env
+.env.*
+logs/
+smoke_*/
+*_smoke/
+*.stale
+stale_*.exe

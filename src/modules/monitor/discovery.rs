@@ -1,3 +1,4 @@
+use crate::modules::i18n;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -14,15 +15,35 @@ pub struct DiscoveryHint {
 fn ssdp_keyword(server: &str) -> Option<&'static str> {
     let lower = server.to_lowercase();
     if lower.contains("chromecast") || lower.contains("googlecast") {
-        Some("📺 Smart TV / Chromecast")
+        Some(i18n::tr(
+            "📺 Smart TV / Chromecast",
+            "📺 Smart TV / Chromecast",
+            "📺 智能电视 (Smart TV / Chromecast)",
+        ))
     } else if lower.contains("bravia") || lower.contains("webos") || lower.contains("smarttv") {
-        Some("📺 Smart TV / Thiết bị truyền hình")
+        Some(i18n::tr(
+            "📺 Smart TV / Thiết bị truyền hình",
+            "📺 Smart TV / TV Device",
+            "📺 智能电视 (Smart TV / 电视设备)",
+        ))
     } else if lower.contains("printer") || lower.contains("ipp") || lower.contains("jetdirect") {
-        Some("🖨️ Máy in mạng (AirPrint / IPP)")
+        Some(i18n::tr(
+            "🖨️ Máy in mạng (Printer - AirPrint / IPP)",
+            "🖨️ Network Printer (AirPrint / IPP)",
+            "🖨️ 网络打印机 (Printer - AirPrint / IPP)",
+        ))
     } else if lower.contains("ip-camera") || lower.contains("onvif") || lower.contains("dvr") {
-        Some("📷 Camera an ninh (IP Cam)")
+        Some(i18n::tr(
+            "📷 Camera an ninh (IP Cam)",
+            "📷 Security Camera (IP Cam)",
+            "📷 安防摄像机 (IP Camera)",
+        ))
     } else if lower.contains("nas") || lower.contains("synology") {
-        Some("💾 Thiết bị lưu trữ (NAS)")
+        Some(i18n::tr(
+            "💾 Thiết bị lưu trữ (NAS)",
+            "💾 Storage Device (NAS)",
+            "💾 存储设备 (NAS)",
+        ))
     } else {
         None
     }
@@ -84,19 +105,47 @@ pub async fn probe_ssdp_hints() -> Vec<DiscoveryHint> {
 fn mdns_keyword(service: &str) -> Option<&'static str> {
     let lower = service.to_lowercase();
     if lower.contains("googlecast") {
-        Some("📺 Smart TV / Chromecast")
+        Some(i18n::tr(
+            "📺 Smart TV / Chromecast",
+            "📺 Smart TV / Chromecast",
+            "📺 智能电视 (Smart TV / Chromecast)",
+        ))
     } else if lower.contains("airplay") || lower.contains("raop") {
-        Some("📺 Smart TV / AirPlay")
+        Some(i18n::tr(
+            "📺 Smart TV / AirPlay",
+            "📺 Smart TV / AirPlay",
+            "📺 智能电视 (Smart TV / AirPlay)",
+        ))
     } else if lower.contains("ipp") || lower.contains("printer") || lower.contains("scanner") {
-        Some("🖨️ Máy in mạng (AirPrint / IPP)")
+        Some(i18n::tr(
+            "🖨️ Máy in mạng (Printer - AirPrint / IPP)",
+            "🖨️ Network Printer (AirPrint / IPP)",
+            "🖨️ 网络打印机 (Printer - AirPrint / IPP)",
+        ))
     } else if lower.contains("smb") {
-        Some("💻 Máy tính (File Sharing)")
+        Some(i18n::tr(
+            "💻 Máy tính (PC - File Sharing)",
+            "💻 Computer (PC - File Sharing)",
+            "💻 电脑 (PC - 文件共享)",
+        ))
     } else if lower.contains("ssh") || lower.contains("sftp") {
-        Some("🖥️ Máy tính / Server (Linux/Mac)")
+        Some(i18n::tr(
+            "🖥️ Máy chủ / Server (Linux/Mac)",
+            "🖥️ Computer / Server (Linux/Mac)",
+            "🖥️ 电脑 / 服务器 (Server - Linux/Mac)",
+        ))
     } else if lower.contains("homekit") || lower.contains("companion") {
-        Some("📱 iPhone / iPad (Apple)")
+        Some(i18n::tr(
+            "📱 iPhone / iPad (Apple)",
+            "📱 iPhone / iPad (Apple)",
+            "📱 iPhone / iPad (苹果设备)",
+        ))
     } else if lower.contains("hue") || lower.contains("tuya") || lower.contains("matter") {
-        Some("💡 Thiết bị thông minh (Smart Home)")
+        Some(i18n::tr(
+            "💡 Thiết bị thông minh (Smart Home)",
+            "💡 Smart Device (Smart Home)",
+            "💡 智能设备 (智能家居)",
+        ))
     } else {
         None
     }
@@ -251,7 +300,7 @@ mod tests {
         );
         assert_eq!(
             ssdp_keyword("HP Printer IPP Server"),
-            Some("🖨️ Máy in mạng (AirPrint / IPP)")
+            Some("🖨️ Máy in mạng (Printer - AirPrint / IPP)")
         );
         assert_eq!(ssdp_keyword("Random Device"), None);
     }
@@ -261,7 +310,7 @@ mod tests {
         assert!(mdns_keyword("_googlecast._tcp.local")
             .unwrap()
             .contains("Chromecast"));
-        assert!(mdns_keyword("_ipp._tcp.local").unwrap().contains("Máy in"));
+        assert!(mdns_keyword("_ipp._tcp.local").unwrap().contains("Printer"));
         assert_eq!(mdns_keyword("_unknown._tcp.local"), None);
     }
 

@@ -1,16 +1,38 @@
 pub fn lookup_vendor(mac: &str) -> String {
-    let clean = mac.replace(['-', ':'], "").to_uppercase();
-    if clean.len() < 6 {
-        return "Không xác định / Generic".into();
+    let mut clean = [0u8; 12];
+    let mut n = 0usize;
+    for b in mac.bytes() {
+        if n == 12 {
+            break;
+        }
+        let upper = b.to_ascii_uppercase();
+        if upper.is_ascii_hexdigit() {
+            clean[n] = upper;
+            n += 1;
+        }
+    }
+    if n < 6 {
+        return crate::modules::i18n::tr(
+            "Không xác định / Generic",
+            "Unknown / Generic",
+            "未知设备 / Generic",
+        )
+        .into();
     }
 
-    if let Ok(first_byte) = u8::from_str_radix(&clean[0..2], 16) {
+    let hex = std::str::from_utf8(&clean[..n]).unwrap_or("");
+    if let Ok(first_byte) = u8::from_str_radix(&hex[0..2], 16) {
         if (first_byte & 0x02) != 0 {
-            return "Thiết bị di động (Địa chỉ MAC riêng tư)".into();
+            return crate::modules::i18n::tr(
+                "Thiết bị di động (Địa chỉ MAC riêng tư)",
+                "Mobile device (Private MAC address)",
+                "移动设备 (随机 MAC 地址)",
+            )
+            .into();
         }
     }
 
-    let oui = &clean[0..6];
+    let oui = &hex[0..6];
     match oui {
         "0017F2" | "0019E3" | "001B63" | "001E52" | "002312" | "002500" | "002608" | "3C0754"
         | "40A6D9" | "5855CA" | "68967B" | "703EAC" | "784F43" | "8C8590" | "9801A7" | "A483E7"
@@ -112,7 +134,12 @@ pub fn lookup_vendor(mac: &str) -> String {
         }
         "B827EB" | "DCA632" | "E45F01" => "Raspberry Pi Foundation (Microcomputer)".into(),
 
-        "001788" | "ECB5FA" => "Philips Hue (Đèn thông minh)".into(),
+        "001788" | "ECB5FA" => crate::modules::i18n::tr(
+            "Philips Hue (Đèn thông minh)",
+            "Philips Hue (Smart Lighting)",
+            "Philips Hue (智能照明)",
+        )
+        .into(),
         "3C286D" | "FC65DE" => "Google LLC (Nest / Chromecast)".into(),
         "68FF7B" => "Amazon Technologies (Echo / IoT)".into(),
         "000C29" | "005056" => "VMware (Máy ảo)".into(),
@@ -155,5 +182,13 @@ mod tests {
     #[test]
     fn test_lookup_vendor_randomized_mac() {
         assert!(lookup_vendor("DA:A1:19:AA:BB:CC").contains("MAC riêng tư"));
+    }
+
+    #[test]
+    fn test_perf_lookup_vendor() {
+        crate::modules::perf::measure("oui_db::lookup_vendor", 200_000, || {
+            std::hint::black_box(lookup_vendor("3C:28:6D:AA:BB:CC"));
+            std::hint::black_box(lookup_vendor("00:00"));
+        });
     }
 }

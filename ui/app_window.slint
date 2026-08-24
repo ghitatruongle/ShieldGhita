@@ -1,5 +1,12 @@
 import { Button, LineEdit, ListView } from "std-widgets.slint";
 
+export global I18n {
+    in-out property <int> lang: 0;
+    public pure function t(vi: string, en: string, zh: string) -> string {
+        return lang == 1 ? en : (lang == 2 ? zh : vi);
+    }
+}
+
 export struct NetworkDevice {
     name: string,
     ip: string,
@@ -88,6 +95,24 @@ export struct ProximityDeviceItem {
     open-ports-str: string,
 }
 
+export struct AttackHistoryItem {
+    target: string,
+    mode-label: string,
+    message: string,
+    window-label: string,
+    hits-label: string,
+    is-warning: bool,
+}
+
+export struct CameraItem {
+    vendor: string,
+    model: string,
+    ip: string,
+    rtsp-url: string,
+    source: string,
+    is-online: bool,
+}
+
 export struct BehaviorProfileItem {
     ip: string,
     hostname: string,
@@ -131,15 +156,14 @@ component TabButton inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: root.is-vi ? "Shield Ghita v" + root.app-version + " - Trình Điều Khiển Mạng & Bảo Mật Tối Cao" : "Shield Ghita v" + root.app-version + " - Master Network & Security Controller";
+    title: "Shield Ghita v" + root.app-version + I18n.t(" - Trình Điều Khiển Mạng & Bảo Mật Tối Cao", " - Master Network & Security Controller", " - 网络与安全总控");
     preferred-width: 1160px;
     preferred-height: 800px;
     min-width: 980px;
     min-height: 640px;
     background: #0b0f19;
-    default-font-family: "Segoe UI";
+    default-font-family: I18n.lang == 2 ? "Microsoft YaHei UI" : "Segoe UI";
 
-    in-out property <bool> is-vi: true;
     in-out property <string> app-version: "";
     in-out property <bool> enable-notifications: true;
     in-out property <bool> show-toast: false;
@@ -203,6 +227,19 @@ export component AppWindow inherits Window {
     in-out property <int> high-risk-count: 0;
     in-out property <int> wifi-nodes-count: 0;
 
+    in-out property <bool> attack-modal-open: false;
+    in-out property <int> attack-modal-tab: 2;
+    in-out property <string> attack-target-ip: "";
+    in-out property <string> attack-target-name: "";
+    in-out property <string> attack-target-mac: "";
+    in-out property <string> attack-target-vendor: "";
+    in-out property <int> attack-mode: 1;
+    in-out property <int> attack-duration-min: 15;
+    in-out property <string> attack-message: "";
+    in-out property <[AttackHistoryItem]> attack-history;
+    in-out property <int> active-attacks-count: 0;
+    in-out property <[CameraItem]> camera-list;
+
     callback toggle-protection(bool);
     callback toggle-master-lock(bool);
     callback toggle-silent-sinkhole(bool);
@@ -225,11 +262,17 @@ export component AppWindow inherits Window {
     callback remove-allowed-rule(string);
     callback update-blocklist();
     callback export-logs();
+    callback export-incidents();
     callback filter-logs(string, string, int);
     callback filter-logs-by-ip(string);
     callback dismiss-toast();
     callback trigger-proximity-scan();
     callback refresh-admin-data();
+    callback launch-attack(string, string, string, int, int);
+    callback cancel-attack(string);
+    callback scan-cameras();
+    callback open-camera-stream(string);
+    callback copy-camera-url(string);
     callback toggle-minimize-to-tray-on-minimize(bool);
     callback toggle-start-hidden-in-tray(bool);
 
@@ -264,7 +307,7 @@ export component AppWindow inherits Window {
                 spacing: 2px;
                 alignment: center;
                 Text {
-                    text: root.toast-title != "" ? root.toast-title : (root.is-vi ? "ĐÃ CHẶN QUẢNG CÁO & THEO DÕI" : "AD & TRACKER BLOCKED");
+                    text: root.toast-title != "" ? root.toast-title : (I18n.t("ĐÃ CHẶN QUẢNG CÁO & THEO DÕI", "AD & TRACKER BLOCKED", "已拦截广告和跟踪器"));
                     font-size: 11px;
                     font-weight: 800;
                     color: root.toast-is-threat ? #fca5a5 : #a5b4fc;
@@ -350,7 +393,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     Text {
-                        text: root.is-vi ? "Bảo mật mạng, Ngăn chặn xâm nhập & Chặn quảng cáo LAN" : "Cyber Security, IDS/IPS & LAN Adblock Controller";
+                        text: I18n.t("Bảo mật mạng, Ngăn chặn xâm nhập & Chặn quảng cáo LAN", "Cyber Security, IDS/IPS & LAN Adblock Controller", "网络安全、入侵防御与局域网广告拦截");
                         font-size: 11px;
                         color: #94a3b8;
                     }
@@ -394,7 +437,7 @@ export component AppWindow inherits Window {
                         padding-right: 10px;
                         alignment: center;
                         Text {
-                            text: (root.is-vi ? "🛡 Điểm an ninh: " : "🛡 Security Score: ") + root.security-score + "/100";
+                            text: (I18n.t("🛡 Điểm an ninh: ", "🛡 Security Score: ", "🛡 安全评分: ")) + root.security-score + "/100";
                             font-size: 12px;
                             font-weight: 800;
                             color: #a5b4fc;
@@ -445,42 +488,42 @@ export component AppWindow inherits Window {
             height: 38px;
 
             TabButton {
-                text: root.is-vi ? "📊 Tổng quan" : "📊 Overview";
+                text: I18n.t("📊 Tổng quan", "📊 Overview", "📊 总览");
                 active: root.active-tab == 0;
                 active-color: #38bdf8;
                 clicked => { root.active-tab = 0; }
             }
 
             TabButton {
-                text: root.is-vi ? "🛡 An ninh" : "🛡 Security";
+                text: I18n.t("🛡 An ninh", "🛡 Security", "🛡 安全");
                 active: root.active-tab == 1;
                 active-color: #34d399;
                 clicked => { root.active-tab = 1; }
             }
 
             TabButton {
-                text: root.is-vi ? "🚀 Giám sát" : "🚀 Monitor & Logs";
+                text: I18n.t("🚀 Giám sát", "🚀 Monitor & Logs", "🚀 监控与日志");
                 active: root.active-tab == 2;
                 active-color: #a78bfa;
                 clicked => { root.active-tab = 2; }
             }
 
             TabButton {
-                text: root.is-vi ? "🚫 Bộ lọc" : "🚫 Filter Rules";
+                text: I18n.t("🚫 Bộ lọc", "🚫 Filter Rules", "🚫 过滤规则");
                 active: root.active-tab == 3;
                 active-color: #f87171;
                 clicked => { root.active-tab = 3; }
             }
 
             TabButton {
-                text: root.is-vi ? "⚙ Cài đặt" : "⚙ Settings";
+                text: I18n.t("⚙ Cài đặt", "⚙ Settings", "⚙ 设置");
                 active: root.active-tab == 4;
                 active-color: #38bdf8;
                 clicked => { root.active-tab = 4; }
             }
 
             if root.is-admin-edition : TabButton {
-                text: root.is-vi ? "👑 Quản trị Admin" : "👑 Admin Suite";
+                text: I18n.t("👑 Quản trị Admin", "👑 Admin Suite", "👑 管理员套件");
                 active: root.active-tab == 5;
                 active-color: #c084fc;
                 clicked => { root.active-tab = 5; }
@@ -520,9 +563,9 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 14px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "TỔNG TRUY VẤN DNS" : "TOTAL DNS QUERIES"; font-size: 11px; font-weight: 700; color: #94a3b8; }
+                                Text { text: I18n.t("TỔNG TRUY VẤN DNS", "TOTAL DNS QUERIES", "DNS 查询总数"); font-size: 11px; font-weight: 700; color: #94a3b8; }
                                 Text { text: root.total-queries; font-size: 26px; font-weight: 800; color: #38bdf8; }
-                                Text { text: root.is-vi ? "Xử lý song song siêu tốc qua DoH" : "Ultra-fast parallel DoH engine"; font-size: 11px; color: #64748b; }
+                                Text { text: I18n.t("Xử lý song song siêu tốc qua DoH", "Ultra-fast parallel DoH engine", "DoH 超高速并行处理引擎"); font-size: 11px; color: #64748b; }
                             }
                         }
 
@@ -536,9 +579,9 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 14px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "QUẢNG CÁO & THEO DÕI ĐÃ CHẶN" : "ADS & TRACKERS BLOCKED"; font-size: 11px; font-weight: 700; color: #94a3b8; }
+                                Text { text: I18n.t("QUẢNG CÁO & THEO DÕI ĐÃ CHẶN", "ADS & TRACKERS BLOCKED", "已拦截广告和跟踪器"); font-size: 11px; font-weight: 700; color: #94a3b8; }
                                 Text { text: root.blocked-count; font-size: 26px; font-weight: 800; color: #22c55e; }
-                                Text { text: (root.is-vi ? "Đã lọc ngầm bởi Silent Sinkhole: " : "Silently absorbed: ") + root.absorbed-count; font-size: 11px; color: #4ade80; }
+                                Text { text: (I18n.t("Đã lọc ngầm bởi Silent Sinkhole: ", "Silently absorbed: ", "静默黑洞已吸收: ")) + root.absorbed-count; font-size: 11px; color: #4ade80; }
                             }
                         }
 
@@ -552,9 +595,9 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 14px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "MỐI NGUY & TẤN CÔNG ĐÃ CHẶN" : "THREATS & ATTACKS BLOCKED"; font-size: 11px; font-weight: 700; color: #94a3b8; }
+                                Text { text: I18n.t("MỐI NGUY & TẤN CÔNG ĐÃ CHẶN", "THREATS & ATTACKS BLOCKED", "已拦截威胁和攻击"); font-size: 11px; font-weight: 700; color: #94a3b8; }
                                 Text { text: root.threats-blocked-count; font-size: 26px; font-weight: 800; color: #f87171; }
-                                Text { text: root.is-vi ? "IDS/IPS & Chống rò rỉ DNS Tunneling" : "IDS/IPS & Anti-DNS Tunneling"; font-size: 11px; color: #fca5a5; }
+                                Text { text: I18n.t("IDS/IPS & Chống rò rỉ DNS Tunneling", "IDS/IPS & Anti-DNS Tunneling", "IDS/IPS 与 DNS 隧道防护"); font-size: 11px; color: #fca5a5; }
                             }
                         }
 
@@ -568,9 +611,9 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 14px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "THIẾT BỊ MẠNG LAN HOẠT ĐỘNG" : "ACTIVE LAN DEVICES"; font-size: 11px; font-weight: 700; color: #94a3b8; }
+                                Text { text: I18n.t("THIẾT BỊ MẠNG LAN HOẠT ĐỘNG", "ACTIVE LAN DEVICES", "活跃局域网设备"); font-size: 11px; font-weight: 700; color: #94a3b8; }
                                 Text { text: root.lan-devices-count; font-size: 26px; font-weight: 800; color: #a78bfa; }
-                                Text { text: (root.is-vi ? "Quy tắc lọc đang kích hoạt: " : "Active filter rules: ") + root.active-rules-count; font-size: 11px; color: #cbd5e1; }
+                                Text { text: (I18n.t("Quy tắc lọc đang kích hoạt: ", "Active filter rules: ", "生效中的过滤规则: ")) + root.active-rules-count; font-size: 11px; color: #cbd5e1; }
                             }
                         }
                     }
@@ -583,28 +626,28 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             padding: 16px;
                             spacing: 14px;
-                            Text { text: root.is-vi ? "⚡ Trung tâm điều khiển mạng tối cao (Master Controller Quick Actions):" : "⚡ Master Internet Controller Quick Actions:"; font-size: 14px; font-weight: 700; color: #e2e8f0; }
+                            Text { text: I18n.t("⚡ Trung tâm điều khiển mạng tối cao (Master Controller Quick Actions):", "⚡ Master Internet Controller Quick Actions:", "⚡ 网络总控中心 (快速操作):"); font-size: 14px; font-weight: 700; color: #e2e8f0; }
 
                             HorizontalLayout {
                                 spacing: 12px;
                                 Button {
-                                    text: root.protection-enabled ? (root.is-vi ? "⏸️ Tạm dừng bảo vệ máy" : "⏸️ Pause Protection") : (root.is-vi ? "▶️ Bật bảo vệ máy" : "▶️ Enable Protection");
+                                    text: root.protection-enabled ? (I18n.t("⏸️ Tạm dừng bảo vệ máy", "⏸️ Pause Protection", "⏸️ 暂停防护")) : (I18n.t("▶️ Bật bảo vệ máy", "▶️ Enable Protection", "▶️ 启用防护"));
                                     clicked => { root.toggle-protection(!root.protection-enabled); }
                                 }
                                 Button {
-                                    text: root.master-locked ? (root.is-vi ? "🔓 Mở khóa Internet" : "🔓 Unlock Internet") : (root.is-vi ? "🔒 Khóa toàn bộ Internet (Kill Switch)" : "🔒 Master Internet Lock (Kill Switch)");
+                                    text: root.master-locked ? (I18n.t("🔓 Mở khóa Internet", "🔓 Unlock Internet", "🔓 解锁互联网")) : (I18n.t("🔒 Khóa toàn bộ Internet (Kill Switch)", "🔒 Master Internet Lock (Kill Switch)", "🔒 一键断网 (Kill Switch)"));
                                     clicked => { root.toggle-master-lock(!root.master-locked); }
                                 }
                                 Button {
-                                    text: root.network-wide-adblock ? (root.is-vi ? "🌐 Chống QC toàn mạng: BẬT" : "🌐 Network Adblock: ON") : (root.is-vi ? "🌐 Chống QC toàn mạng: TẮT" : "🌐 Network Adblock: OFF");
+                                    text: root.network-wide-adblock ? (I18n.t("🌐 Chống QC toàn mạng: BẬT", "🌐 Network Adblock: ON", "🌐 全网广告拦截: 开")) : (I18n.t("🌐 Chống QC toàn mạng: TẮT", "🌐 Network Adblock: OFF", "🌐 全网广告拦截: 关"));
                                     clicked => { root.toggle-network-wide-adblock(!root.network-wide-adblock); }
                                 }
                                 Button {
-                                    text: root.attack-detection-enabled ? (root.is-vi ? "🛡️ Chống tấn công: BẬT" : "🛡️ IDS/IPS Attack Shield: ON") : (root.is-vi ? "🛡️ Chống tấn công: TẮT" : "🛡️ IDS/IPS Attack Shield: OFF");
+                                    text: root.attack-detection-enabled ? (I18n.t("🛡️ Chống tấn công: BẬT", "🛡️ IDS/IPS Attack Shield: ON", "🛡️ 入侵防御: 开")) : (I18n.t("🛡️ Chống tấn công: TẮT", "🛡️ IDS/IPS Attack Shield: OFF", "🛡️ 入侵防御: 关"));
                                     clicked => { root.toggle-attack-detection(!root.attack-detection-enabled); }
                                 }
                                 Button {
-                                    text: root.is-vi ? "🔄 Cập nhật Bộ lọc" : "🔄 Update Blocklists";
+                                    text: I18n.t("🔄 Cập nhật Bộ lọc", "🔄 Update Blocklists", "🔄 更新过滤库");
                                     clicked => { root.update-blocklist(); }
                                 }
                             }
@@ -622,12 +665,20 @@ export component AppWindow inherits Window {
 
                             HorizontalLayout {
                                 spacing: 8px;
-                                Text { text: root.is-vi ? "📡 Hướng dẫn cấu hình Chống quảng cáo Toàn mạng LAN:" : "📡 Quick LAN Setup Guide:"; font-size: 14px; font-weight: 700; color: #38bdf8; }
+                                Text { text: I18n.t("📡 Hướng dẫn cấu hình Chống quảng cáo Toàn mạng LAN:", "📡 Quick LAN Setup Guide:", "📡 局域网全网去广告快速设置指南:"); font-size: 14px; font-weight: 700; color: #38bdf8; }
                                 Rectangle { horizontal-stretch: 1; }
-                                Text { text: (root.is-vi ? "Địa chỉ IP máy tính này: " : "Host Machine IP: ") + root.host-lan-ip; font-size: 13px; font-weight: 800; color: #22c55e; }
+                                Text { text: (I18n.t("Địa chỉ IP máy tính này: ", "Host Machine IP: ", "本机 IP 地址: ")) + root.host-lan-ip; font-size: 13px; font-weight: 800; color: #22c55e; }
                             }
                             Text {
-                                text: root.is-vi ? "• Bật tính năng 'Chống quảng cáo toàn mạng' ở trên hoặc trong Cài đặt.\n• Đặt DNS trên Router Wi-Fi hoặc trên Điện thoại (iPhone/Android)/Smart TV thành: " + root.host-lan-ip + "\n• Mọi thiết bị kết nối vào Wi-Fi sẽ tự động sạch 100% quảng cáo và được bảo vệ như máy tính này." : "• Enable 'Network-wide Ad Blocking' above or in Settings.\n• Set DNS on your Wi-Fi Router or Phone/Smart TV to: " + root.host-lan-ip + "\n• All connected LAN devices will have ads blocked automatically without extra software.";
+                                text: I18n.t(
+                                    "• Bật tính năng 'Chống quảng cáo toàn mạng' ở trên hoặc trong Cài đặt.\n• Đặt DNS trên Router Wi-Fi hoặc trên Điện thoại (iPhone/Android)/Smart TV thành: ",
+                                    "• Enable 'Network-wide Ad Blocking' above or in Settings.\n• Set DNS on your Wi-Fi Router or Phone/Smart TV to: ",
+                                    "• 在上方或“设置”中启用“全网广告拦截”。\n• 将 Wi-Fi 路由器或手机/智能电视的 DNS 设置为：",
+                                ) + root.host-lan-ip + I18n.t(
+                                    "\n• Mọi thiết bị kết nối vào Wi-Fi sẽ tự động sạch 100% quảng cáo và được bảo vệ như máy tính này.",
+                                    "\n• All connected LAN devices will have ads blocked automatically without extra software.",
+                                    "\n• 所有接入 Wi-Fi 的设备都将自动屏蔽广告，并获得与本机相同的防护。",
+                                );
                                 font-size: 12px;
                                 color: #94a3b8;
                             }
@@ -659,8 +710,8 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 10px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "🛡️ HỆ THỐNG PHÁT HIỆN TẤN CÔNG (IDS)" : "🛡️ INTRUSION DETECTION (IDS)"; font-size: 11px; font-weight: 700; color: #38bdf8; }
-                                Text { text: root.attack-detection-enabled ? (root.is-vi ? "🟢 ĐANG BẢO VỆ" : "🟢 ACTIVE") : (root.is-vi ? "⚪ ĐANG TẮT" : "⚪ DISABLED"); font-size: 13px; font-weight: 800; color: root.attack-detection-enabled ? #4ade80 : #94a3b8; }
+                                Text { text: I18n.t("🛡️ HỆ THỐNG PHÁT HIỆN TẤN CÔNG (IDS)", "🛡️ INTRUSION DETECTION (IDS)", "🛡️ 入侵检测系统 (IDS)"); font-size: 11px; font-weight: 700; color: #38bdf8; }
+                                Text { text: root.attack-detection-enabled ? (I18n.t("🟢 ĐANG BẢO VỆ", "🟢 ACTIVE", "🟢 防护中")) : (I18n.t("⚪ ĐANG TẮT", "⚪ DISABLED", "⚪ 已关闭")); font-size: 13px; font-weight: 800; color: root.attack-detection-enabled ? #4ade80 : #94a3b8; }
                             }
                         }
                         Rectangle {
@@ -672,8 +723,8 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 10px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "⚡ TỰ ĐỘNG KHÓA IP TẤN CÔNG (IPS)" : "⚡ AUTO-BLOCK THREATS (IPS)"; font-size: 11px; font-weight: 700; color: #f87171; }
-                                Text { text: root.auto-block-attacks ? (root.is-vi ? "🟢 TỰ ĐỘNG CÔ LẬP NGUỒN" : "🟢 AUTO-MITIGATION ON") : (root.is-vi ? "⚪ CHỈ CẢNH BÁO" : "⚪ ALERT ONLY"); font-size: 13px; font-weight: 800; color: root.auto-block-attacks ? #4ade80 : #94a3b8; }
+                                Text { text: I18n.t("⚡ TỰ ĐỘNG KHÓA IP TẤN CÔNG (IPS)", "⚡ AUTO-BLOCK THREATS (IPS)", "⚡ 自动封锁攻击 IP (IPS)"); font-size: 11px; font-weight: 700; color: #f87171; }
+                                Text { text: root.auto-block-attacks ? (I18n.t("🟢 TỰ ĐỘNG CÔ LẬP NGUỒN", "🟢 AUTO-MITIGATION ON", "🟢 自动隔离攻击源")) : (I18n.t("⚪ CHỈ CẢNH BÁO", "⚪ ALERT ONLY", "⚪ 仅告警")); font-size: 13px; font-weight: 800; color: root.auto-block-attacks ? #4ade80 : #94a3b8; }
                             }
                         }
                         Rectangle {
@@ -685,8 +736,8 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 10px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "📡 GIÁM SÁT ARP SPOOFING / MITM" : "📡 ARP SPOOFING WATCH"; font-size: 11px; font-weight: 700; color: #fbbf24; }
-                                Text { text: root.arp-spoof-detection ? (root.is-vi ? "🟢 QUẢN TRỊ GATEWAY" : "🟢 GATEWAY MONITORED") : (root.is-vi ? "⚪ ĐANG TẮT" : "⚪ DISABLED"); font-size: 13px; font-weight: 800; color: root.arp-spoof-detection ? #4ade80 : #94a3b8; }
+                                Text { text: I18n.t("📡 GIÁM SÁT ARP SPOOFING / MITM", "📡 ARP SPOOFING WATCH", "📡 ARP 欺骗 / 中间人监控"); font-size: 11px; font-weight: 700; color: #fbbf24; }
+                                Text { text: root.arp-spoof-detection ? (I18n.t("🟢 QUẢN TRỊ GATEWAY", "🟢 GATEWAY MONITORED", "🟢 网关监控中")) : (I18n.t("⚪ ĐANG TẮT", "⚪ DISABLED", "⚪ 已关闭")); font-size: 13px; font-weight: 800; color: root.arp-spoof-detection ? #4ade80 : #94a3b8; }
                             }
                         }
                     }
@@ -694,27 +745,31 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: 10px;
                         Button {
-                            text: root.lan-subview-mode == 0 ? (root.is-vi ? "● 🌐 Thiết bị LAN" : "● 🌐 LAN Devices") : (root.is-vi ? "🌐 Thiết bị LAN" : "🌐 LAN Devices");
+                            text: root.lan-subview-mode == 0 ? (I18n.t("● 🌐 Thiết bị LAN", "● 🌐 LAN Devices", "● 🌐 局域网设备")) : (I18n.t("🌐 Thiết bị LAN", "🌐 LAN Devices", "🌐 局域网设备"));
                             clicked => { root.lan-subview-mode = 0; }
                         }
                         Button {
-                            text: root.lan-subview-mode == 1 ? (root.is-vi ? "● 🚨 Cảnh báo An ninh" : "● 🚨 Incidents") : (root.is-vi ? "🚨 Cảnh báo An ninh" : "🚨 Incidents");
+                            text: root.lan-subview-mode == 1 ? (I18n.t("● 🚨 Cảnh báo An ninh", "● 🚨 Incidents", "● 🚨 安全警报")) : (I18n.t("🚨 Cảnh báo An ninh", "🚨 Incidents", "🚨 安全警报"));
                             clicked => { root.lan-subview-mode = 1; }
                         }
                         Button {
-                            text: root.lan-subview-mode == 2 ? (root.is-vi ? "● 🔓 Cổng mở LAN" : "● 🔓 Open Ports") : (root.is-vi ? "🔓 Cổng mở LAN" : "🔓 Open Ports");
+                            text: root.lan-subview-mode == 2 ? (I18n.t("● 🔓 Cổng mở LAN", "● 🔓 Open Ports", "● 🔓 局域网开放端口")) : (I18n.t("🔓 Cổng mở LAN", "🔓 Open Ports", "🔓 局域网开放端口"));
                             clicked => { root.lan-subview-mode = 2; }
                         }
                         if root.lan-subview-mode != 1 : Button {
-                            text: root.is-vi ? "🔍 Quét lại mạng LAN" : "🔍 Rescan LAN Subnet";
+                            text: I18n.t("🔍 Quét lại mạng LAN", "🔍 Rescan LAN Subnet", "🔍 重新扫描局域网");
                             clicked => { root.refresh-devices(); }
                         }
                         if root.lan-subview-mode == 1 : Button {
-                            text: root.is-vi ? "🗑️ Xóa toàn bộ cảnh báo" : "🗑️ Clear All Incidents";
+                            text: I18n.t("🗑️ Xóa toàn bộ cảnh báo", "🗑️ Clear All Incidents", "🗑️ 清空所有警报");
                             clicked => { root.clear-security-incidents(); }
                         }
+                        if root.lan-subview-mode == 1 : Button {
+                            text: I18n.t("💾 Xuất CSV", "💾 Export CSV", "💾 导出 CSV");
+                            clicked => { root.export-incidents(); }
+                        }
                         Text {
-                            text: root.lan-subview-mode == 0 ? (root.is-vi ? "Giám sát thời gian thực mọi hoạt động Internet của thiết bị LAN:" : "Real-time Internet activity of LAN devices:") : (root.lan-subview-mode == 1 ? (root.is-vi ? "Nhật ký cảnh báo an ninh & ngăn chặn xâm nhập thời gian thực:" : "Real-time Security Incidents & Intrusion Prevention Logs:") : (root.is-vi ? "Cổng dịch vụ đang mở trên từng thiết bị LAN & mức độ rủi ro:" : "Open service ports per LAN device & risk level:"));
+                            text: root.lan-subview-mode == 0 ? (I18n.t("Giám sát thời gian thực mọi hoạt động Internet của thiết bị LAN:", "Real-time Internet activity of LAN devices:", "实时监控局域网设备的所有上网活动:")) : (root.lan-subview-mode == 1 ? (I18n.t("Nhật ký cảnh báo an ninh & ngăn chặn xâm nhập thời gian thực:", "Real-time Security Incidents & Intrusion Prevention Logs:", "实时安全警报与入侵防御日志:")) : (I18n.t("Cổng dịch vụ đang mở trên từng thiết bị LAN & mức độ rủi ro:", "Open service ports per LAN device & risk level:", "各局域网设备开放的服务端口及风险等级:")));
                             font-size: 13px;
                             font-weight: 600;
                             color: #94a3b8;
@@ -734,7 +789,7 @@ export component AppWindow inherits Window {
                             padding-right: 10px;
                             alignment: start;
                             Text {
-                                text: root.is-vi ? "⏳ Đang quét mạng LAN & phân tích cổng mở…" : "⏳ Scanning LAN & analyzing open ports…";
+                                text: I18n.t("⏳ Đang quét mạng LAN & phân tích cổng mở…", "⏳ Scanning LAN & analyzing open ports…", "⏳ 正在扫描局域网并分析开放端口…");
                                 font-size: 12px;
                                 font-weight: 700;
                                 color: #a5b4fc;
@@ -744,14 +799,14 @@ export component AppWindow inherits Window {
                     }
 
                     if !root.is-scanning && root.lan-subview-mode != 1 && root.devices.length == 0 : Text {
-                        text: root.is-vi ? "Chưa phát hiện thiết bị LAN nào — bấm 🔍 Quét lại mạng LAN." : "No LAN devices detected yet — press 🔍 Rescan LAN Subnet.";
+                        text: I18n.t("Chưa phát hiện thiết bị LAN nào — bấm 🔍 Quét lại mạng LAN.", "No LAN devices detected yet — press 🔍 Rescan LAN Subnet.", "尚未发现局域网设备 — 请点击 🔍 重新扫描局域网。");
                         font-size: 12px;
                         color: #64748b;
                         horizontal-alignment: center;
                     }
 
                     if root.lan-subview-mode == 1 && root.security-incidents.length == 0 : Text {
-                        text: root.is-vi ? "✅ Chưa có cảnh báo an ninh nào — hệ thống đang hoạt động an toàn." : "✅ No security incidents yet — system is running safe.";
+                        text: I18n.t("✅ Chưa có cảnh báo an ninh nào — hệ thống đang hoạt động an toàn.", "✅ No security incidents yet — system is running safe.", "✅ 暂无安全警报 — 系统运行安全。");
                         font-size: 12px;
                         color: #64748b;
                         horizontal-alignment: center;
@@ -775,8 +830,8 @@ export component AppWindow inherits Window {
                                     alignment: center;
                                     min-width: 250px;
                                     Text { text: device.name; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
-                                    Text { text: (root.is-vi ? "Hãng: " : "Vendor: ") + device.vendor; font-size: 11px; color: #38bdf8; }
-                                    Text { text: (root.is-vi ? "Xác thực nhận diện: " : "Detection confidence: ") + device.confidence + "%"; font-size: 10px; color: #64748b; }
+                                    Text { text: (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + device.vendor; font-size: 11px; color: #38bdf8; }
+                                    Text { text: (I18n.t("Xác thực nhận diện: ", "Detection confidence: ", "识别置信度: ")) + device.confidence + "%"; font-size: 10px; color: #64748b; }
                                 }
 
                                 VerticalLayout {
@@ -814,7 +869,7 @@ export component AppWindow inherits Window {
                                             }
                                         }
                                     }
-                                    Text { text: (root.is-vi ? "Domain gần nhất: " : "Last: ") + device.last-domain; font-size: 11px; color: #94a3b8; overflow: elide; }
+                                    Text { text: (I18n.t("Domain gần nhất: ", "Last: ", "最近域名: ")) + device.last-domain; font-size: 11px; color: #94a3b8; overflow: elide; }
                                 }
 
                                 Rectangle { horizontal-stretch: 1; }
@@ -823,16 +878,16 @@ export component AppWindow inherits Window {
                                     alignment: center;
                                     min-width: 140px;
                                     Text {
-                                        text: device.is-online ? (root.is-vi ? "🟢 TRỰC TUYẾN" : "🟢 ONLINE") : (root.is-vi ? "🔴 NGOẠI TUYẾN" : "🔴 OFFLINE");
+                                        text: device.is-online ? (I18n.t("🟢 TRỰC TUYẾN", "🟢 ONLINE", "🟢 在线")) : (I18n.t("🔴 NGOẠI TUYẾN", "🔴 OFFLINE", "🔴 离线"));
                                         font-size: 11px;
                                         font-weight: 800;
                                         color: device.is-online ? #4ade80 : #f87171;
                                     }
-                                    Text { text: device.risk-level != "" ? device.risk-level : (root.is-vi ? "Độ trễ: " + device.latency : "Latency: " + device.latency); font-size: 11px; color: #94a3b8; }
+                                    Text { text: device.risk-level != "" ? device.risk-level : (I18n.t("Độ trễ: ", "Latency: ", "延迟: ") + device.latency); font-size: 11px; color: #94a3b8; }
                                 }
 
                                 Button {
-                                    text: root.is-vi ? "📋 Xem Log" : "📋 View Logs";
+                                    text: I18n.t("📋 Xem Log", "📋 View Logs", "📋 查看日志");
                                     clicked => { root.filter-logs-by-ip(device.ip); }
                                 }
                             }
@@ -915,7 +970,7 @@ export component AppWindow inherits Window {
                                         VerticalLayout {
                                             padding: 6px;
                                             Text {
-                                                text: (root.is-vi ? "🛡️ Biện pháp IPS: " : "🛡️ IPS Action: ") + inc.mitigation;
+                                                text: (I18n.t("🛡️ Biện pháp IPS: ", "🛡️ IPS Action: ", "🛡️ IPS 处置: ")) + inc.mitigation;
                                                 font-size: 11px;
                                                 font-weight: 700;
                                                 color: #6ee7b7;
@@ -954,7 +1009,7 @@ export component AppWindow inherits Window {
                                     horizontal-stretch: 1;
                                     Text { text: "🔓 " + device.open-ports; font-size: 12px; font-weight: 700; color: #e2e8f0; overflow: elide; }
                                     Text {
-                                        text: device.port-advice != "" ? ((root.is-vi ? "Khuyến nghị: " : "Advice: ") + device.port-advice) : (root.is-vi ? "Không phát hiện cổng rủi ro đang mở." : "No risky open ports detected.");
+                                        text: device.port-advice != "" ? ((I18n.t("Khuyến nghị: ", "Advice: ", "建议: ")) + device.port-advice) : (I18n.t("Không phát hiện cổng rủi ro đang mở.", "No risky open ports detected.", "未发现存在风险的开放端口。"));
                                         font-size: 11px;
                                         color: #94a3b8;
                                         overflow: elide;
@@ -969,7 +1024,7 @@ export component AppWindow inherits Window {
                                     HorizontalLayout {
                                         alignment: center;
                                         Text {
-                                            text: device.port-risk == "HIGH" ? (root.is-vi ? "🔴 RỦI RO CAO" : "🔴 HIGH RISK") : (device.port-risk == "MEDIUM" ? (root.is-vi ? "🟡 TRUNG BÌNH" : "🟡 MEDIUM") : (root.is-vi ? "🟢 AN TOÀN" : "🟢 SAFE"));
+                                            text: device.port-risk == "HIGH" ? (I18n.t("🔴 RỦI RO CAO", "🔴 HIGH RISK", "🔴 高风险")) : (device.port-risk == "MEDIUM" ? (I18n.t("🟡 TRUNG BÌNH", "🟡 MEDIUM", "🟡 中风险")) : (I18n.t("🟢 AN TOÀN", "🟢 SAFE", "🟢 安全")));
                                             font-size: 10px;
                                             font-weight: 800;
                                             color: #ffffff;
@@ -997,50 +1052,50 @@ export component AppWindow inherits Window {
                         spacing: 8px;
 
                         Button {
-                            text: root.monitor-subview-mode == 0 ? (root.is-vi ? "● 🚀 Tiến trình mạng" : "● 🚀 Active Connections") : (root.is-vi ? "🚀 Tiến trình mạng" : "🚀 Active Connections");
+                            text: root.monitor-subview-mode == 0 ? (I18n.t("● 🚀 Tiến trình mạng", "● 🚀 Active Connections", "● 🚀 网络连接")) : (I18n.t("🚀 Tiến trình mạng", "🚀 Active Connections", "🚀 网络连接"));
                             clicked => { root.monitor-subview-mode = 0; }
                         }
                         Button {
-                            text: root.monitor-subview-mode == 1 ? (root.is-vi ? "● 🌐 Nhật ký DNS" : "● 🌐 DNS Logs") : (root.is-vi ? "🌐 Nhật ký DNS" : "🌐 DNS Logs");
+                            text: root.monitor-subview-mode == 1 ? (I18n.t("● 🌐 Nhật ký DNS", "● 🌐 DNS Logs", "● 🌐 DNS 日志")) : (I18n.t("🌐 Nhật ký DNS", "🌐 DNS Logs", "🌐 DNS 日志"));
                             clicked => { root.monitor-subview-mode = 1; }
                         }
                         Button {
-                            text: root.monitor-subview-mode == 2 ? (root.is-vi ? "● 📋 Console hệ thống" : "● 📋 System Console") : (root.is-vi ? "📋 Console hệ thống" : "📋 System Console");
+                            text: root.monitor-subview-mode == 2 ? (I18n.t("● 📋 Console hệ thống", "● 📋 System Console", "● 📋 系统控制台")) : (I18n.t("📋 Console hệ thống", "📋 System Console", "📋 系统控制台"));
                             clicked => { root.monitor-subview-mode = 2; }
                         }
 
                         Rectangle { width: 1px; height: 20px; background: #334155; }
 
                         if root.monitor-subview-mode == 0 : Button {
-                            text: root.is-vi ? "🔄 Làm mới" : "🔄 Refresh";
+                            text: I18n.t("🔄 Làm mới", "🔄 Refresh", "🔄 刷新");
                             clicked => { root.refresh-connections(); }
                         }
                         if root.monitor-subview-mode == 0 : Button {
-                            text: root.conn-view-mode == 1 ? (root.is-vi ? "📄 Xem Chi Tiết" : "📄 Detailed List") : (root.is-vi ? "🚀 Gom Nhóm Ứng Dụng" : "🚀 Group by App");
+                            text: root.conn-view-mode == 1 ? (I18n.t("📄 Xem Chi Tiết", "📄 Detailed List", "📄 详细列表")) : (I18n.t("🚀 Gom Nhóm Ứng Dụng", "🚀 Group by App", "🚀 按应用分组"));
                             clicked => { root.conn-view-mode = root.conn-view-mode == 1 ? 0 : 1; }
                         }
 
                         if root.monitor-subview-mode == 1 : Button {
-                            text: root.log-view-mode == 1 ? (root.is-vi ? "🌐 Dòng Thời Gian" : "🌐 Timeline View") : (root.is-vi ? "📊 Gom Nhóm Domain" : "📊 Group by Domain");
+                            text: root.log-view-mode == 1 ? (I18n.t("🌐 Dòng Thời Gian", "🌐 Timeline View", "🌐 时间线视图")) : (I18n.t("📊 Gom Nhóm Domain", "📊 Group by Domain", "📊 按域名分组"));
                             clicked => { root.log-view-mode = root.log-view-mode == 1 ? 0 : 1; }
                         }
 
                         if root.monitor-subview-mode == 1 : LineEdit {
-                            placeholder-text: root.is-vi ? "Lọc domain..." : "Filter domain...";
+                            placeholder-text: I18n.t("Lọc domain...", "Filter domain...", "筛选域名...");
                             width: 160px;
                             text <=> root.filter-domain-text;
                         }
                         if root.monitor-subview-mode == 1 : LineEdit {
-                            placeholder-text: root.is-vi ? "Lọc IP..." : "Filter IP...";
+                            placeholder-text: I18n.t("Lọc IP...", "Filter IP...", "筛选 IP...");
                             width: 120px;
                             text <=> root.filter-ip-text;
                         }
                         if root.monitor-subview-mode == 1 : Button {
-                            text: root.is-vi ? "🔍 Lọc" : "🔍 Filter";
+                            text: I18n.t("🔍 Lọc", "🔍 Filter", "🔍 筛选");
                             clicked => { root.filter-logs(root.filter-domain-text, root.filter-ip-text, -1); }
                         }
                         if root.monitor-subview-mode == 1 : Button {
-                            text: root.is-vi ? "✖ Xóa lọc" : "✖ Clear";
+                            text: I18n.t("✖ Xóa lọc", "✖ Clear", "✖ 清除筛选");
                             clicked => {
                                 root.filter-domain-text = "";
                                 root.filter-ip-text = "";
@@ -1051,28 +1106,28 @@ export component AppWindow inherits Window {
                         Rectangle { horizontal-stretch: 1; }
 
                         if root.monitor-subview-mode == 1 : Button {
-                            text: root.is-vi ? "💾 Xuất CSV" : "💾 Export CSV";
+                            text: I18n.t("💾 Xuất CSV", "💾 Export CSV", "💾 导出 CSV");
                             clicked => { root.export-logs(); }
                         }
                         if root.monitor-subview-mode == 1 : Button {
-                            text: root.is-vi ? "🗑️ Xóa log" : "🗑️ Clear Logs";
+                            text: I18n.t("🗑️ Xóa log", "🗑️ Clear Logs", "🗑️ 清空日志");
                             clicked => { root.clear-logs(); }
                         }
                         if root.monitor-subview-mode == 2 : Button {
-                            text: root.is-vi ? "🗑️ Xóa console log" : "🗑️ Clear Console";
+                            text: I18n.t("🗑️ Xóa console log", "🗑️ Clear Console", "🗑️ 清空控制台");
                             clicked => { root.clear-console-logs(); }
                         }
                     }
 
                     if root.monitor-subview-mode == 0 && root.connections.length == 0 && root.grouped-connections.length == 0 : Text {
-                        text: root.is-vi ? "Chưa có kết nối mạng nào đang hoạt động — bấm 🔄 Làm mới." : "No active network connections — press 🔄 Refresh.";
+                        text: I18n.t("Chưa có kết nối mạng nào đang hoạt động — bấm 🔄 Làm mới.", "No active network connections — press 🔄 Refresh.", "暂无活动的网络连接 — 请点击 🔄 刷新。");
                         font-size: 12px;
                         color: #64748b;
                         horizontal-alignment: center;
                     }
 
                     if root.monitor-subview-mode == 1 && root.logs.length == 0 : Text {
-                        text: root.is-vi ? "Chưa có nhật ký DNS — nhật ký sẽ hiện khi có truy vấn." : "No DNS logs yet — entries appear as queries arrive.";
+                        text: I18n.t("Chưa có nhật ký DNS — nhật ký sẽ hiện khi có truy vấn.", "No DNS logs yet — entries appear as queries arrive.", "暂无 DNS 日志 — 有查询时会自动显示。");
                         font-size: 12px;
                         color: #64748b;
                         horizontal-alignment: center;
@@ -1100,7 +1155,7 @@ export component AppWindow inherits Window {
                                     background: #0284c7;
                                     HorizontalLayout {
                                         alignment: center;
-                                        Text { text: grp.connection-count + (root.is-vi ? " kết nối" : " conns"); font-size: 11px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
+                                        Text { text: grp.connection-count + (I18n.t(" kết nối", " conns", " 个连接")); font-size: 11px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
                                     }
                                 }
 
@@ -1156,7 +1211,7 @@ export component AppWindow inherits Window {
                                     background: #0284c7;
                                     HorizontalLayout {
                                         alignment: center;
-                                        Text { text: glog.total-queries + (root.is-vi ? " truy vấn" : " queries"); font-size: 11px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
+                                        Text { text: glog.total-queries + (I18n.t(" truy vấn", " queries", " 次查询")); font-size: 11px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
                                     }
                                 }
 
@@ -1167,11 +1222,11 @@ export component AppWindow inherits Window {
                                     background: #dc2626;
                                     HorizontalLayout {
                                         alignment: center;
-                                        Text { text: glog.blocked-queries + (root.is-vi ? " bị chặn" : " blocked"); font-size: 11px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
+                                        Text { text: glog.blocked-queries + (I18n.t(" bị chặn", " blocked", " 次拦截")); font-size: 11px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
                                     }
                                 }
 
-                                Text { text: (root.is-vi ? "Gần nhất: " : "Last: ") + glog.last-seen; font-size: 11px; color: #94a3b8; vertical-alignment: center; min-width: 100px; }
+                                Text { text: (I18n.t("Gần nhất: ", "Last: ", "最近: ")) + glog.last-seen; font-size: 11px; color: #94a3b8; vertical-alignment: center; min-width: 100px; }
                                 Text { text: "IP: " + glog.last-ip; font-size: 11px; color: #64748b; vertical-alignment: center; min-width: 95px; }
                             }
                         }
@@ -1191,7 +1246,7 @@ export component AppWindow inherits Window {
 
                                 Text { text: log.timestamp; font-size: 12px; color: #94a3b8; vertical-alignment: center; min-width: 80px; }
                                 Text {
-                                    text: log.is-blocked ? (root.is-vi ? "[BỊ CHẶN]" : "[BLOCKED]") : (root.is-vi ? "[CHO PHÉP]" : "[ALLOWED]");
+                                    text: log.is-blocked ? (I18n.t("[BỊ CHẶN]", "[BLOCKED]", "[已拦截]")) : (I18n.t("[CHO PHÉP]", "[ALLOWED]", "[允许]"));
                                     font-size: 11px;
                                     font-weight: 700;
                                     vertical-alignment: center;
@@ -1246,15 +1301,15 @@ export component AppWindow inherits Window {
                         horizontal-stretch: 1;
                         spacing: 10px;
 
-                        Text { text: root.is-vi ? "⛔ Danh sách chặn tùy chỉnh (Blacklist):" : "⛔ Custom Blacklist (Block):"; font-size: 14px; font-weight: 700; color: #f87171; }
+                        Text { text: I18n.t("⛔ Danh sách chặn tùy chỉnh (Blacklist):", "⛔ Custom Blacklist (Block):", "⛔ 自定义黑名单 (屏蔽):"); font-size: 14px; font-weight: 700; color: #f87171; }
                         HorizontalLayout {
                             spacing: 8px;
                             block-input := LineEdit {
-                                placeholder-text: root.is-vi ? "Nhập domain muốn chặn..." : "Enter domain to block...";
+                                placeholder-text: I18n.t("Nhập domain muốn chặn...", "Enter domain to block...", "输入要屏蔽的域名...");
                                 horizontal-stretch: 1;
                             }
                             Button {
-                                text: root.is-vi ? "➕ Chặn" : "➕ Block";
+                                text: I18n.t("➕ Chặn", "➕ Block", "➕ 屏蔽");
                                 clicked => {
                                     root.add-custom-rule(block-input.text);
                                     block-input.text = "";
@@ -1273,7 +1328,7 @@ export component AppWindow inherits Window {
                                     padding-right: 6px;
                                     Text { text: "🚫 " + rule; font-size: 12px; color: #fca5a5; vertical-alignment: center; horizontal-stretch: 1; }
                                     Button {
-                                        text: root.is-vi ? "Xóa" : "Delete";
+                                        text: I18n.t("Xóa", "Delete", "删除");
                                         clicked => { root.remove-custom-rule(rule); }
                                     }
                                 }
@@ -1287,15 +1342,15 @@ export component AppWindow inherits Window {
                         horizontal-stretch: 1;
                         spacing: 10px;
 
-                        Text { text: root.is-vi ? "✅ Danh sách cho phép (Whitelist - Ưu tiên cao nhất):" : "✅ Whitelist (Always Allow - Highest Priority):"; font-size: 14px; font-weight: 700; color: #4ade80; }
+                        Text { text: I18n.t("✅ Danh sách cho phép (Whitelist - Ưu tiên cao nhất):", "✅ Whitelist (Always Allow - Highest Priority):", "✅ 白名单 (始终允许 - 最高优先级):"); font-size: 14px; font-weight: 700; color: #4ade80; }
                         HorizontalLayout {
                             spacing: 8px;
                             allow-input := LineEdit {
-                                placeholder-text: root.is-vi ? "Nhập domain luôn cho phép..." : "Enter domain to always allow...";
+                                placeholder-text: I18n.t("Nhập domain luôn cho phép...", "Enter domain to always allow...", "输入始终允许的域名...");
                                 horizontal-stretch: 1;
                             }
                             Button {
-                                text: root.is-vi ? "➕ Cho phép" : "➕ Allow";
+                                text: I18n.t("➕ Cho phép", "➕ Allow", "➕ 允许");
                                 clicked => {
                                     root.add-allowed-rule(allow-input.text);
                                     allow-input.text = "";
@@ -1314,7 +1369,7 @@ export component AppWindow inherits Window {
                                     padding-right: 6px;
                                     Text { text: "✅ " + rule; font-size: 12px; color: #86efac; vertical-alignment: center; horizontal-stretch: 1; }
                                     Button {
-                                        text: root.is-vi ? "Xóa" : "Delete";
+                                        text: I18n.t("Xóa", "Delete", "删除");
                                         clicked => { root.remove-allowed-rule(rule); }
                                     }
                                 }
@@ -1351,7 +1406,7 @@ export component AppWindow inherits Window {
                                     horizontal-stretch: 1;
                                     HorizontalLayout {
                                         spacing: 8px;
-                                        Text { text: "🌐 " + (root.is-vi ? "Chống quảng cáo toàn mạng LAN (DNS Proxy Port 53)" : "Network-wide LAN Adblocker (Port 53)"); font-size: 14px; font-weight: 700; color: #38bdf8; }
+                                        Text { text: "🌐 " + (I18n.t("Chống quảng cáo toàn mạng LAN (DNS Proxy Port 53)", "Network-wide LAN Adblocker (Port 53)", "局域网全网去广告 (DNS 代理端口 53)")); font-size: 14px; font-weight: 700; color: #38bdf8; }
                                         Rectangle {
                                             height: 20px;
                                             border-radius: 10px;
@@ -1360,18 +1415,18 @@ export component AppWindow inherits Window {
                                                 padding-left: 8px;
                                                 padding-right: 8px;
                                                 alignment: center;
-                                                Text { text: root.network-wide-adblock ? (root.is-vi ? "ĐANG HOẠT ĐỘNG" : "ACTIVE") : (root.is-vi ? "ĐANG TẮT" : "DISABLED"); font-size: 10px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
+                                                Text { text: root.network-wide-adblock ? (I18n.t("ĐANG HOẠT ĐỘNG", "ACTIVE", "运行中")) : (I18n.t("ĐANG TẮT", "DISABLED", "已关闭")); font-size: 10px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
                                             }
                                         }
                                     }
                                     Text {
-                                        text: root.is-vi ? "Mở cổng DNS 53 cho tất cả các thiết bị cùng mạng Wi-Fi (iPhone, Android, Smart TV, PC). Đặt DNS Router về IP máy này để tự động chặn sạch quảng cáo." : "Listen on UDP/TCP port 53 for all LAN devices. Set your Wi-Fi Router DNS to this PC's IP to block ads network-wide.";
+                                        text: I18n.t("Mở cổng DNS 53 cho tất cả các thiết bị cùng mạng Wi-Fi (iPhone, Android, Smart TV, PC). Đặt DNS Router về IP máy này để tự động chặn sạch quảng cáo.", "Listen on UDP/TCP port 53 for all LAN devices. Set your Wi-Fi Router DNS to this PC's IP to block ads network-wide.", "向同一 Wi-Fi 网络内的所有设备 (iPhone、Android、智能电视、PC) 开放 DNS 端口 53。将路由器 DNS 指向本机 IP 即可自动屏蔽全网广告。");
                                         font-size: 12px;
                                         color: #94a3b8;
                                     }
                                 }
                                 Button {
-                                    text: root.network-wide-adblock ? (root.is-vi ? "TẮT TÍNH NĂNG" : "DISABLE") : (root.is-vi ? "BẬT TOÀN MẠNG" : "ENABLE");
+                                    text: root.network-wide-adblock ? (I18n.t("TẮT TÍNH NĂNG", "DISABLE", "关闭功能")) : (I18n.t("BẬT TOÀN MẠNG", "ENABLE", "全网启用"));
                                     clicked => { root.toggle-network-wide-adblock(!root.network-wide-adblock); }
                                 }
                             }
@@ -1389,11 +1444,11 @@ export component AppWindow inherits Window {
                                         padding-left: 10px;
                                         padding-right: 10px;
                                         alignment: start;
-                                        Text { text: (root.is-vi ? "📡 Địa chỉ IP máy chủ LAN: " : "📡 Host Server IP: ") + root.host-lan-ip + " : 53"; font-size: 12px; font-weight: 800; color: #22c55e; vertical-alignment: center; }
+                                        Text { text: (I18n.t("📡 Địa chỉ IP máy chủ LAN: ", "📡 Host Server IP: ", "📡 局域网主机 IP: ")) + root.host-lan-ip + " : 53"; font-size: 12px; font-weight: 800; color: #22c55e; vertical-alignment: center; }
                                     }
                                 }
                                 Button {
-                                    text: root.silent-sinkhole ? (root.is-vi ? "🛡️ Silent Sinkhole: BẬT" : "🛡️ Silent Sinkhole: ON") : (root.is-vi ? "🛡️ Silent Sinkhole: TẮT" : "🛡️ Silent Sinkhole: OFF");
+                                    text: root.silent-sinkhole ? (I18n.t("🛡️ Silent Sinkhole: BẬT", "🛡️ Silent Sinkhole: ON", "🛡️ 静默黑洞: 开")) : (I18n.t("🛡️ Silent Sinkhole: TẮT", "🛡️ Silent Sinkhole: OFF", "🛡️ 静默黑洞: 关"));
                                     clicked => { root.toggle-silent-sinkhole(!root.silent-sinkhole); }
                                 }
                             }
@@ -1411,7 +1466,7 @@ export component AppWindow inherits Window {
 
                             HorizontalLayout {
                                 spacing: 8px;
-                                Text { text: "🛡️ " + (root.is-vi ? "Hệ thống Phòng thủ An ninh & Chống Xâm nhập (IDS / IPS / ARP)" : "Intrusion Detection & Prevention Defense (IDS / IPS / ARP)"); font-size: 14px; font-weight: 700; color: #34d399; }
+                                Text { text: "🛡️ " + (I18n.t("Hệ thống Phòng thủ An ninh & Chống Xâm nhập (IDS / IPS / ARP)", "Intrusion Detection & Prevention Defense (IDS / IPS / ARP)", "安全防御与入侵防护系统 (IDS / IPS / ARP)")); font-size: 14px; font-weight: 700; color: #34d399; }
                                 Rectangle {
                                     height: 20px;
                                     border-radius: 10px;
@@ -1420,7 +1475,7 @@ export component AppWindow inherits Window {
                                         padding-left: 8px;
                                         padding-right: 8px;
                                         alignment: center;
-                                        Text { text: root.attack-detection-enabled ? (root.is-vi ? "BẢO VỆ TỐI CAO" : "MAX SHIELD") : (root.is-vi ? "ĐANG TẮT" : "OFF"); font-size: 10px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
+                                        Text { text: root.attack-detection-enabled ? (I18n.t("BẢO VỆ TỐI CAO", "MAX SHIELD", "最高防护")) : (I18n.t("ĐANG TẮT", "OFF", "已关闭")); font-size: 10px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
                                     }
                                 }
                             }
@@ -1436,10 +1491,10 @@ export component AppWindow inherits Window {
                                     VerticalLayout {
                                         padding: 10px;
                                         spacing: 6px;
-                                        Text { text: root.is-vi ? "Phát hiện tấn công (IDS)" : "Intrusion Detection (IDS)"; font-size: 12px; font-weight: 700; color: #38bdf8; }
-                                        Text { text: root.is-vi ? "Giám sát DoS Flood, Tunneling & Botnet" : "Monitors DoS, Tunneling & Botnet"; font-size: 11px; color: #94a3b8; }
+                                        Text { text: I18n.t("Phát hiện tấn công (IDS)", "Intrusion Detection (IDS)", "入侵检测 (IDS)"); font-size: 12px; font-weight: 700; color: #38bdf8; }
+                                        Text { text: I18n.t("Giám sát DoS Flood, Tunneling & Botnet", "Monitors DoS, Tunneling & Botnet", "监控 DoS 洪水、隧道与僵尸网络"); font-size: 11px; color: #94a3b8; }
                                         Button {
-                                            text: root.attack-detection-enabled ? (root.is-vi ? "✅ ĐANG BẬT" : "✅ ON") : (root.is-vi ? "⚪ ĐANG TẮT" : "⚪ OFF");
+                                            text: root.attack-detection-enabled ? (I18n.t("✅ ĐANG BẬT", "✅ ON", "✅ 已开启")) : (I18n.t("⚪ ĐANG TẮT", "⚪ OFF", "⚪ 已关闭"));
                                             clicked => { root.toggle-attack-detection(!root.attack-detection-enabled); }
                                         }
                                     }
@@ -1453,10 +1508,10 @@ export component AppWindow inherits Window {
                                     VerticalLayout {
                                         padding: 10px;
                                         spacing: 6px;
-                                        Text { text: root.is-vi ? "Tự động khóa IP (IPS)" : "Auto-Block Threat (IPS)"; font-size: 12px; font-weight: 700; color: #f87171; }
-                                        Text { text: root.is-vi ? "Tự động cô lập nguồn độc hại 5 phút" : "Auto-mitigates & drops source IP"; font-size: 11px; color: #94a3b8; }
+                                        Text { text: I18n.t("Tự động khóa IP (IPS)", "Auto-Block Threat (IPS)", "自动封锁 IP (IPS)"); font-size: 12px; font-weight: 700; color: #f87171; }
+                                        Text { text: I18n.t("Tự động cô lập nguồn độc hại 5 phút", "Auto-mitigates & drops source IP", "自动隔离恶意源 5 分钟"); font-size: 11px; color: #94a3b8; }
                                         Button {
-                                            text: root.auto-block-attacks ? (root.is-vi ? "✅ ĐANG BẬT" : "✅ ON") : (root.is-vi ? "⚪ ĐANG TẮT" : "⚪ OFF");
+                                            text: root.auto-block-attacks ? (I18n.t("✅ ĐANG BẬT", "✅ ON", "✅ 已开启")) : (I18n.t("⚪ ĐANG TẮT", "⚪ OFF", "⚪ 已关闭"));
                                             clicked => { root.toggle-auto-block-attacks(!root.auto-block-attacks); }
                                         }
                                     }
@@ -1470,10 +1525,10 @@ export component AppWindow inherits Window {
                                     VerticalLayout {
                                         padding: 10px;
                                         spacing: 6px;
-                                        Text { text: root.is-vi ? "Chống ARP Spoofing" : "Anti-ARP Spoofing"; font-size: 12px; font-weight: 700; color: #fbbf24; }
-                                        Text { text: root.is-vi ? "Bảo vệ Router Gateway chống nghe lén" : "Protects Gateway from MITM snooping"; font-size: 11px; color: #94a3b8; }
+                                        Text { text: I18n.t("Chống ARP Spoofing", "Anti-ARP Spoofing", "防 ARP 欺骗"); font-size: 12px; font-weight: 700; color: #fbbf24; }
+                                        Text { text: I18n.t("Bảo vệ Router Gateway chống nghe lén", "Protects Gateway from MITM snooping", "保护网关路由器免遭窃听"); font-size: 11px; color: #94a3b8; }
                                         Button {
-                                            text: root.arp-spoof-detection ? (root.is-vi ? "✅ ĐANG BẬT" : "✅ ON") : (root.is-vi ? "⚪ ĐANG TẮT" : "⚪ OFF");
+                                            text: root.arp-spoof-detection ? (I18n.t("✅ ĐANG BẬT", "✅ ON", "✅ 已开启")) : (I18n.t("⚪ ĐANG TẮT", "⚪ OFF", "⚪ 已关闭"));
                                             clicked => { root.toggle-arp-spoof-detection(!root.arp-spoof-detection); }
                                         }
                                     }
@@ -1491,29 +1546,29 @@ export component AppWindow inherits Window {
                             padding: 14px;
                             spacing: 10px;
 
-                            Text { text: "⚙️ " + (root.is-vi ? "Vận hành Hệ thống & Tùy chọn Ứng dụng:" : "System Operation & Preferences:"); font-size: 14px; font-weight: 700; color: #e2e8f0; }
+                            Text { text: "⚙️ " + (I18n.t("Vận hành Hệ thống & Tùy chọn Ứng dụng:", "System Operation & Preferences:", "系统运行与应用偏好:")); font-size: 14px; font-weight: 700; color: #e2e8f0; }
 
                             HorizontalLayout {
                                 spacing: 12px;
                                 Button {
                                     horizontal-stretch: 1;
-                                    text: root.autostart-enabled ? (root.is-vi ? "✅ Khởi động cùng Windows: BẬT" : "✅ Autostart: ON") : (root.is-vi ? "⚪ Khởi động cùng Windows: TẮT" : "⚪ Autostart: OFF");
+                                    text: root.autostart-enabled ? (I18n.t("✅ Khởi động cùng Windows: BẬT", "✅ Autostart: ON", "✅ 开机自启: 开")) : (I18n.t("⚪ Khởi động cùng Windows: TẮT", "⚪ Autostart: OFF", "⚪ 开机自启: 关"));
                                     clicked => { root.toggle-autostart(!root.autostart-enabled); }
                                 }
                                 Button {
                                     horizontal-stretch: 1;
-                                    text: root.enable-notifications ? (root.is-vi ? "🔔 Thông báo chặn QC: BẬT" : "🔔 Block Notifications: ON") : (root.is-vi ? "⚪ Thông báo chặn QC: TẮT" : "⚪ Block Notifications: OFF");
+                                    text: root.enable-notifications ? (I18n.t("🔔 Thông báo chặn QC: BẬT", "🔔 Block Notifications: ON", "🔔 拦截广告通知: 开")) : (I18n.t("⚪ Thông báo chặn QC: TẮT", "⚪ Block Notifications: OFF", "⚪ 拦截广告通知: 关"));
                                     clicked => { root.toggle-notifications(!root.enable-notifications); }
                                 }
                                 Button {
                                     horizontal-stretch: 1;
-                                    text: root.minimize-to-tray-enabled ? (root.is-vi ? "✅ Đóng vào Khay: BẬT" : "✅ Close to Tray: ON") : (root.is-vi ? "⚪ Đóng vào Khay: TẮT" : "⚪ Close to Tray: OFF");
+                                    text: root.minimize-to-tray-enabled ? (I18n.t("✅ Đóng vào Khay: BẬT", "✅ Close to Tray: ON", "✅ 关闭到托盘: 开")) : (I18n.t("⚪ Đóng vào Khay: TẮT", "⚪ Close to Tray: OFF", "⚪ 关闭到托盘: 关"));
                                     clicked => { root.toggle-minimize-to-tray(!root.minimize-to-tray-enabled); }
                                 }
                                 Button {
                                     horizontal-stretch: 1;
-                                    text: root.is-vi ? "🇻🇳 Tiếng Việt (Chuyển EN)" : "🇬🇧 English (Switch VI)";
-                                    clicked => { root.change-language(root.is-vi ? "en" : "vi"); }
+                                    text: I18n.lang == 0 ? "🌐 Tiếng Việt ➜ English" : (I18n.lang == 1 ? "🌐 English ➜ 中文" : "🌐 中文 ➜ Tiếng Việt");
+                                    clicked => { root.change-language(I18n.lang == 0 ? "en" : (I18n.lang == 1 ? "zh" : "vi")); }
                                 }
                             }
 
@@ -1521,14 +1576,20 @@ export component AppWindow inherits Window {
                                 spacing: 12px;
                                 Button {
                                     horizontal-stretch: 1;
-                                    text: root.minimize-to-tray-on-minimize ? (root.is-vi ? "🔽 Thu nhỏ vào Khay: BẬT" : "🔽 Minimize to Tray: ON") : (root.is-vi ? "⚪ Thu nhỏ vào Taskbar: TẮT" : "⚪ Minimize to Taskbar: OFF");
+                                    text: root.minimize-to-tray-on-minimize ? (I18n.t("🔽 Thu nhỏ vào Khay: BẬT", "🔽 Minimize to Tray: ON", "🔽 最小化到托盘: 开")) : (I18n.t("⚪ Thu nhỏ vào Taskbar: TẮT", "⚪ Minimize to Taskbar: OFF", "⚪ 最小化到任务栏: 关"));
                                     clicked => { root.toggle-minimize-to-tray-on-minimize(!root.minimize-to-tray-on-minimize); }
                                 }
                                 Button {
                                     horizontal-stretch: 1;
-                                    text: root.start-hidden-in-tray ? (root.is-vi ? "👻 Khởi động ẩn trong Khay: BẬT" : "👻 Start Hidden in Tray: ON") : (root.is-vi ? "⚪ Khởi động hiện cửa sổ: TẮT" : "⚪ Start with Window: OFF");
+                                    text: root.start-hidden-in-tray ? (I18n.t("👻 Khởi động ẩn trong Khay: BẬT", "👻 Start Hidden in Tray: ON", "👻 启动时隐藏到托盘: 开")) : (I18n.t("⚪ Khởi động hiện cửa sổ: TẮT", "⚪ Start with Window: OFF", "⚪ 启动时显示窗口: 关"));
                                     clicked => { root.toggle-start-hidden-in-tray(!root.start-hidden-in-tray); }
                                 }
+                            }
+
+                            Text {
+                                text: I18n.t("⌨ Phím tắt toàn cục: Ctrl+Alt+S bật/tắt bảo vệ", "⌨ Global hotkey: Ctrl+Alt+S toggles protection", "⌨ 全局快捷键：Ctrl+Alt+S 开关防护");
+                                font-size: 10px;
+                                color: #64748b;
                             }
                         }
                     }
@@ -1552,7 +1613,7 @@ export component AppWindow inherits Window {
                             }
 
                             Text {
-                                text: root.is-vi ? "Phần mềm bảo vệ an ninh mạng, chống rò rỉ dữ liệu, ngăn chặn tấn công xâm nhập & triệt tiêu 100% quảng cáo toàn mạng LAN thế hệ mới." : "Next-generation cyber shield protecting network privacy, preventing intrusion attacks, and eliminating ads across your entire LAN.";
+                                text: I18n.t("Phần mềm bảo vệ an ninh mạng, chống rò rỉ dữ liệu, ngăn chặn tấn công xâm nhập & triệt tiêu 100% quảng cáo toàn mạng LAN thế hệ mới.", "Next-generation cyber shield protecting network privacy, preventing intrusion attacks, and eliminating ads across your entire LAN.", "新一代网络安全防护软件：防止数据泄露、阻止入侵攻击，并彻底消除整个局域网的广告。");
                                 font-size: 11px;
                                 color: #64748b;
                             }
@@ -1586,9 +1647,9 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 12px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "THIẾT BỊ LÂN CẬN (PROXIMITY)" : "PROXIMITY NODES"; font-size: 11px; font-weight: 700; color: #a78bfa; }
+                                Text { text: I18n.t("THIẾT BỊ LÂN CẬN (PROXIMITY)", "PROXIMITY NODES", "邻近设备 (PROXIMITY)"); font-size: 11px; font-weight: 700; color: #a78bfa; }
                                 Text { text: root.proximity-devices-count; font-size: 24px; font-weight: 800; color: #c084fc; }
-                                Text { text: root.is-vi ? "Quét mDNS, SSDP, ARP đa lớp mạng" : "Multi-layer mDNS, SSDP & ARP probe"; font-size: 11px; color: #64748b; }
+                                Text { text: I18n.t("Quét mDNS, SSDP, ARP đa lớp mạng", "Multi-layer mDNS, SSDP & ARP probe", "多层 mDNS、SSDP、ARP 探测"); font-size: 11px; color: #64748b; }
                             }
                         }
 
@@ -1602,9 +1663,9 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 12px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "HỒ SƠ HÀNH VI (BEHAVIOR)" : "BEHAVIOR PROFILES"; font-size: 11px; font-weight: 700; color: #38bdf8; }
+                                Text { text: I18n.t("HỒ SƠ HÀNH VI (BEHAVIOR)", "BEHAVIOR PROFILES", "行为档案 (BEHAVIOR)"); font-size: 11px; font-weight: 700; color: #38bdf8; }
                                 Text { text: root.behavior-profiles-count; font-size: 24px; font-weight: 800; color: #38bdf8; }
-                                Text { text: root.is-vi ? "Baseline lưu lượng & phân tích DGA" : "Traffic baseline & DGA analytics"; font-size: 11px; color: #64748b; }
+                                Text { text: I18n.t("Baseline lưu lượng & phân tích DGA", "Traffic baseline & DGA analytics", "流量基线与 DGA 分析"); font-size: 11px; color: #64748b; }
                             }
                         }
 
@@ -1618,9 +1679,9 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 12px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "MỐI NGUY CAO (HIGH RISK)" : "HIGH RISK THREATS"; font-size: 11px; font-weight: 700; color: #f87171; }
+                                Text { text: I18n.t("MỐI NGUY CAO (HIGH RISK)", "HIGH RISK THREATS", "高危威胁 (HIGH RISK)"); font-size: 11px; font-weight: 700; color: #f87171; }
                                 Text { text: root.high-risk-count; font-size: 24px; font-weight: 800; color: #ef4444; }
-                                Text { text: root.is-vi ? "Thiết bị có điểm rủi ro >= 50" : "Devices with Risk Score >= 50"; font-size: 11px; color: #fca5a5; }
+                                Text { text: I18n.t("Thiết bị có điểm rủi ro >= 50", "Devices with Risk Score >= 50", "风险评分 >= 50 的设备"); font-size: 11px; color: #fca5a5; }
                             }
                         }
 
@@ -1634,9 +1695,9 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 12px;
                                 spacing: 4px;
-                                Text { text: root.is-vi ? "TRẠM PHÁT WI-FI (AIR)" : "AMBIENT WI-FI NODES"; font-size: 11px; font-weight: 700; color: #fbbf24; }
+                                Text { text: I18n.t("TRẠM PHÁT WI-FI (AIR)", "AMBIENT WI-FI NODES", "周边 Wi-Fi 站点 (AIR)"); font-size: 11px; font-weight: 700; color: #fbbf24; }
                                 Text { text: root.wifi-nodes-count; font-size: 24px; font-weight: 800; color: #fbbf24; }
-                                Text { text: root.is-vi ? "BSSID & Tín hiệu lân cận" : "Nearby BSSIDs & Signal radios"; font-size: 11px; color: #64748b; }
+                                Text { text: I18n.t("BSSID & Tín hiệu lân cận", "Nearby BSSIDs & Signal radios", "附近 BSSID 与信号"); font-size: 11px; color: #64748b; }
                             }
                         }
                     }
@@ -1646,35 +1707,50 @@ export component AppWindow inherits Window {
                         alignment: center;
 
                         Button {
-                            text: root.admin-subview-mode == 0 ? (root.is-vi ? "🧠 Xem Hồ Sơ Hành Vi" : "🧠 View Behavior Profiles") : (root.is-vi ? "📡 Xem Thiết Bị Lân Cận" : "📡 View Proximity Nodes");
+                            text: root.admin-subview-mode == 0 ? (I18n.t("🧠 Xem Hồ Sơ Hành Vi", "🧠 View Behavior Profiles", "🧠 查看行为档案")) : (I18n.t("📡 Xem Thiết Bị Lân Cận", "📡 View Proximity Nodes", "📡 查看邻近设备"));
                             clicked => { root.admin-subview-mode = root.admin-subview-mode == 0 ? 1 : 0; }
                         }
                         Button {
-                            text: root.is-vi ? "🔍 Quét lân cận ngay (Proximity Sweep)" : "🔍 Trigger Proximity Sweep";
+                            text: root.admin-subview-mode == 2 ? (I18n.t("● 📷 Camera ✓", "● 📷 Camera ✓", "● 📷 摄像头 ✓")) : (I18n.t("📷 Camera", "📷 Camera", "📷 摄像头"));
+                            clicked => { root.admin-subview-mode = 2; }
+                        }
+                        Button {
+                            text: I18n.t("🔍 Quét lân cận ngay (Proximity Sweep)", "🔍 Trigger Proximity Sweep", "🔍 立即扫描邻近设备");
                             clicked => { root.trigger-proximity-scan(); }
                         }
                         Button {
-                            text: root.is-vi ? "🔄 Làm mới dữ liệu" : "🔄 Refresh Data";
+                            text: I18n.t("📷 Quét camera", "📷 Scan Cameras", "📷 扫描摄像头");
+                            clicked => { root.scan-cameras(); }
+                        }
+                        Button {
+                            text: I18n.t("🔄 Làm mới dữ liệu", "🔄 Refresh Data", "🔄 刷新数据");
                             clicked => { root.refresh-admin-data(); }
                         }
                         Rectangle { horizontal-stretch: 1; }
                         Text {
-                            text: root.admin-subview-mode == 0 ? (root.is-vi ? "Danh sách thiết bị quét lân cận & thăm dò đa giao thức:" : "Proximity devices discovered via multi-protocol probes:") : (root.is-vi ? "Hồ sơ phân tích hành vi & nhận diện bất thường từng thiết bị:" : "Real-time device behavioral profiling & anomaly detection:");
+                            text: root.admin-subview-mode == 0 ? (I18n.t("Danh sách thiết bị quét lân cận & thăm dò đa giao thức:", "Proximity devices discovered via multi-protocol probes:", "多协议探测发现的邻近设备列表:")) : (root.admin-subview-mode == 1 ? (I18n.t("Hồ sơ phân tích hành vi & nhận diện bất thường từng thiết bị:", "Real-time device behavioral profiling & anomaly detection:", "设备行为分析异常检测档案:")) : (I18n.t("Camera RTSP/ONVIF phát hiện trong mạng — mở bằng VLC hoặc copy URL:", "RTSP/ONVIF cameras found on the network — open in VLC or copy URL:", "网络中发现的 RTSP/ONVIF 摄像头 — 用 VLC 打开或复制 URL:")));
                             font-size: 12px;
                             font-weight: 600;
                             color: #94a3b8;
                         }
                     }
 
+                    if root.admin-subview-mode == 2 && root.camera-list.length == 0 : Text {
+                        text: I18n.t("Chưa có camera nào — bấm 📷 Quét camera.", "No cameras yet — press 📷 Scan Cameras.", "尚未发现摄像头 — 请点击 📷 扫描摄像头。");
+                        font-size: 12px;
+                        color: #64748b;
+                        horizontal-alignment: center;
+                    }
+
                     if root.admin-subview-mode == 0 && root.proximity-devices.length == 0 : Text {
-                        text: root.is-vi ? "Chưa phát hiện thiết bị lân cận — bấm 🔍 Quét lân cận ngay." : "No proximity nodes yet — press 🔍 Trigger Proximity Sweep.";
+                        text: I18n.t("Chưa phát hiện thiết bị lân cận — bấm 🔍 Quét lân cận ngay.", "No proximity nodes yet — press 🔍 Trigger Proximity Sweep.", "尚未发现邻近设备 — 请点击 🔍 立即扫描邻近设备。");
                         font-size: 12px;
                         color: #64748b;
                         horizontal-alignment: center;
                     }
 
                     if root.admin-subview-mode == 1 && root.behavior-profiles.length == 0 : Text {
-                        text: root.is-vi ? "Chưa có hồ sơ hành vi — hồ sơ hình thành khi thiết bị truy vấn DNS." : "No behavior profiles yet — profiles build as devices query DNS.";
+                        text: I18n.t("Chưa có hồ sơ hành vi — hồ sơ hình thành khi thiết bị truy vấn DNS.", "No behavior profiles yet — profiles build as devices query DNS.", "暂无行为档案 — 设备发起 DNS 查询后自动生成。");
                         font-size: 12px;
                         color: #64748b;
                         horizontal-alignment: center;
@@ -1698,7 +1774,7 @@ export component AppWindow inherits Window {
                                     alignment: center;
                                     min-width: 220px;
                                     Text { text: pdev.name; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
-                                    Text { text: (root.is-vi ? "Hãng: " : "Vendor: ") + pdev.vendor; font-size: 11px; color: #38bdf8; }
+                                    Text { text: (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + pdev.vendor; font-size: 11px; color: #38bdf8; }
                                 }
 
                                 VerticalLayout {
@@ -1711,15 +1787,15 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     alignment: center;
                                     min-width: 150px;
-                                    Text { text: (root.is-vi ? "Giao thức: " : "Proto: ") + pdev.discovery-method; font-size: 11px; font-weight: 700; color: #a78bfa; overflow: elide; }
-                                    Text { text: (root.is-vi ? "Mạng nguồn: " : "Source net: ") + pdev.network-interface; font-size: 11px; color: #94a3b8; overflow: elide; }
+                                    Text { text: (I18n.t("Giao thức: ", "Proto: ", "协议: ")) + pdev.discovery-method; font-size: 11px; font-weight: 700; color: #a78bfa; overflow: elide; }
+                                    Text { text: (I18n.t("Mạng nguồn: ", "Source net: ", "来源网络: ")) + pdev.network-interface; font-size: 11px; color: #94a3b8; overflow: elide; }
                                 }
 
                                 VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 1;
-                                    Text { text: (root.is-vi ? "Cổng mở: " : "Ports: ") + pdev.open-ports-str; font-size: 11px; color: #e2e8f0; overflow: elide; }
-                                    Text { text: (root.is-vi ? "Thấy lúc: " : "Seen: ") + pdev.last-seen; font-size: 10px; color: #64748b; }
+                                    Text { text: (I18n.t("Cổng mở: ", "Ports: ", "开放端口: ")) + pdev.open-ports-str; font-size: 11px; color: #e2e8f0; overflow: elide; }
+                                    Text { text: (I18n.t("Thấy lúc: ", "Seen: ", "发现时间: ")) + pdev.last-seen; font-size: 10px; color: #64748b; }
                                 }
 
                                 Rectangle {
@@ -1729,8 +1805,73 @@ export component AppWindow inherits Window {
                                     background: pdev.is-online ? #064e3b : #374151;
                                     HorizontalLayout {
                                         alignment: center;
-                                        Text { text: pdev.is-online ? (root.is-vi ? "ONLINE" : "ONLINE") : (root.is-vi ? "OFFLINE" : "OFFLINE"); font-size: 10px; font-weight: 800; color: pdev.is-online ? #34d399 : #94a3b8; vertical-alignment: center; }
+                                        Text { text: pdev.is-online ? "ONLINE" : "OFFLINE"; font-size: 10px; font-weight: 800; color: pdev.is-online ? #34d399 : #94a3b8; vertical-alignment: center; }
                                     }
+                                }
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.attack-target-ip = pdev.ip;
+                                    root.attack-target-name = pdev.name;
+                                    root.attack-target-mac = pdev.mac;
+                                    root.attack-target-vendor = pdev.vendor;
+                                    root.attack-message = "";
+                                    root.attack-modal-tab = 2;
+                                    root.attack-mode = 1;
+                                    root.attack-duration-min = 15;
+                                    root.attack-modal-open = true;
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: "⚔ " + I18n.t("Thông báo đang chạy: ", "Active notices: ", "进行中的通告：") + root.active-attacks-count;
+                            font-size: 13px;
+                            font-weight: 700;
+                            color: root.active-attacks-count > 0 ? #f87171 : #64748b;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: I18n.t("🗑 Hủy hết hạn", "🗑 Clear expired", "🗑 清除过期");
+                            clicked => { root.refresh-admin-data(); }
+                        }
+                    }
+
+                    if root.attack-history.length > 0 : ListView {
+                        height: 110px;
+                        for atk in root.attack-history : Rectangle {
+                            height: 34px;
+                            background: atk.is-warning ? #241405 : #2a0808;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: atk.is-warning ? #f59e0b : #ef4444;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 6px;
+                                spacing: 10px;
+                                alignment: start;
+                                Rectangle {
+                                    width: 86px;
+                                    height: 20px;
+                                    border-radius: 10px;
+                                    background: atk.is-warning ? #d97706 : #dc2626;
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        Text { text: atk.mode-label; font-size: 9px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
+                                    }
+                                }
+                                Text { text: atk.target; font-size: 11px; font-weight: 700; color: #f1f5f9; vertical-alignment: center; min-width: 110px; }
+                                Text { text: atk.message; font-size: 10px; color: #cbd5e1; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                Text { text: atk.window-label; font-size: 9px; color: #94a3b8; vertical-alignment: center; min-width: 150px; }
+                                Text { text: atk.hits-label; font-size: 10px; color: #38bdf8; vertical-alignment: center; min-width: 50px; }
+                                Button {
+                                    text: "✖";
+                                    width: 30px;
+                                    clicked => { root.cancel-attack(atk.target); }
                                 }
                             }
                         }
@@ -1760,15 +1901,15 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     alignment: center;
                                     min-width: 160px;
-                                    Text { text: (root.is-vi ? "Phân loại: " : "Class: ") + prof.category; font-size: 12px; font-weight: 700; color: prof.risk-score >= 50 ? #f87171 : #4ade80; }
+                                    Text { text: (I18n.t("Phân loại: ", "Class: ", "分类: ")) + prof.category; font-size: 12px; font-weight: 700; color: prof.risk-score >= 50 ? #f87171 : #4ade80; }
                                     Text { text: "Burst QPS: " + prof.burst-qps; font-size: 11px; color: #94a3b8; }
                                 }
 
                                 VerticalLayout {
                                     alignment: center;
                                     min-width: 180px;
-                                    Text { text: (root.is-vi ? "Tổng: " : "Total: ") + prof.total-queries + (root.is-vi ? " | Chặn: " : " | Blocked: ") + prof.blocked-queries; font-size: 11px; font-weight: 600; color: #cbd5e1; }
-                                    Text { text: (root.is-vi ? "Mối nguy: " : "Threats: ") + prof.threat-queries + (root.is-vi ? " mối đe dọa" : " flagged"); font-size: 11px; color: prof.threat-queries > 0 ? #f87171 : #64748b; }
+                                    Text { text: (I18n.t("Tổng: ", "Total: ", "总计: ")) + prof.total-queries + (I18n.t(" | Chặn: ", " | Blocked: ", " | 拦截: ")) + prof.blocked-queries; font-size: 11px; font-weight: 600; color: #cbd5e1; }
+                                    Text { text: (I18n.t("Mối nguy: ", "Threats: ", "威胁: ")) + prof.threat-queries + (I18n.t(" mối đe dọa", " flagged", " 个威胁")); font-size: 11px; color: prof.threat-queries > 0 ? #f87171 : #64748b; }
                                 }
 
                                 Rectangle { horizontal-stretch: 1; }
@@ -1780,10 +1921,225 @@ export component AppWindow inherits Window {
                                     background: prof.risk-score >= 70 ? #7f1d1d : (prof.risk-score >= 40 ? #78350f : #064e3b);
                                     HorizontalLayout {
                                         alignment: center;
-                                        Text { text: (root.is-vi ? "Rủi ro: " : "Risk: ") + prof.risk-score + "/100"; font-size: 11px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
+                                        Text { text: (I18n.t("Rủi ro: ", "Risk: ", "风险: ")) + prof.risk-score + "/100"; font-size: 11px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    if root.admin-subview-mode == 2 && root.camera-list.length > 0 : HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: I18n.t("💡 Mở stream cần trình phát hỗ trợ RTSP (VLC). App không thử mật khẩu giúp bạn.", "Playing a stream needs an RTSP player (VLC). The app does not try passwords for you.", "播放视频流需要支持 RTSP 的播放器（VLC）。应用不会替您尝试密码。");
+                            font-size: 10px;
+                            color: #64748b;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+
+                    if root.admin-subview-mode == 2 : ListView {
+                        height: 220px;
+                        for cam in root.camera-list : Rectangle {
+                            height: 46px;
+                            background: #111827;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: cam.is-online ? #064e3b : #374151;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 8px;
+                                spacing: 10px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 170px;
+                                    Text { text: cam.vendor + "  " + cam.model; font-size: 12px; font-weight: 700; color: #f1f5f9; overflow: elide; }
+                                    Text { text: cam.source + (cam.is-online ? "  •  RTSP ✓" : "  •  RTSP ✗"); font-size: 9px; color: cam.is-online ? #34d399 : #94a3b8; }
+                                }
+
+                                Text { text: cam.ip; font-size: 12px; font-weight: 700; color: #cbd5e1; vertical-alignment: center; min-width: 120px; }
+                                Text { text: cam.rtsp-url; font-size: 10px; color: #38bdf8; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+
+                                Button {
+                                    text: I18n.t("📋 Copy", "📋 Copy", "📋 复制");
+                                    clicked => { root.copy-camera-url(cam.rtsp-url); }
+                                }
+                                Button {
+                                    text: I18n.t("▶ Mở VLC", "▶ Open VLC", "▶ 用 VLC 打开");
+                                    clicked => { root.open-camera-stream(cam.rtsp-url); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.attack-modal-open : Rectangle {
+        z: 150;
+        width: root.width;
+        height: root.height;
+        background: #000000aa;
+        TouchArea {
+            clicked => { root.attack-modal-open = false; }
+        }
+    }
+
+    if root.attack-modal-open : Rectangle {
+        z: 160;
+        width: 620px;
+        height: 470px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: #0d121f;
+        border-radius: 14px;
+        border-width: 2px;
+        border-color: #ef4444;
+        drop-shadow-color: #000000cc;
+        drop-shadow-blur: 24px;
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "⚠️ " + I18n.t("CẢNH BÁO THIẾT BỊ", "DEVICE NOTICE", "设备通告");
+                    font-size: 17px;
+                    font-weight: 800;
+                    color: #f87171;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: "✖";
+                    width: 36px;
+                    clicked => { root.attack-modal-open = false; }
+                }
+            }
+
+            Text {
+                text: root.attack-target-name;
+                font-size: 15px;
+                font-weight: 800;
+                color: #f1f5f9;
+                overflow: elide;
+            }
+            Text {
+                text: "IP: " + root.attack-target-ip + "    MAC: " + root.attack-target-mac + "    " + (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + root.attack-target-vendor;
+                font-size: 11px;
+                color: #94a3b8;
+                overflow: elide;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                TabButton {
+                    text: I18n.t("ℹ Thông tin", "ℹ Info", "ℹ 信息");
+                    active: root.attack-modal-tab == 0;
+                    clicked => { root.attack-modal-tab = 0; }
+                }
+                TabButton {
+                    text: I18n.t("📈 Hành vi", "📈 Behavior", "📈 行为");
+                    active: root.attack-modal-tab == 1;
+                    clicked => { root.attack-modal-tab = 1; }
+                }
+                TabButton {
+                    text: I18n.t("⚠ THÔNG BÁO", "⚠ NOTICE", "⚠ 通告");
+                    active: root.attack-modal-tab == 2;
+                    active-color: #ef4444;
+                    clicked => { root.attack-modal-tab = 2; }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: #0b0f19;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #1e293b;
+                clip: true;
+
+                if root.attack-modal-tab == 0 : VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+                    Text { text: root.attack-target-name; font-size: 14px; font-weight: 700; color: #f1f5f9; }
+                    Text { text: (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + root.attack-target-vendor; font-size: 12px; color: #38bdf8; }
+                    Text { text: "IP: " + root.attack-target-ip; font-size: 12px; color: #cbd5e1; }
+                    Text { text: "MAC: " + root.attack-target-mac; font-size: 12px; color: #cbd5e1; }
+                    Text {
+                        text: I18n.t("Chọn tab ⚠ THÔNG BÁO để gửi trang cảnh báo tới thiết bị này.", "Open the ⚠ ATTACK tab to send a warning page to this device.", "打开 ⚠ 攻击 选项卡以向此设备发送警告页面。");
+                        font-size: 11px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if root.attack-modal-tab == 1 : VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+                    Text {
+                        text: I18n.t("Hồ sơ hành vi chi tiết của thiết bị được tổng hợp trong mục 🧠 Xem Hồ Sơ Hành Vi của tab Admin.", "Detailed behavior profiles are aggregated in the 🧠 View Behavior Profiles section of the Admin tab.", "设备的详细行为档案汇总在管理选项卡的 🧠 查看行为档案 中。");
+                        font-size: 12px;
+                        color: #94a3b8;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if root.attack-modal-tab == 2 : VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    Text {
+                        text: I18n.t("Tin nhắn hiển thị trên trang cảnh báo:", "Message shown on the warning page:", "警告页面显示的消息：");
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: #e2e8f0;
+                    }
+                    LineEdit {
+                        text <=> root.attack-message;
+                        placeholder-text: I18n.t("Để trống = tin nhắn mặc định của hệ thống...", "Leave empty for the default system message...", "留空则使用系统默认消息...");
+                    }
+
+                    Text {
+                        text: I18n.t("📄 Chế độ: Trang cảnh báo (máy đích sẽ thấy trang tin nhắn này)", "📄 Mode: Warning Page (the target will see this message page)", "📄 模式：警告页面（目标设备将显示此消息）");
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: #f59e0b;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: root.attack-duration-min == 15 ? "⏱ 15' ✓" : "⏱ 15'";
+                            clicked => { root.attack-duration-min = 15; }
+                        }
+                        Button {
+                            text: root.attack-duration-min == 30 ? "⏱ 30' ✓" : "⏱ 30'";
+                            clicked => { root.attack-duration-min = 30; }
+                        }
+                        Button {
+                            text: root.attack-duration-min == 60 ? "⏱ 60' ✓" : "⏱ 60'";
+                            clicked => { root.attack-duration-min = 60; }
+                        }
+                    }
+
+                    Text {
+                        text: I18n.t("Trong thời hạn hiệu lực, toàn bộ DNS của thiết bị này sẽ được điều hướng về máy admin. Chế độ Trang cảnh báo kèm cổng captive-portal để hiện thông báo trên điện thoại/máy đích. HTTPS sẽ hiển thị lỗi chứng chỉ thay vì trang đẹp.", "While active, all DNS of this device is redirected to the admin machine. Warning Page mode also serves a captive-portal page so phones show the notice. HTTPS sites will show a certificate error instead of the styled page.", "生效期间，此设备的所有 DNS 都将被重定向到管理机。警告页面模式还会提供 captive-portal 页面以便手机显示通知。HTTPS 网站将显示证书错误而非美化页面。");
+                        font-size: 10px;
+                        color: #64748b;
+                        wrap: word-wrap;
+                    }
+
+                    Button {
+                        text: I18n.t("🚀 GỬI THÔNG BÁO", "🚀 SEND NOTICE", "🚀 发送通告");
+                        clicked => {
+                            root.launch-attack(root.attack-target-ip, root.attack-target-mac, root.attack-message, root.attack-mode, root.attack-duration-min);
+                            root.attack-modal-open = false;
                         }
                     }
                 }

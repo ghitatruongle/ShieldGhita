@@ -180,7 +180,10 @@ impl AppConfig {
                 Err(_) => Self::default(),
             }
         } else {
-            let config = Self::default();
+            let config = Self {
+                language: detect_first_run_language(),
+                ..Self::default()
+            };
             let _ = config.save();
             config
         };
@@ -239,6 +242,68 @@ impl AppConfig {
     }
 }
 
+const INSTALLER_LANGUAGE_KEY: &str = r"Software\ShieldGhita";
+
+fn map_ui_language_to_code(langid: u16) -> String {
+    match langid & 0x03ff {
+        0x002a => "vi".to_string(),
+        0x0004 => "zh".to_string(),
+        _ => "en".to_string(),
+    }
+}
+
+#[cfg(windows)]
+fn read_installer_language_registry() -> Option<String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+
+    let subkey: Vec<u16> = INSTALLER_LANGUAGE_KEY
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let value_name: Vec<u16> = "Language"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut buf = [0u16; 32];
+    let mut data_size = (buf.len() * 2) as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(subkey.as_ptr()),
+            PCWSTR(value_name.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut data_size),
+        )
+    };
+    if status.is_err() {
+        return None;
+    }
+    let chars_len = (data_size as usize / 2).min(buf.len());
+    let text = String::from_utf16_lossy(&buf[..chars_len]);
+    let text = text.trim_end_matches('\0').trim();
+    match text {
+        "vi" | "en" | "zh" => Some(text.to_string()),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn detect_first_run_language() -> String {
+    if let Some(code) = read_installer_language_registry() {
+        return code;
+    }
+    let langid = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() };
+    map_ui_language_to_code(langid)
+}
+
+#[cfg(not(windows))]
+fn detect_first_run_language() -> String {
+    "vi".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,5 +354,44 @@ auto_update_blocklist_hours = 24
         assert!(!parsed.window_maximized);
         assert!(parsed.minimize_to_tray_on_minimize);
         assert!(!parsed.start_hidden_in_tray);
+    }
+
+    #[test]
+    fn test_language_roundtrip_and_defaults() {
+        use crate::modules::i18n::{code_to_index, EN, VI, ZH};
+        for (code, expected) in [("vi", VI), ("en", EN), ("zh", ZH)] {
+            let cfg = AppConfig {
+                language: code.to_string(),
+                ..AppConfig::default()
+            };
+            let serialized = toml::to_string_pretty(&cfg).unwrap();
+            let parsed: AppConfig = toml::from_str(&serialized).unwrap();
+            assert_eq!(parsed.language, code);
+            assert_eq!(code_to_index(&parsed.language), expected);
+        }
+
+        let legacy = r#"
+dns_listen_addr = "127.0.0.1"
+dns_listen_port = 53
+"#;
+        let parsed: AppConfig = toml::from_str(legacy).unwrap();
+        assert_eq!(parsed.language, "vi");
+    }
+
+    #[test]
+    fn test_ui_language_mapping() {
+        assert_eq!(map_ui_language_to_code(0x042a), "vi");
+        assert_eq!(map_ui_language_to_code(0x0804), "zh");
+        assert_eq!(map_ui_language_to_code(0x0c04), "zh");
+        assert_eq!(map_ui_language_to_code(0x0409), "en");
+        assert_eq!(map_ui_language_to_code(0x0419), "en");
+        assert_eq!(map_ui_language_to_code(0x0000), "en");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_detect_first_run_language_returns_supported_code() {
+        let code = detect_first_run_language();
+        assert!(code == "vi" || code == "en" || code == "zh");
     }
 }

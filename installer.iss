@@ -1,5 +1,5 @@
-#define MyAppName "Shield Ghita"
-#define MyAppVersion "0.0.5-beta2"
+﻿#define MyAppName "Shield Ghita"
+#define MyAppVersion "0.0.5"
 #define MyAppPublisher "ShieldGhita"
 #define MyAppExeName "shield_ghita.exe"
 
@@ -22,11 +22,13 @@ RestartApplications=no
 DirExistsWarning=no
 EnableDirDoesntExistWarning=no
 SetupIconFile=assets\app_icon.ico
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\app_icon.ico
 WizardStyle=modern
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "vietnamese"; MessagesFile: "installer\lang\Vietnamese.isl"
+Name: "chinesesimplified"; MessagesFile: "installer\lang\ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
@@ -43,19 +45,58 @@ Type: filesandordirs; Name: "{app}\assets"
 
 [Files]
 Source: "target\release_std\shield_ghita.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "assets\app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\app_icon.ico"
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ShieldGhita"; ValueData: """{app}\{#MyAppExeName}"" --autostart"; Tasks: autostart; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+function MapAppLanguage(): String;
+var
+  L: String;
+begin
+  L := ActiveLanguage();
+  if L = 'vietnamese' then
+    Result := 'vi'
+  else if L = 'chinesesimplified' then
+    Result := 'zh'
+  else
+    Result := 'en';
+end;
+
+procedure KillRunningInstances();
+var
+  I: Integer;
+  EC: Integer;
+begin
+  for I := 1 to 8 do
+  begin
+    Exec('taskkill.exe', '/F /IM {#MyAppExeName} /T', '', SW_HIDE, ewWaitUntilTerminated, EC);
+    Sleep(500);
+    Exec('cmd.exe', '/C tasklist /NH /FI "IMAGENAME eq {#MyAppExeName}" | find /I "{#MyAppExeName}" > nul 2>&1', '', SW_HIDE, ewWaitUntilTerminated, EC);
+    if EC <> 0 then
+      Break;
+  end;
+end;
+
+procedure BackupUserData();
+var
+  EC: Integer;
+begin
+  if DirExists(ExpandConstant('{userappdata}\ShieldGhita')) then
+    Exec('cmd.exe',
+      '/C xcopy /E /I /Y "' + ExpandConstant('{userappdata}\ShieldGhita') + '" "' + ExpandConstant('{userappdata}\ShieldGhita_Backup') + '"',
+      '', SW_HIDE, ewWaitUntilTerminated, EC);
+end;
+
 function GetUninstallString(): String;
 var
   sUnInstPath: String;
@@ -80,8 +121,7 @@ var
 begin
   Result := True;
 
-  Exec('taskkill.exe', '/F /IM {#MyAppExeName} /T', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
-  Sleep(500);
+  KillRunningInstances();
 
   sUnInstallString := GetUninstallString();
   if sUnInstallString <> '' then
@@ -98,13 +138,18 @@ var
 begin
   if CurStep = ssInstall then
   begin
-    Exec('taskkill.exe', '/F /IM {#MyAppExeName} /T', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
-    Sleep(300);
+    KillRunningInstances();
+    BackupUserData();
     DeleteFile(ExpandConstant('{app}\{#MyAppExeName}'));
     DeleteFile(ExpandConstant('{app}\local_behavior.json'));
     DeleteFile(ExpandConstant('{app}\local_devices.json'));
     DeleteFile(ExpandConstant('{app}\local_security.json'));
     DelTree(ExpandConstant('{app}\local'), True, True, True);
+  end;
+  if CurStep = ssPostInstall then
+  begin
+    KillRunningInstances();
+    RegWriteStringValue(HKCU, 'Software\ShieldGhita', 'Language', MapAppLanguage());
   end;
 end;
 

@@ -414,16 +414,45 @@ fn system_dns_matches(target: &str) -> bool {
 }
 
 pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, listen_addr: String) {
+    let mut interval_secs: u64 = 8;
+    let mut fight_streak: u32 = 0;
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(8)).await;
-        if protection_enabled.load(Ordering::Relaxed)
+        tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
+        if !(protection_enabled.load(Ordering::Relaxed)
             && !MASTER_INTERNET_LOCKED.load(Ordering::Relaxed)
-            && DNS_OVERRIDDEN.load(Ordering::Relaxed)
+            && DNS_OVERRIDDEN.load(Ordering::Relaxed))
         {
-            if system_dns_matches(&listen_addr) {
-                continue;
+            if fight_streak > 0 {
+                info!(
+                    "DNS guard: protection off, releasing enforcement (was fighting {} cycles)",
+                    fight_streak
+                );
+                fight_streak = 0;
             }
-            let _ = set_system_dns(&listen_addr);
+            interval_secs = 8;
+            continue;
+        }
+        if system_dns_matches(&listen_addr) {
+            if fight_streak > 0 {
+                info!(
+                    "DNS guard: system DNS stable again after {} fight cycle(s)",
+                    fight_streak
+                );
+                fight_streak = 0;
+            }
+            interval_secs = 8;
+            continue;
+        }
+        if let Err(e) = set_system_dns(&listen_addr) {
+            tracing::warn!("DNS guard: enforcement attempt failed: {}", e);
+        }
+        fight_streak += 1;
+        if fight_streak >= 3 {
+            tracing::warn!(
+                "DNS guard: external change keeps reverting DNS ({} consecutive fixes). Backing off to reduce churn",
+                fight_streak
+            );
+            interval_secs = (interval_secs * 2).min(300);
         }
     }
 }
