@@ -378,4 +378,12 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             ui_inst.set_monitor_subview_mode(1);
         }
     });
+
+    ui.on_open_latest_release(move || {
+        const RELEASES_URL: &str = "https://github.com/ghitatruongle/ShieldGhita/releases/latest";
+        match crate::modules::system::open_url_in_default_browser(RELEASES_URL) {
+            Ok(()) => info!("Opened latest release page in default browser"),
+            Err(e) => tracing::error!("Failed to open release page: {}", e),
+        }
+    });
 }

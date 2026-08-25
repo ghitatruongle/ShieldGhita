@@ -83,6 +83,7 @@ jobs:
           name: ShieldGhita ${{ github.ref_name }}
           files: installer_output/ShieldGhita_Setup_*.exe
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
 
       - name: Upload raw binary artifact

@@ -133,12 +133,12 @@ def build_version_info():
     for key, value in [
         ("CompanyName", "ShieldGhita"),
         ("FileDescription", "Shield Ghita - Master Internet Controller & Ad Blocker"),
-        ("FileVersion", "0.0.5"),
+        ("FileVersion", "0.1.0-demo"),
         ("InternalName", "shield_ghita"),
         ("LegalCopyright", "Copyright (C) 2026 ShieldGhita"),
         ("OriginalFilename", "shield_ghita.exe"),
         ("ProductName", "Shield Ghita"),
-        ("ProductVersion", "0.0.5"),
+        ("ProductVersion", "0.1.0-demo"),
     ]:
         table_body += build_version_string(key, value)
 

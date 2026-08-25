@@ -5,6 +5,42 @@ use tracing::Subscriber;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 
+/// Delete rotated `shield_ghita.log.*` files older than `keep_days` so the
+/// logs directory cannot grow unbounded. The active file is never touched
+/// because its modification time stays within the retention window.
+pub fn cleanup_old_logs(dir: &std::path::Path, keep_days: i64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(keep_days.max(0) as u64 * 86_400);
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !name.starts_with("shield_ghita.log") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if modified < cutoff && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        tracing::info!(
+            "Log rotation cleanup: removed {} expired log files",
+            removed
+        );
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConsoleLog {
     pub time: String,

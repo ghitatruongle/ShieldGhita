@@ -12,6 +12,8 @@ pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
     let rules_count = s.blocker.get_rules_count();
     ui_win.set_total_queries(total as i32);
     ui_win.set_blocked_count(blocked as i32);
+    ui_win.set_blocked_today(s.monitor.block_stats.day_count() as i32);
+    ui_win.set_blocked_week(s.monitor.block_stats.week_count() as i32);
     ui_win.set_absorbed_count(absorbed as i32);
     ui_win.set_active_rules_count(rules_count as i32);
 

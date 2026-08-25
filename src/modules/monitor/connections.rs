@@ -75,12 +75,13 @@ pub struct ConnectionTracker {
     system: Arc<RwLock<System>>,
     proc_map_cache: Arc<RwLock<HashMap<u32, String>>>,
     last_proc_refresh: Arc<RwLock<Option<std::time::Instant>>>,
+    security_engine: Arc<crate::modules::security::SecurityEngine>,
 }
 
 const PROC_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl ConnectionTracker {
-    pub fn new() -> Self {
+    pub fn new(security_engine: Arc<crate::modules::security::SecurityEngine>) -> Self {
         let mut sys = System::new();
         sys.refresh_processes();
         Self {
@@ -88,6 +89,7 @@ impl ConnectionTracker {
             system: Arc::new(RwLock::new(sys)),
             proc_map_cache: Arc::new(RwLock::new(HashMap::new())),
             last_proc_refresh: Arc::new(RwLock::new(None)),
+            security_engine,
         }
     }
 
@@ -231,6 +233,11 @@ impl ConnectionTracker {
                         12 => "DELETE_TCB",
                         _ => "ACTIVE",
                     };
+
+                    if row.dw_state == 4 {
+                        self.security_engine
+                            .record_inbound_port_probe(&remote_ip.to_string(), local_port);
+                    }
 
                     let proc_name = proc_map.get(&pid).cloned().unwrap_or_else(|| {
                         if pid == 0 {
@@ -380,6 +387,14 @@ impl ConnectionTracker {
 
                 if remote == "*:*" || remote == "0.0.0.0:0" || remote == "[::]:0" {
                     continue;
+                }
+
+                if state == "SYN_RCVD" {
+                    if let Some((rip, rport)) = remote.rsplit_once(':') {
+                        if let Ok(port) = rport.parse::<u16>() {
+                            self.security_engine.record_inbound_port_probe(rip, port);
+                        }
+                    }
                 }
 
                 let proc_name = proc_map.get(&pid).cloned().unwrap_or_else(|| {

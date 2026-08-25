@@ -32,8 +32,17 @@ pub struct SecurityEngine {
     incidents: Arc<RwLock<Vec<SecurityIncident>>>,
     incident_counter: Arc<AtomicU64>,
     last_known_gateway: Arc<RwLock<Option<(String, String)>>>,
+    port_probe_history: PortProbeHistory,
+    port_scan_alert_cooldown: Arc<RwLock<HashMap<String, Instant>>>,
     pub alert_tx: broadcast::Sender<SecurityIncident>,
 }
+
+const PORT_SCAN_WINDOW: Duration = Duration::from_secs(60);
+const PORT_SCAN_DISTINCT_PORTS: usize = 10;
+const PORT_SCAN_ALERT_COOLDOWN: Duration = Duration::from_secs(600);
+
+/// remote host -> (local port, first-seen) probes inside the scan window.
+type PortProbeHistory = Arc<RwLock<HashMap<String, Vec<(u16, Instant)>>>>;
 
 impl SecurityEngine {
     pub fn new() -> Self {
@@ -50,6 +59,8 @@ impl SecurityEngine {
             incidents: Arc::new(RwLock::new(Vec::new())),
             incident_counter: Arc::new(AtomicU64::new(1)),
             last_known_gateway: Arc::new(RwLock::new(None)),
+            port_probe_history: Arc::new(RwLock::new(HashMap::new())),
+            port_scan_alert_cooldown: Arc::new(RwLock::new(HashMap::new())),
             alert_tx,
         }
     }
@@ -471,6 +482,108 @@ impl SecurityEngine {
         None
     }
 
+    /// Feed one observed inbound half-open connection (TCP SYN_RCVD) into the
+    /// port-scan detector. Called for every snapshot of the TCP table, so the
+    /// same (source, port) pair inside the window is deduplicated and repeated
+    /// snapshots do not inflate the count. Returns an incident once a single
+    /// remote IP touches enough distinct local ports within the window.
+    pub fn record_inbound_port_probe(
+        &self,
+        remote_ip: &str,
+        local_port: u16,
+    ) -> Option<SecurityIncident> {
+        if !self.is_detection_enabled() || remote_ip.is_empty() {
+            return None;
+        }
+        if remote_ip == "127.0.0.1" || remote_ip == "::1" || remote_ip == "0.0.0.0" {
+            return None;
+        }
+
+        let now = Instant::now();
+        let distinct_ports = {
+            let mut hist = self.port_probe_history.write().ok()?;
+            if hist.len() > 512 {
+                hist.retain(|_, probes| {
+                    probes
+                        .iter()
+                        .any(|(_, t)| now.duration_since(*t) < PORT_SCAN_WINDOW)
+                });
+            }
+            let probes = hist.entry(remote_ip.to_string()).or_default();
+            probes.retain(|(_, t)| now.duration_since(*t) < PORT_SCAN_WINDOW);
+            if !probes.iter().any(|(p, _)| *p == local_port) {
+                probes.push((local_port, now));
+            }
+            probes.len()
+        };
+
+        if distinct_ports < PORT_SCAN_DISTINCT_PORTS {
+            return None;
+        }
+
+        {
+            let mut cooldown = self.port_scan_alert_cooldown.write().ok()?;
+            if let Some(last) = cooldown.get(remote_ip) {
+                if now.duration_since(*last) < PORT_SCAN_ALERT_COOLDOWN {
+                    return None;
+                }
+            }
+            if cooldown.len() > 500 {
+                cooldown.clear();
+            }
+            cooldown.insert(remote_ip.to_string(), now);
+        }
+
+        let auto_block = self.is_auto_block_enabled();
+        let mitigation = if auto_block {
+            self.block_ip_temporarily(remote_ip, Duration::from_secs(600));
+            i18n::tr(
+                "Đã tự động cô lập IP quét cổng trong 10 phút (IPS Mitigation)",
+                "Port-scanning IP auto-isolated for 10 minutes (IPS Mitigation)",
+                "已自动隔离端口扫描 IP 10 分钟 (IPS 处置)",
+            )
+        } else {
+            i18n::tr(
+                "Cảnh báo quét cổng (Auto-block chưa kích hoạt)",
+                "Port-scan alert (Auto-block not enabled)",
+                "端口扫描告警 (未启用自动封锁)",
+            )
+        };
+
+        let details = match i18n::current_index() {
+            i18n::EN => format!(
+                "{} distinct local ports probed from this host within {}s (latest: port {})",
+                distinct_ports,
+                PORT_SCAN_WINDOW.as_secs(),
+                local_port
+            ),
+            i18n::ZH => format!(
+                "该主机在 {} 秒内被探测了 {} 个不同的本机端口（最近：端口 {}）",
+                PORT_SCAN_WINDOW.as_secs(),
+                distinct_ports,
+                local_port
+            ),
+            _ => format!(
+                "Phát hiện {} cổng cục bộ khác nhau bị dò từ máy này trong {}s (mới nhất: cổng {})",
+                distinct_ports,
+                PORT_SCAN_WINDOW.as_secs(),
+                local_port
+            ),
+        };
+
+        Some(self.record_incident(
+            i18n::tr(
+                "Phát hiện quét cổng hàng loạt (Inbound Port Scan)",
+                "Mass port scanning detected (Inbound Port Scan)",
+                "检测到批量端口扫描 (Inbound Port Scan)",
+            ),
+            remote_ip,
+            &details,
+            "HIGH",
+            mitigation,
+        ))
+    }
+
     pub fn export_incidents_csv(&self) -> Result<String, String> {
         let incidents = self.incidents.read().map_err(|e| e.to_string())?;
         let mut csv = String::from("time,severity,incident_type,source_ip,details,mitigation\n");
@@ -584,6 +697,38 @@ mod tests {
             assert!(!sec.enforce_hard_rate_limit("127.0.0.1"));
         }
         assert_eq!(sec.hard_drop_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_inbound_port_scan_detection() {
+        let sec = SecurityEngine::new();
+        sec.set_detection_enabled(true);
+
+        let scanner_ip = "192.0.2.77";
+        let mut alert = None;
+        for port in 40000u16..40100 {
+            if let Some(inc) = sec.record_inbound_port_probe(scanner_ip, port) {
+                alert = Some(inc);
+                break;
+            }
+        }
+        let alert = alert.expect("port scan must be flagged after threshold ports");
+        assert!(alert.incident_type.contains("Port Scan"));
+
+        // Cooldown: further probes from the same IP stay quiet.
+        assert!(sec.record_inbound_port_probe(scanner_ip, 50000).is_none());
+
+        // Loopback probes are never incidents.
+        assert!(sec.record_inbound_port_probe("127.0.0.1", 60000).is_none());
+    }
+
+    #[test]
+    fn test_port_scan_disabled_with_ids_off() {
+        let sec = SecurityEngine::new();
+        sec.set_detection_enabled(false);
+        for port in 41000u16..41100 {
+            assert!(sec.record_inbound_port_probe("192.0.2.90", port).is_none());
+        }
     }
 
     #[test]

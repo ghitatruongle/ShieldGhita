@@ -174,6 +174,8 @@ export component AppWindow inherits Window {
 
     in-out property <string> status-text: "🟢 Đang bảo vệ tối cao";
     in-out property <int> blocked-count: 0;
+    in-out property <int> blocked-today: 0;
+    in-out property <int> blocked-week: 0;
     in-out property <int> total-queries: 0;
     in-out property <int> absorbed-count: 0;
     in-out property <int> active-rules-count: 0;
@@ -266,6 +268,7 @@ export component AppWindow inherits Window {
     callback filter-logs(string, string, int);
     callback filter-logs-by-ip(string);
     callback dismiss-toast();
+    callback open-latest-release();
     callback trigger-proximity-scan();
     callback refresh-admin-data();
     callback launch-attack(string, string, string, int, int);
@@ -361,6 +364,10 @@ export component AppWindow inherits Window {
                             height: 18px;
                             border-radius: 9px;
                             background: #0284c7;
+                            version-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.open-latest-release(); }
+                            }
                             HorizontalLayout {
                                 padding-left: 6px;
                                 padding-right: 6px;
@@ -555,7 +562,7 @@ export component AppWindow inherits Window {
 
                         Rectangle {
                             horizontal-stretch: 1;
-                            height: 105px;
+                            height: 118px;
                             background: #111827;
                             border-radius: 10px;
                             border-width: 1px;
@@ -571,7 +578,7 @@ export component AppWindow inherits Window {
 
                         Rectangle {
                             horizontal-stretch: 1;
-                            height: 105px;
+                            height: 118px;
                             background: #111827;
                             border-radius: 10px;
                             border-width: 1px;
@@ -581,13 +588,19 @@ export component AppWindow inherits Window {
                                 spacing: 4px;
                                 Text { text: I18n.t("QUẢNG CÁO & THEO DÕI ĐÃ CHẶN", "ADS & TRACKERS BLOCKED", "已拦截广告和跟踪器"); font-size: 11px; font-weight: 700; color: #94a3b8; }
                                 Text { text: root.blocked-count; font-size: 26px; font-weight: 800; color: #22c55e; }
+                                Text {
+                                    text: (I18n.t("Hôm nay: ", "Today: ", "今日: ")) + root.blocked-today + (I18n.t(" • Tuần này: ", " • This week: ", " • 本周: ")) + root.blocked-week;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    color: #86efac;
+                                }
                                 Text { text: (I18n.t("Đã lọc ngầm bởi Silent Sinkhole: ", "Silently absorbed: ", "静默黑洞已吸收: ")) + root.absorbed-count; font-size: 11px; color: #4ade80; }
                             }
                         }
 
                         Rectangle {
                             horizontal-stretch: 1;
-                            height: 105px;
+                            height: 118px;
                             background: #111827;
                             border-radius: 10px;
                             border-width: 1px;
@@ -603,7 +616,7 @@ export component AppWindow inherits Window {
 
                         Rectangle {
                             horizontal-stretch: 1;
-                            height: 105px;
+                            height: 118px;
                             background: #111827;
                             border-radius: 10px;
                             border-width: 1px;
@@ -1492,7 +1505,7 @@ export component AppWindow inherits Window {
                                         padding: 10px;
                                         spacing: 6px;
                                         Text { text: I18n.t("Phát hiện tấn công (IDS)", "Intrusion Detection (IDS)", "入侵检测 (IDS)"); font-size: 12px; font-weight: 700; color: #38bdf8; }
-                                        Text { text: I18n.t("Giám sát DoS Flood, Tunneling & Botnet", "Monitors DoS, Tunneling & Botnet", "监控 DoS 洪水、隧道与僵尸网络"); font-size: 11px; color: #94a3b8; }
+                                        Text { text: I18n.t("Giám sát DoS Flood, Tunneling, Port Scan & Botnet", "Monitors DoS, Tunneling, Port Scan & Botnet", "监控 DoS 洪水、隧道、端口扫描与僵尸网络"); font-size: 11px; color: #94a3b8; }
                                         Button {
                                             text: root.attack-detection-enabled ? (I18n.t("✅ ĐANG BẬT", "✅ ON", "✅ 已开启")) : (I18n.t("⚪ ĐANG TẮT", "⚪ OFF", "⚪ 已关闭"));
                                             clicked => { root.toggle-attack-detection(!root.attack-detection-enabled); }
@@ -1606,10 +1619,14 @@ export component AppWindow inherits Window {
                             HorizontalLayout {
                                 spacing: 16px;
                                 alignment: center;
-                                Text { text: "Shield Ghita v" + root.app-version + " (Official Release)"; font-size: 13px; font-weight: 800; color: #38bdf8; }
+                                Text { text: "Shield Ghita v" + root.app-version; font-size: 13px; font-weight: 800; color: #38bdf8; }
                                 Text { text: "• Engine: Rust 2021 + Slint UI + Win32 WFP"; font-size: 12px; color: #94a3b8; }
                                 Rectangle { horizontal-stretch: 1; }
                                 Text { text: root.last-update-text; font-size: 12px; font-weight: 700; color: #22c55e; }
+                                Button {
+                                    text: I18n.t("🌐 Bản mới nhất", "🌐 Latest Release", "🌐 最新版本");
+                                    clicked => { root.open-latest-release(); }
+                                }
                             }
 
                             Text {

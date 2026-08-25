@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use sysinfo::{Networks, System};
 use tracing::{info, warn};
 
+use crate::modules::stats::BlockStats;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
     pub timestamp: String,
@@ -46,6 +48,7 @@ pub struct NetworkMonitor {
     pub connection_tracker: Arc<ConnectionTracker>,
     pub lan_scanner: Arc<LanScanner>,
     pub security_engine: Arc<crate::modules::security::SecurityEngine>,
+    pub block_stats: Arc<BlockStats>,
 }
 
 impl NetworkMonitor {
@@ -71,9 +74,10 @@ impl NetworkMonitor {
             system_info: Arc::new(RwLock::new(sys)),
             networks: Arc::new(RwLock::new(nets)),
             last_traffic_sample: Mutex::new((std::time::Instant::now(), 0)),
-            connection_tracker: Arc::new(ConnectionTracker::new()),
+            connection_tracker: Arc::new(ConnectionTracker::new(sec_engine.clone())),
             lan_scanner: Arc::new(LanScanner::new()),
             security_engine: sec_engine,
+            block_stats: Arc::new(BlockStats::load_or_create()),
         };
 
         monitor.load_logs_from_disk();
@@ -335,6 +339,7 @@ impl NetworkMonitor {
 
             if cycle > 0 && cycle % 20 == 0 {
                 self.save_logs_to_disk();
+                self.block_stats.flush_if_dirty();
             }
 
             if cycle > 0 && cycle % 200 == 0 {

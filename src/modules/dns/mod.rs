@@ -940,6 +940,7 @@ impl DnsBlocker {
         if self.should_block(&query_name) {
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
             mon.add_log(&query_name, &src_ip, true);
+            mon.block_stats.record_block();
 
             let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
             let _ = self.blocked_events_tx.send((query_name.clone(), timestamp));

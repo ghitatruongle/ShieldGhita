@@ -7,6 +7,7 @@ pub mod monitor;
 pub mod perf;
 pub mod security;
 pub mod sinkhole;
+pub mod stats;
 pub mod system;
 
 macro_rules! declare_admin_module {

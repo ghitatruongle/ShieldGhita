@@ -14,6 +14,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 slint::include_modules!();
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let startup_started = std::time::Instant::now();
     let log_buffer = Arc::new(AppLogBuffer::new(500));
     let in_app_layer = InAppTracingLayer {
         buffer: log_buffer.clone(),
@@ -40,6 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(file_layer)
         .with(in_app_layer)
         .init();
+
+    modules::logger::cleanup_old_logs(&logs_dir, 14);
 
     let default_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -84,6 +87,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(false);
 
     let _tray_icon = app::ui_bridge::setup_ui_bridge(&ui, state)?;
+    info!(
+        "Startup baseline: UI & services ready in {} ms",
+        startup_started.elapsed().as_millis()
+    );
 
     if !should_hide {
         ui.show()?;
