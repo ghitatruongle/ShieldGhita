@@ -1,156 +1,184 @@
 import { Button, LineEdit, ListView } from "std-widgets.slint";
+import {
+    I18n, NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry,
+    DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem,
+    AttackHistoryItem, CameraItem, BehaviorProfileItem,
+} from "common.slint";
+import { TabButton, StatCard } from "widgets.slint";
 
-export global I18n {
-    in-out property <int> lang: 0;
-    public pure function t(vi: string, en: string, zh: string) -> string {
-        return lang == 1 ? en : (lang == 2 ? zh : vi);
-    }
-}
+export { I18n }
+export { NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry }
+export { DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem }
+export { AttackHistoryItem, CameraItem, BehaviorProfileItem }
 
-export struct NetworkDevice {
-    name: string,
-    ip: string,
-    mac: string,
-    vendor: string,
-    device-type: string,
-    is-online: bool,
-    latency: string,
-    traffic: string,
-    total-queries: int,
-    blocked-queries: int,
-    threats-detected: int,
-    last-domain: string,
-    last-active: string,
-    risk-level: string,
-    open-ports: string,
-    port-risk: string,
-    port-advice: string,
-    confidence: int,
-}
+// One row of the LAN device list (Security tab, subview 0).
+component LanDeviceRow inherits Rectangle {
+    in property <NetworkDevice> device;
+    callback view-logs(string);
 
-export struct ActiveConnection {
-    process-name: string,
-    pid: int,
-    local-addr: string,
-    remote-addr: string,
-    protocol: string,
-    state: string,
-    is-safe: bool,
-}
-
-export struct AppConnectionGroup {
-    process-name: string,
-    pid: int,
-    connection-count: int,
-    destinations-summary: string,
-    protocol-summary: string,
-    state-summary: string,
-    is-safe: bool,
-}
-
-export struct LogEntry {
-    timestamp: string,
-    domain: string,
-    source-ip: string,
-    is-blocked: bool,
-}
-
-export struct DomainLogGroup {
-    domain: string,
-    total-queries: int,
-    blocked-queries: int,
-    is-blocked: bool,
-    last-seen: string,
-    last-ip: string,
-}
-
-export struct ConsoleLogEntry {
-    time: string,
-    level: string,
-    message: string,
-}
-
-export struct SecurityIncident {
-    id: int,
-    time: string,
-    incident-type: string,
-    source-ip: string,
-    details: string,
-    severity: string,
-    mitigation: string,
-}
-
-export struct ProximityDeviceItem {
-    id: string,
-    name: string,
-    ip: string,
-    mac: string,
-    vendor: string,
-    discovery-method: string,
-    network-interface: string,
-    signal-info: string,
-    last-seen: string,
-    latency-ms: int,
-    is-online: bool,
-    open-ports-str: string,
-}
-
-export struct AttackHistoryItem {
-    target: string,
-    mode-label: string,
-    message: string,
-    window-label: string,
-    hits-label: string,
-    is-warning: bool,
-}
-
-export struct CameraItem {
-    vendor: string,
-    model: string,
-    ip: string,
-    rtsp-url: string,
-    source: string,
-    is-online: bool,
-}
-
-export struct BehaviorProfileItem {
-    ip: string,
-    hostname: string,
-    total-queries: int,
-    blocked-queries: int,
-    threat-queries: int,
-    burst-qps: string,
-    risk-score: int,
-    category: string,
-    last-seen: string,
-}
-
-component TabButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> active: false;
-    in property <color> active-color: #38bdf8;
-    callback clicked <=> touch.clicked;
-
+    height: 64px;
+    background: #111827;
     border-radius: 8px;
-    background: root.active ? #1e293b : #0f172a;
     border-width: 1px;
-    border-color: root.active ? root.active-color : #1f2937;
-    animate background { duration: 150ms; }
-
-    touch := TouchArea {
-        mouse-cursor: pointer;
-    }
-
+    border-color: device.threats-detected > 0 ? #ef4444 : #1f2937;
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 14px;
-        alignment: center;
-        Text {
-            text: root.text;
-            font-size: 12px;
-            font-weight: root.active ? 800 : 600;
-            color: root.active ? root.active-color : #94a3b8;
-            vertical-alignment: center;
+        spacing: 14px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 250px;
+            Text { text: device.name; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
+            Text { text: (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + device.vendor; font-size: 11px; color: #38bdf8; }
+            Text { text: (I18n.t("Xác thực nhận diện: ", "Detection confidence: ", "识别置信度: ")) + device.confidence + "%"; font-size: 10px; color: #64748b; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 150px;
+            Text { text: "IP: " + device.ip; font-size: 12px; font-weight: 700; color: #cbd5e1; }
+            Text { text: "MAC: " + device.mac; font-size: 11px; color: #64748b; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 160px;
+            HorizontalLayout {
+                spacing: 6px;
+                Rectangle {
+                    height: 20px;
+                    border-radius: 10px;
+                    background: #0284c7;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        alignment: center;
+                        Text { text: device.total-queries + " req"; font-size: 10px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
+                    }
+                }
+                Rectangle {
+                    height: 20px;
+                    border-radius: 10px;
+                    background: #dc2626;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        alignment: center;
+                        Text { text: device.blocked-queries + " ad"; font-size: 10px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
+                    }
+                }
+            }
+            Text { text: (I18n.t("Domain gần nhất: ", "Last: ", "最近域名: ")) + device.last-domain; font-size: 11px; color: #94a3b8; overflow: elide; }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 140px;
+            Text {
+                text: device.is-online ? (I18n.t("🟢 TRỰC TUYẾN", "🟢 ONLINE", "🟢 在线")) : (I18n.t("🔴 NGOẠI TUYẾN", "🔴 OFFLINE", "🔴 离线"));
+                font-size: 11px;
+                font-weight: 800;
+                color: device.is-online ? #4ade80 : #f87171;
+            }
+            Text { text: device.risk-level != "" ? device.risk-level : (I18n.t("Độ trễ: ", "Latency: ", "延迟: ") + device.latency); font-size: 11px; color: #94a3b8; }
+        }
+
+        Button {
+            text: I18n.t("📋 Xem Log", "📋 View Logs", "📋 查看日志");
+            clicked => { root.view-logs(device.ip); }
+        }
+    }
+}
+
+// One incident card of the security feed (Security tab, subview 1).
+component IncidentRow inherits Rectangle {
+    in property <SecurityIncident> inc;
+
+    height: 74px;
+    background: inc.severity == "CRITICAL" ? #2a0808 : (inc.severity == "HIGH" ? #241405 : #0f172a);
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: inc.severity == "CRITICAL" ? #ef4444 : (inc.severity == "HIGH" ? #f59e0b : #3b82f6);
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 14px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 85px;
+            spacing: 4px;
+            Rectangle {
+                height: 22px;
+                border-radius: 11px;
+                background: inc.severity == "CRITICAL" ? #dc2626 : (inc.severity == "HIGH" ? #d97706 : #2563eb);
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: I18n.sev(inc.severity);
+                        font-size: 10px;
+                        font-weight: 800;
+                        color: #ffffff;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            Text { text: inc.time; font-size: 11px; color: #94a3b8; horizontal-alignment: center; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 3px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "🚨 " + inc.incident-type;
+                    font-size: 13px;
+                    font-weight: 800;
+                    color: inc.severity == "CRITICAL" ? #fca5a5 : (inc.severity == "HIGH" ? #fcd34d : #93c5fd);
+                }
+                Rectangle {
+                    height: 18px;
+                    border-radius: 4px;
+                    background: #1e293b;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        alignment: center;
+                        Text { text: "IP: " + inc.source-ip; font-size: 10px; font-weight: 700; color: #cbd5e1; vertical-alignment: center; }
+                    }
+                }
+            }
+            Text { text: inc.details; font-size: 11px; color: #e2e8f0; overflow: elide; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 250px;
+            Rectangle {
+                border-radius: 6px;
+                background: #064e3b;
+                border-width: 1px;
+                border-color: #059669;
+                VerticalLayout {
+                    padding: 6px;
+                    Text {
+                        text: (I18n.t("🛡️ Biện pháp IPS: ", "🛡️ IPS Action: ", "🛡️ IPS 处置: ")) + inc.mitigation;
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: #6ee7b7;
+                        overflow: elide;
+                    }
+                }
+            }
         }
     }
 }
@@ -390,7 +418,7 @@ export component AppWindow inherits Window {
                                 padding-right: 6px;
                                 alignment: center;
                                 Text {
-                                    text: "👑 ADMIN EDITION";
+                                    text: I18n.t("👑 BẢN QUẢN TRỊ", "👑 ADMIN EDITION", "👑 管理员版");
                                     font-size: 10px;
                                     font-weight: 800;
                                     color: #ffffff;
@@ -560,74 +588,41 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: 14px;
 
-                        Rectangle {
+                        StatCard {
                             horizontal-stretch: 1;
-                            height: 118px;
-                            background: #111827;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: #1f2937;
-                            VerticalLayout {
-                                padding: 14px;
-                                spacing: 4px;
-                                Text { text: I18n.t("TỔNG TRUY VẤN DNS", "TOTAL DNS QUERIES", "DNS 查询总数"); font-size: 11px; font-weight: 700; color: #94a3b8; }
-                                Text { text: root.total-queries; font-size: 26px; font-weight: 800; color: #38bdf8; }
-                                Text { text: I18n.t("Xử lý song song siêu tốc qua DoH", "Ultra-fast parallel DoH engine", "DoH 超高速并行处理引擎"); font-size: 11px; color: #64748b; }
-                            }
+                            card-title: I18n.t("TỔNG TRUY VẤN DNS", "TOTAL DNS QUERIES", "DNS 查询总数");
+                            big-value: root.total-queries;
+                            accent: #38bdf8;
+                            sub1: I18n.t("Xử lý song song siêu tốc qua DoH", "Ultra-fast parallel DoH engine", "DoH 超高速并行处理引擎");
                         }
 
-                        Rectangle {
+                        StatCard {
                             horizontal-stretch: 1;
-                            height: 118px;
-                            background: #111827;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: #1f2937;
-                            VerticalLayout {
-                                padding: 14px;
-                                spacing: 4px;
-                                Text { text: I18n.t("QUẢNG CÁO & THEO DÕI ĐÃ CHẶN", "ADS & TRACKERS BLOCKED", "已拦截广告和跟踪器"); font-size: 11px; font-weight: 700; color: #94a3b8; }
-                                Text { text: root.blocked-count; font-size: 26px; font-weight: 800; color: #22c55e; }
-                                Text {
-                                    text: (I18n.t("Hôm nay: ", "Today: ", "今日: ")) + root.blocked-today + (I18n.t(" • Tuần này: ", " • This week: ", " • 本周: ")) + root.blocked-week;
-                                    font-size: 11px;
-                                    font-weight: 700;
-                                    color: #86efac;
-                                }
-                                Text { text: (I18n.t("Đã lọc ngầm bởi Silent Sinkhole: ", "Silently absorbed: ", "静默黑洞已吸收: ")) + root.absorbed-count; font-size: 11px; color: #4ade80; }
-                            }
+                            card-title: I18n.t("QUẢNG CÁO & THEO DÕI ĐÃ CHẶN", "ADS & TRACKERS BLOCKED", "已拦截广告和跟踪器");
+                            big-value: root.blocked-count;
+                            accent: #22c55e;
+                            sub1: (I18n.t("Hôm nay: ", "Today: ", "今日: ")) + root.blocked-today + (I18n.t(" • Tuần này: ", " • This week: ", " • 本周: ")) + root.blocked-week;
+                            sub1-color: #86efac;
+                            sub2: (I18n.t("Đã lọc ngầm bởi Silent Sinkhole: ", "Silently absorbed: ", "静默黑洞已吸收: ")) + root.absorbed-count;
+                            sub2-color: #4ade80;
                         }
 
-                        Rectangle {
+                        StatCard {
                             horizontal-stretch: 1;
-                            height: 118px;
-                            background: #111827;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: #1f2937;
-                            VerticalLayout {
-                                padding: 14px;
-                                spacing: 4px;
-                                Text { text: I18n.t("MỐI NGUY & TẤN CÔNG ĐÃ CHẶN", "THREATS & ATTACKS BLOCKED", "已拦截威胁和攻击"); font-size: 11px; font-weight: 700; color: #94a3b8; }
-                                Text { text: root.threats-blocked-count; font-size: 26px; font-weight: 800; color: #f87171; }
-                                Text { text: I18n.t("IDS/IPS & Chống rò rỉ DNS Tunneling", "IDS/IPS & Anti-DNS Tunneling", "IDS/IPS 与 DNS 隧道防护"); font-size: 11px; color: #fca5a5; }
-                            }
+                            card-title: I18n.t("MỐI NGUY & TẤN CÔNG ĐÃ CHẶN", "THREATS & ATTACKS BLOCKED", "已拦截威胁和攻击");
+                            big-value: root.threats-blocked-count;
+                            accent: #f87171;
+                            sub1: I18n.t("IDS/IPS & Chống rò rỉ DNS Tunneling", "IDS/IPS & Anti-DNS Tunneling", "IDS/IPS 与 DNS 隧道防护");
+                            sub1-color: #fca5a5;
                         }
 
-                        Rectangle {
+                        StatCard {
                             horizontal-stretch: 1;
-                            height: 118px;
-                            background: #111827;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: #1f2937;
-                            VerticalLayout {
-                                padding: 14px;
-                                spacing: 4px;
-                                Text { text: I18n.t("THIẾT BỊ MẠNG LAN HOẠT ĐỘNG", "ACTIVE LAN DEVICES", "活跃局域网设备"); font-size: 11px; font-weight: 700; color: #94a3b8; }
-                                Text { text: root.lan-devices-count; font-size: 26px; font-weight: 800; color: #a78bfa; }
-                                Text { text: (I18n.t("Quy tắc lọc đang kích hoạt: ", "Active filter rules: ", "生效中的过滤规则: ")) + root.active-rules-count; font-size: 11px; color: #cbd5e1; }
-                            }
+                            card-title: I18n.t("THIẾT BỊ MẠNG LAN HOẠT ĐỘNG", "ACTIVE LAN DEVICES", "活跃局域网设备");
+                            big-value: root.lan-devices-count;
+                            accent: #a78bfa;
+                            sub1: (I18n.t("Quy tắc lọc đang kích hoạt: ", "Active filter rules: ", "生效中的过滤规则: ")) + root.active-rules-count;
+                            sub1-color: #cbd5e1;
                         }
                     }
 
@@ -827,172 +822,16 @@ export component AppWindow inherits Window {
 
                     if root.lan-subview-mode == 0 : ListView {
                         vertical-stretch: 1;
-                        for device in root.devices : Rectangle {
-                            height: 64px;
-                            background: #111827;
-                            border-radius: 8px;
-                            border-width: 1px;
-                            border-color: device.threats-detected > 0 ? #ef4444 : #1f2937;
-                            HorizontalLayout {
-                                padding-left: 14px;
-                                padding-right: 14px;
-                                spacing: 14px;
-                                alignment: start;
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    min-width: 250px;
-                                    Text { text: device.name; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
-                                    Text { text: (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + device.vendor; font-size: 11px; color: #38bdf8; }
-                                    Text { text: (I18n.t("Xác thực nhận diện: ", "Detection confidence: ", "识别置信度: ")) + device.confidence + "%"; font-size: 10px; color: #64748b; }
-                                }
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    min-width: 150px;
-                                    Text { text: "IP: " + device.ip; font-size: 12px; font-weight: 700; color: #cbd5e1; }
-                                    Text { text: "MAC: " + device.mac; font-size: 11px; color: #64748b; }
-                                }
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    min-width: 160px;
-                                    HorizontalLayout {
-                                        spacing: 6px;
-                                        Rectangle {
-                                            height: 20px;
-                                            border-radius: 10px;
-                                            background: #0284c7;
-                                            HorizontalLayout {
-                                                padding-left: 6px;
-                                                padding-right: 6px;
-                                                alignment: center;
-                                                Text { text: device.total-queries + " req"; font-size: 10px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
-                                            }
-                                        }
-                                        Rectangle {
-                                            height: 20px;
-                                            border-radius: 10px;
-                                            background: #dc2626;
-                                            HorizontalLayout {
-                                                padding-left: 6px;
-                                                padding-right: 6px;
-                                                alignment: center;
-                                                Text { text: device.blocked-queries + " ad"; font-size: 10px; font-weight: 700; color: #ffffff; vertical-alignment: center; }
-                                            }
-                                        }
-                                    }
-                                    Text { text: (I18n.t("Domain gần nhất: ", "Last: ", "最近域名: ")) + device.last-domain; font-size: 11px; color: #94a3b8; overflow: elide; }
-                                }
-
-                                Rectangle { horizontal-stretch: 1; }
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    min-width: 140px;
-                                    Text {
-                                        text: device.is-online ? (I18n.t("🟢 TRỰC TUYẾN", "🟢 ONLINE", "🟢 在线")) : (I18n.t("🔴 NGOẠI TUYẾN", "🔴 OFFLINE", "🔴 离线"));
-                                        font-size: 11px;
-                                        font-weight: 800;
-                                        color: device.is-online ? #4ade80 : #f87171;
-                                    }
-                                    Text { text: device.risk-level != "" ? device.risk-level : (I18n.t("Độ trễ: ", "Latency: ", "延迟: ") + device.latency); font-size: 11px; color: #94a3b8; }
-                                }
-
-                                Button {
-                                    text: I18n.t("📋 Xem Log", "📋 View Logs", "📋 查看日志");
-                                    clicked => { root.filter-logs-by-ip(device.ip); }
-                                }
-                            }
+                        for device in root.devices : LanDeviceRow {
+                            device: device;
+                            view-logs(ip) => { root.filter-logs-by-ip(ip); }
                         }
                     }
 
                     if root.lan-subview-mode == 1 : ListView {
                         vertical-stretch: 1;
-                        for inc in root.security-incidents : Rectangle {
-                            height: 74px;
-                            background: inc.severity == "CRITICAL" ? #2a0808 : (inc.severity == "HIGH" ? #241405 : #0f172a);
-                            border-radius: 8px;
-                            border-width: 1px;
-                            border-color: inc.severity == "CRITICAL" ? #ef4444 : (inc.severity == "HIGH" ? #f59e0b : #3b82f6);
-                            HorizontalLayout {
-                                padding-left: 14px;
-                                padding-right: 14px;
-                                padding-top: 8px;
-                                padding-bottom: 8px;
-                                spacing: 14px;
-                                alignment: start;
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    min-width: 85px;
-                                    spacing: 4px;
-                                    Rectangle {
-                                        height: 22px;
-                                        border-radius: 11px;
-                                        background: inc.severity == "CRITICAL" ? #dc2626 : (inc.severity == "HIGH" ? #d97706 : #2563eb);
-                                        HorizontalLayout {
-                                            alignment: center;
-                                            Text {
-                                                text: inc.severity;
-                                                font-size: 10px;
-                                                font-weight: 800;
-                                                color: #ffffff;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-                                    }
-                                    Text { text: inc.time; font-size: 11px; color: #94a3b8; horizontal-alignment: center; }
-                                }
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    horizontal-stretch: 1;
-                                    spacing: 3px;
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        Text {
-                                            text: "🚨 " + inc.incident-type;
-                                            font-size: 13px;
-                                            font-weight: 800;
-                                            color: inc.severity == "CRITICAL" ? #fca5a5 : (inc.severity == "HIGH" ? #fcd34d : #93c5fd);
-                                        }
-                                        Rectangle {
-                                            height: 18px;
-                                            border-radius: 4px;
-                                            background: #1e293b;
-                                            HorizontalLayout {
-                                                padding-left: 6px;
-                                                padding-right: 6px;
-                                                alignment: center;
-                                                Text { text: "IP: " + inc.source-ip; font-size: 10px; font-weight: 700; color: #cbd5e1; vertical-alignment: center; }
-                                            }
-                                        }
-                                    }
-                                    Text { text: inc.details; font-size: 11px; color: #e2e8f0; overflow: elide; }
-                                }
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    min-width: 250px;
-                                    Rectangle {
-                                        border-radius: 6px;
-                                        background: #064e3b;
-                                        border-width: 1px;
-                                        border-color: #059669;
-                                        VerticalLayout {
-                                            padding: 6px;
-                                            Text {
-                                                text: (I18n.t("🛡️ Biện pháp IPS: ", "🛡️ IPS Action: ", "🛡️ IPS 处置: ")) + inc.mitigation;
-                                                font-size: 11px;
-                                                font-weight: 700;
-                                                color: #6ee7b7;
-                                                overflow: elide;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                        for inc in root.security-incidents : IncidentRow {
+                            inc: inc;
                         }
                     }
 
@@ -1822,7 +1661,7 @@ export component AppWindow inherits Window {
                                     background: pdev.is-online ? #064e3b : #374151;
                                     HorizontalLayout {
                                         alignment: center;
-                                        Text { text: pdev.is-online ? "ONLINE" : "OFFLINE"; font-size: 10px; font-weight: 800; color: pdev.is-online ? #34d399 : #94a3b8; vertical-alignment: center; }
+                                         Text { text: pdev.is-online ? (I18n.t("🟢 TRỰC TUYẾN", "🟢 ONLINE", "🟢 在线")) : (I18n.t("🔴 NGOẠI TUYẾN", "🔴 OFFLINE", "🔴 离线")); font-size: 10px; font-weight: 800; color: pdev.is-online ? #34d399 : #94a3b8; vertical-alignment: center; }
                                     }
                                 }
                             }

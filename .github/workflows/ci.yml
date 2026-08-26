@@ -37,3 +37,21 @@ jobs:
 
       - name: Clippy Linter
         run: cargo clippy -- -D warnings
+
+  dependency-audit:
+    name: Dependency Vulnerability Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Update advisory database
+        run: cargo audit update
+
+      - name: Run audit (fail on vulnerabilities)
+        run: cargo audit --deny warnings

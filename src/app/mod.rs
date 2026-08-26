@@ -37,6 +37,7 @@ impl AppState {
         let cfg = AppConfig::load();
         let runtime = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
                 .enable_all()
                 .build()?,
         );

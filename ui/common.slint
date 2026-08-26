@@ -1,0 +1,133 @@
+// Shared globals and data structures for all Shield Ghita UI files.
+export global I18n {
+    in-out property <int> lang: 0;
+    public pure function t(vi: string, en: string, zh: string) -> string {
+        return lang == 1 ? en : (lang == 2 ? zh : vi);
+    }
+    // Translates data-driven severity/risk tags coming from the backend.
+    public pure function sev(v: string) -> string {
+        return v == "CRITICAL" ? t("NGHIÊM TRỌNG", "CRITICAL", "严重")
+             : v == "HIGH" ? t("CAO", "HIGH", "高")
+             : v == "MEDIUM" ? t("TRUNG BÌNH", "MEDIUM", "中")
+             : v == "LOW" ? t("THẤP", "LOW", "低")
+             : v;
+    }
+}
+
+export struct NetworkDevice {
+    name: string,
+    ip: string,
+    mac: string,
+    vendor: string,
+    device-type: string,
+    is-online: bool,
+    latency: string,
+    traffic: string,
+    total-queries: int,
+    blocked-queries: int,
+    threats-detected: int,
+    last-domain: string,
+    last-active: string,
+    risk-level: string,
+    open-ports: string,
+    port-risk: string,
+    port-advice: string,
+    confidence: int,
+}
+
+export struct ActiveConnection {
+    process-name: string,
+    pid: int,
+    local-addr: string,
+    remote-addr: string,
+    protocol: string,
+    state: string,
+    is-safe: bool,
+}
+
+export struct AppConnectionGroup {
+    process-name: string,
+    pid: int,
+    connection-count: int,
+    destinations-summary: string,
+    protocol-summary: string,
+    state-summary: string,
+    is-safe: bool,
+}
+
+export struct LogEntry {
+    timestamp: string,
+    domain: string,
+    source-ip: string,
+    is-blocked: bool,
+}
+
+export struct DomainLogGroup {
+    domain: string,
+    total-queries: int,
+    blocked-queries: int,
+    is-blocked: bool,
+    last-seen: string,
+    last-ip: string,
+}
+
+export struct ConsoleLogEntry {
+    time: string,
+    level: string,
+    message: string,
+}
+
+export struct SecurityIncident {
+    id: int,
+    time: string,
+    incident-type: string,
+    source-ip: string,
+    details: string,
+    severity: string,
+    mitigation: string,
+}
+
+export struct ProximityDeviceItem {
+    id: string,
+    name: string,
+    ip: string,
+    mac: string,
+    vendor: string,
+    discovery-method: string,
+    network-interface: string,
+    signal-info: string,
+    last-seen: string,
+    latency-ms: int,
+    is-online: bool,
+    open-ports-str: string,
+}
+
+export struct AttackHistoryItem {
+    target: string,
+    mode-label: string,
+    message: string,
+    window-label: string,
+    hits-label: string,
+    is-warning: bool,
+}
+
+export struct CameraItem {
+    vendor: string,
+    model: string,
+    ip: string,
+    rtsp-url: string,
+    source: string,
+    is-online: bool,
+}
+
+export struct BehaviorProfileItem {
+    ip: string,
+    hostname: string,
+    total-queries: int,
+    blocked-queries: int,
+    threat-queries: int,
+    burst-qps: string,
+    risk-score: int,
+    category: string,
+    last-seen: string,
+}

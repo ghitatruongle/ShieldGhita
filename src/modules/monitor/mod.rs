@@ -8,7 +8,7 @@ use chrono::Local;
 use connections::{ActiveConnection, ConnectionTracker};
 use lan_scanner::{LanDevice, LanScanner};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,7 +37,7 @@ pub struct DomainLogGroup {
 }
 
 pub struct NetworkMonitor {
-    logs: Arc<RwLock<Vec<LogEntry>>>,
+    logs: Arc<RwLock<VecDeque<LogEntry>>>,
     filtered_cache: Arc<RwLock<Option<Vec<LogEntry>>>>,
     pub logs_version: Arc<AtomicU64>,
     max_logs: usize,
@@ -66,7 +66,7 @@ impl NetworkMonitor {
         nets.refresh();
 
         let monitor = Self {
-            logs: Arc::new(RwLock::new(Vec::new())),
+            logs: Arc::new(RwLock::new(VecDeque::new())),
             filtered_cache: Arc::new(RwLock::new(None)),
             logs_version: Arc::new(AtomicU64::new(1)),
             max_logs,
@@ -90,7 +90,7 @@ impl NetworkMonitor {
                 Ok(content) => {
                     if let Ok(entries) = serde_json::from_str::<Vec<LogEntry>>(&content) {
                         if let Ok(mut logs) = self.logs.write() {
-                            *logs = entries;
+                            *logs = entries.into();
                             info!("Loaded {} log entries from disk", logs.len());
                         }
                     }
@@ -102,7 +102,8 @@ impl NetworkMonitor {
 
     pub fn save_logs_to_disk(&self) {
         if let Ok(logs) = self.logs.read() {
-            match serde_json::to_string(&*logs) {
+            let snapshot: Vec<LogEntry> = logs.iter().cloned().collect();
+            match serde_json::to_string(&snapshot) {
                 Ok(json) => {
                     let _ = fs::write(&self.log_file_path, json);
                 }
@@ -123,9 +124,9 @@ impl NetworkMonitor {
         };
 
         if let Ok(mut logs) = self.logs.write() {
-            logs.insert(0, entry);
-            if logs.len() > self.max_logs {
-                logs.truncate(self.max_logs);
+            logs.push_front(entry);
+            while logs.len() > self.max_logs {
+                logs.pop_back();
             }
         }
         let _ = self.logs_version.fetch_add(1, Ordering::Relaxed);
@@ -137,7 +138,10 @@ impl NetworkMonitor {
                 return filtered.clone();
             }
         }
-        self.logs.read().map(|l| l.clone()).unwrap_or_default()
+        self.logs
+            .read()
+            .map(|l| l.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     pub fn apply_filter(&self, filter_domain: &str, filter_ip: &str, filter_blocked: Option<bool>) {
@@ -350,5 +354,23 @@ impl NetworkMonitor {
             cycle = cycle.wrapping_add(1);
             tokio::time::sleep(Duration::from_millis(1500)).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_log_respects_cap_and_order() {
+        let sec = Arc::new(crate::modules::security::SecurityEngine::new());
+        let mon = NetworkMonitor::new(50, sec);
+        for i in 0..80 {
+            mon.add_log(&format!("d{}.test", i), "192.0.2.9", false);
+        }
+        let logs = mon.get_logs();
+        assert_eq!(logs.len(), 50, "log ring must cap at max_logs");
+        assert_eq!(logs[0].domain, "d79.test", "newest entry stays first");
+        assert_eq!(logs[49].domain, "d30.test", "oldest entries are dropped");
     }
 }

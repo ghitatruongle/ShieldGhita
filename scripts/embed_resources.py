@@ -94,74 +94,99 @@ def ustr(s):
     return s.encode("utf-16-le") + b"\x00\x00"
 
 
-def pack_str_hdr(total_len):
-    return struct.pack("<HHH", total_len, 0, 1)
+APP_VERSION = "0.1.0-beta1"
 
 
-def build_version_string(key, value):
+def pad4(buf):
+    return buf + b"\x00" * ((4 - len(buf) % 4) % 4)
+
+
+def version_numeric_fields(version_str):
+    """Map '0.1.0-beta1' -> MS/LS dword pair (non-numeric tail becomes 0)."""
+    nums = []
+    for part in version_str.split(".")[:4]:
+        digits = ""
+        for ch in part:
+            if ch.isdigit():
+                digits += ch
+            elif digits:
+                break
+        nums.append(int(digits) if digits else 0)
+    while len(nums) < 4:
+        nums.append(0)
+    major, minor, patch, revision = nums[:4]
+    ms = (major << 16) | minor
+    ls = (patch << 16) | revision
+    return ms, ls
+
+
+def make_string_entry(key, value):
     key_b = ustr(key)
     val_b = ustr(value)
-    str_len = 6 + len(key_b) + len(val_b)
-    entry = struct.pack("<HHH", str_len, len(val_b), 1) + key_b
-    entry = align4(entry)
-    entry += val_b
-    entry = align4(entry)
-    return entry
+    key_part = pad4(struct.pack("<HHH", 0, len(val_b), 1) + key_b)
+    entry = key_part + val_b
+    entry = pad4(entry)
+    total = len(entry)
+    return struct.pack("<HHH", total, len(val_b), 1) + entry[6:]
 
 
-def build_version_info():
+def make_string_table(lang_id, entries):
+    key_b = ustr(lang_id)
+    body = pad4(struct.pack("<HHH", 0, 0, 1) + key_b)
+    for key, value in entries:
+        body += make_string_entry(key, value)
+    return struct.pack("<HHH", len(body), 0, 1) + body[6:]
+
+
+def make_string_file_info(tables):
+    key_b = ustr("StringFileInfo")
+    body = pad4(struct.pack("<HHH", 0, 0, 1) + key_b)
+    for table in tables:
+        body += table
+    return struct.pack("<HHH", len(body), 0, 1) + body[6:]
+
+
+def make_var_file_info():
+    key_b = ustr("VarFileInfo")
+    val = struct.pack("<HH", 0x0409, 1200)
+    body = pad4(struct.pack("<HHH", 0, len(val), 0) + key_b) + val
+    body = pad4(body)
+    return struct.pack("<HHH", len(body), len(val), 0) + body[6:]
+
+
+def build_version_info(version_str):
+    ms, ls = version_numeric_fields(version_str)
     ffi = struct.pack(
-        "<14I",
-        0xFEEF04BD,
-        0x00010000,
-        0x00000000,
-        0x00000005,
-        0x00000000,
-        0x00000005,
-        0x0000003F,
-        0x00000000,
-        0x00040004,
-        0x00000001,
-        0x00000000,
-        0x00000000,
-        0x00000000,
-        0x00000000,
+        "<13I",
+        0xFEEF04BD,      # dwSignature
+        0x00010000,      # dwStrucVersion
+        ms, ls,          # dwFileVersion
+        ms, ls,          # dwProductVersion
+        0x0000003F,      # dwFileFlagsMask
+        0x00000000,      # dwFileFlags
+        0x00040004,      # dwFileOS: VOS_NT_WINDOWS32
+        0x00000001,      # dwFileType: VFT_APP
+        0x00000000,      # dwFileSubtype
+        0x00000000,      # dwFileDateMS
+        0x00000000,      # dwFileDateLS
     )
 
-    table_body = pack_str_hdr(6 + len(ustr("000004b0"))) + ustr("000004b0")
-    table_body = align4(table_body)
-    for key, value in [
+    entries = [
         ("CompanyName", "ShieldGhita"),
         ("FileDescription", "Shield Ghita - Master Internet Controller & Ad Blocker"),
-        ("FileVersion", "0.1.0-demo"),
+        ("FileVersion", version_str),
         ("InternalName", "shield_ghita"),
         ("LegalCopyright", "Copyright (C) 2026 ShieldGhita"),
         ("OriginalFilename", "shield_ghita.exe"),
         ("ProductName", "Shield Ghita"),
-        ("ProductVersion", "0.1.0-demo"),
-    ]:
-        table_body += build_version_string(key, value)
+        ("ProductVersion", version_str),
+    ]
+    sfi_block = make_string_file_info([make_string_table("040904b0", entries)])
+    vfi_block = make_var_file_info()
 
-    sfi_head = align4(pack_str_hdr(6 + len(ustr("StringFileInfo"))) + ustr("StringFileInfo")[: len(ustr("StringFileInfo"))])
-    sfi_head = struct.pack("<HHH", 6 + len(ustr("StringFileInfo")), 0, 1) + ustr("StringFileInfo")
-    sfi_head = align4(sfi_head)
-    sfi_block = struct.pack("<HHH", len(sfi_head) + len(table_body), 0, 1) + sfi_head[6:] + table_body
-
-    vfi_key = ustr("Translation")
-    vfi_data = struct.pack("<HH", 0x04B0, 1200)
-    vfi_child_len = 6 + len(vfi_key) + len(vfi_data)
-    vfi_child = struct.pack("<HHH", vfi_child_len, 4, 0) + vfi_key
-    vfi_child = align4(vfi_child)
-    vfi_child += vfi_data
-    vfi_head = align4(struct.pack("<HHH", 6 + len(ustr("VarFileInfo")), 0, 1) + ustr("VarFileInfo"))
-    vfi_block = struct.pack("<HHH", len(vfi_head) + len(vfi_child), 0, 1) + vfi_head[6:] + vfi_child
-
-    top_key = ustr("VS_VERSION_INFO")
-    top_head = align4(struct.pack("<HHH", 0, 52, 0) + top_key)
-    total = len(top_head) + 52 + len(sfi_block) + len(vfi_block)
-    top = struct.pack("<HHH", total, 52, 0) + top_key
-    top = align4(top)
-    return top + ffi + sfi_block + vfi_block
+    key_b = ustr("VS_VERSION_INFO")
+    core = pad4(struct.pack("<HHH", 0, 52, 0) + key_b) + ffi + sfi_block + vfi_block
+    return struct.pack("<HHH", len(core), 52, 0) + core[6:]
 
 
 def main():
@@ -169,7 +194,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     icons = read_ico_icons(root / "assets" / "app_icon.ico")
     manifest = (root / "app.manifest").read_bytes()
-    version = build_version_info()
+    version = build_version_info(APP_VERSION)
 
     h = begin_update(exe)
     try:

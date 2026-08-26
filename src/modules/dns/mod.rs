@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
@@ -84,6 +84,7 @@ pub struct DnsBlocker {
     custom_allowed: Arc<RwLock<HashSet<String>>>,
     dns_cache: DnsCacheMap,
     http_client: reqwest::Client,
+    etag_cache: Arc<Mutex<HashMap<String, String>>>,
     pub total_queries: Arc<AtomicU64>,
     pub blocked_count: Arc<AtomicU64>,
     pub silent_sinkhole_enabled: Arc<AtomicBool>,
@@ -98,6 +99,9 @@ pub struct ResponseOverride {
 }
 
 pub type ResponsePolicyFn = Arc<dyn Fn(&str, &str, u16) -> Option<ResponseOverride> + Send + Sync>;
+
+/// Outcome of one blocklist source fetch: (url, body-if-fetched, etag).
+type BlocklistFetch = Result<(String, Option<String>, Option<String>), String>;
 
 impl DnsBlocker {
     #[cfg_attr(not(feature = "admin"), allow(dead_code))]
@@ -244,6 +248,9 @@ impl DnsBlocker {
             custom_allowed: Arc::new(RwLock::new(HashSet::new())),
             dns_cache: Arc::new(RwLock::new(HashMap::new())),
             http_client: client,
+            etag_cache: Arc::new(Mutex::new(Self::read_etag_map_from(
+                &Self::etag_store_path(),
+            ))),
             total_queries: Arc::new(AtomicU64::new(0)),
             blocked_count: Arc::new(AtomicU64::new(0)),
             silent_sinkhole_enabled: Arc::new(AtomicBool::new(true)),
@@ -261,6 +268,29 @@ impl DnsBlocker {
     fn cache_path() -> PathBuf {
         let d = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
         PathBuf::from(d).join("ShieldGhita").join("blocklist.cache")
+    }
+
+    fn etag_store_path() -> PathBuf {
+        let d = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+        PathBuf::from(d)
+            .join("ShieldGhita")
+            .join("blocklist_etags.json")
+    }
+
+    fn read_etag_map_from(path: &Path) -> HashMap<String, String> {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_etag_map_to(path: &Path, map: &HashMap<String, String>) {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string(map) {
+            let _ = fs::write(path, json);
+        }
     }
 
     pub fn load_cache(&self) -> Result<usize, String> {
@@ -352,16 +382,34 @@ impl DnsBlocker {
     pub async fn load_blocklists(&self, urls: &[String]) -> Result<usize, String> {
         let fetch_start = Instant::now();
         let _ = self.load_cache();
-        let mut set: tokio::task::JoinSet<Result<String, String>> = tokio::task::JoinSet::new();
+        let mut set: tokio::task::JoinSet<BlocklistFetch> = tokio::task::JoinSet::new();
 
         for url in urls {
             let client = self.http_client.clone();
             let url = url.clone();
+            let etag = self
+                .etag_cache
+                .lock()
+                .map(|g| g.get(&url).cloned())
+                .unwrap_or(None);
             set.spawn(async move {
-                match client.get(&url).send().await {
+                let mut req = client.get(&url);
+                if let Some(tag) = &etag {
+                    req = req.header("If-None-Match", tag);
+                }
+                match req.send().await {
                     Ok(resp) => {
+                        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+                            return Ok((url, None, None));
+                        }
                         if resp.status().is_success() {
-                            resp.text().await.map_err(|e| format!("{}: {}", url, e))
+                            let etag = resp
+                                .headers()
+                                .get("ETag")
+                                .and_then(|v| v.to_str().ok())
+                                .map(|s| s.to_string());
+                            let text = resp.text().await.map_err(|e| format!("{}: {}", url, e))?;
+                            Ok((url, Some(text), etag))
                         } else {
                             Err(format!("{}: HTTP {}", url, resp.status()))
                         }
@@ -377,10 +425,26 @@ impl DnsBlocker {
         }
 
         let mut any_success = false;
+        let mut unchanged = 0usize;
+        let mut fetched = 0usize;
+        let mut new_etags: HashMap<String, String> = self
+            .etag_cache
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+
         while let Some(res) = set.join_next().await {
             match res {
-                Ok(Ok(text)) => {
+                Ok(Ok((url, None, _))) => {
+                    unchanged += 1;
+                    let _ = url;
+                }
+                Ok(Ok((url, Some(text), etag))) => {
                     any_success = true;
+                    fetched += 1;
+                    if let Some(tag) = etag {
+                        new_etags.insert(url, tag);
+                    }
                     for line in text.lines() {
                         if let Some(d) = Self::parse_line(line) {
                             domains.insert(d);
@@ -389,6 +453,28 @@ impl DnsBlocker {
                 }
                 Ok(Err(e)) => warn!("Failed to fetch blocklist: {}", e),
                 Err(e) => warn!("Blocklist fetch task failed: {}", e),
+            }
+        }
+
+        // Keep ETags only for URLs that answered this round; a failed or new URL
+        // must be fully re-fetched next time instead of trusting a stale tag.
+        if unchanged + fetched == urls.len() {
+            new_etags.retain(|u, _| urls.iter().any(|x| x == u));
+            *self.etag_cache.lock().unwrap_or_else(|e| e.into_inner()) = new_etags.clone();
+            Self::write_etag_map_to(&Self::etag_store_path(), &new_etags);
+        }
+
+        if unchanged > 0 && fetched == 0 && !any_success && unchanged == urls.len() {
+            // Every source answered HTTP 304 — the on-disk cache is already current.
+            let count = self.blocked_domains.read().map(|b| b.len()).unwrap_or(0);
+            if count > 0 {
+                info!(
+                    "Blocklists unchanged (ETag {} hits in {} ms): {} rules stay active",
+                    unchanged,
+                    fetch_start.elapsed().as_millis(),
+                    count
+                );
+                return Ok(count);
             }
         }
 
@@ -1056,6 +1142,30 @@ impl DnsBlocker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_etag_map_roundtrip_and_corruption_fallback() {
+        let dir = std::env::temp_dir().join(format!("sg_etag_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("etags.json");
+
+        let mut map = HashMap::new();
+        map.insert("https://a.example/hosts".to_string(), "\"v1\"".to_string());
+        DnsBlocker::write_etag_map_to(&path, &map);
+        let loaded = DnsBlocker::read_etag_map_from(&path);
+        assert_eq!(
+            loaded.get("https://a.example/hosts").map(String::as_str),
+            Some("\"v1\"")
+        );
+
+        std::fs::write(&path, "not json at all").unwrap();
+        assert!(
+            DnsBlocker::read_etag_map_from(&path).is_empty(),
+            "corrupt etag store must fall back to empty"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_parse_line() {
