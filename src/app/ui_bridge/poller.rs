@@ -129,6 +129,8 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
     let mut tray_hide_armed = false;
     let mut geom_applied = false;
 
+    let mut networks = sysinfo::Networks::new_with_refreshed_list();
+
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
@@ -155,6 +157,26 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
             handle_minimize_to_tray(&ui_win, &state, &mut tray_hide_armed);
             track_window_geom(&ui_win, &state, &mut last_seen_geom, &mut geom_dirty_since);
             super::refresh::refresh_ui_state(&ui_win, &state);
+
+            // Live per-second bandwidth for the busiest non-loopback interface.
+            networks.refresh();
+            let mut best_rx: u64 = 0;
+            let mut best_tx: u64 = 0;
+            let mut best_name = String::new();
+            for (if_name, data) in &networks {
+                if if_name.to_lowercase().contains("loopback") {
+                    continue;
+                }
+                let (rx, tx) = (data.received(), data.transmitted());
+                if rx + tx > best_rx + best_tx {
+                    best_rx = rx;
+                    best_tx = tx;
+                    best_name = if_name.clone();
+                }
+            }
+            ui_win.set_net_down_mbps((best_rx as f64 * 8.0 / 1_000_000.0) as f32);
+            ui_win.set_net_up_mbps((best_tx as f64 * 8.0 / 1_000_000.0) as f32);
+            ui_win.set_net_if_name(best_name.into());
         },
     );
     timer

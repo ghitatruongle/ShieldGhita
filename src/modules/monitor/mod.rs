@@ -1,4 +1,5 @@
 pub mod connections;
+pub mod diagnostics;
 pub mod discovery;
 pub mod lan_scanner;
 pub mod oui_db;

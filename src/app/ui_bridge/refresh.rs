@@ -142,6 +142,11 @@ fn refresh_security_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
             .map(|d| {
                 let open_ports =
                     crate::modules::monitor::port_scanner::format_ports_summary(&d.open_ports);
+                let is_quarantined = s.security_engine.is_quarantined(&d.ip);
+                let is_local = d.ip == "127.0.0.1"
+                    || d.mac.contains("Local")
+                    || d.mac.contains("Cục bộ")
+                    || d.mac.contains("本地");
                 crate::NetworkDevice {
                     name: d.name.into(),
                     ip: d.ip.into(),
@@ -165,6 +170,11 @@ fn refresh_security_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
                     port_risk: d.port_risk.into(),
                     port_advice: d.port_advice.into(),
                     confidence: d.confidence,
+                    custom_alias: d.custom_alias.into(),
+                    os_name: d.os_name.into(),
+                    is_quarantined,
+                    bandwidth_rate: d.bandwidth_rate.into(),
+                    is_local,
                 }
             })
             .collect();

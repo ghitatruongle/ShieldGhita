@@ -1,6 +1,6 @@
 [package]
 name = "shield_ghita"
-version = "0.1.0-beta1"
+version = "0.1.0-beta2"
 edition = "2021"
 [features]
 default = []
@@ -18,6 +18,11 @@ tray-icon = "0.19"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 sysinfo = "0.30"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+base64 = "0.22"
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

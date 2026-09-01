@@ -9,6 +9,7 @@ use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
 
 const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
+    // YouTube & Google Ads
     "s.youtube.com",
     "ad.youtube.com",
     "ads.youtube.com",
@@ -28,6 +29,12 @@ const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
     "googlesyndication.com",
     "doubleclick.net",
     "app-measurement.com",
+    "partnerad.l.google.com",
+    "admob.com",
+    "analytics.google.com",
+    "googletagmanager.com",
+    "googletagservices.com",
+    // Spotify & Audio streaming ads
     "spclient.wg.spotify.com",
     "audio-ak-spotify-com.akamaized.net",
     "heads4-ak-spotify-com.akamaized.net",
@@ -38,21 +45,28 @@ const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
     "ads.soundcloud.com",
     "promoted.soundcloud.com",
     "countess.twitch.tv",
+    // TikTok, Douyin & ByteDance telemetry/ads
     "ads.tiktok.com",
     "analytics.tiktok.com",
     "ib.tiktokv.com",
     "log.byteoversea.com",
     "mon.zijieapi.com",
+    "api-ad.tiktok.com",
+    "toblog.byteoversea.com",
+    // Facebook / Meta trackers & audience network
     "an.facebook.com",
     "ads.facebook.com",
     "pixel.facebook.com",
     "tr.facebook.com",
+    "analytics.facebook.com",
+    // Vietnam specific Ad networks & Telemetry (Zalo/ZADN, Zing, NCT, Cốc Cốc, Shopee, Tiki, Lazada)
     "ad.zadn.vn",
     "api.ad.zadn.vn",
     "tracking.zadn.vn",
     "media.zadn.vn",
     "sdk.e.zadn.vn",
     "zalo-analytics.zadn.vn",
+    "logs.zadn.vn",
     "qc.nct.vn",
     "ad.nct.vn",
     "adv.zing.vn",
@@ -60,8 +74,14 @@ const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
     "qc.coccoc.com",
     "adserver.coccoc.com",
     "dsp.coccoc.com",
+    "catalog.coccoc.com",
     "tracking.shopee.vn",
     "criteo.shopee.vn",
+    "api.affiliate.shopee.vn",
+    "tracking.lazada.vn",
+    "log.tiki.vn",
+    "tracking.tiki.vn",
+    // Global Ad giants & Telemetry (Amazon, Criteo, Taboola, Outbrain, Microsoft Telemetry)
     "fls-na.amazon.com",
     "aax-us-east.amazon-adsystem.com",
     "c.amazon-adsystem.com",
@@ -70,9 +90,17 @@ const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
     "criteo.com",
     "taboola.com",
     "outbrain.com",
+    "mgid.com",
+    "adnxs.com",
+    "rubiconproject.com",
+    "openx.net",
+    "pubmatic.com",
+    "smartadserver.com",
     "telemetry.microsoft.com",
     "vortex.data.microsoft.com",
     "watson.telemetry.microsoft.com",
+    "settings-win.data.microsoft.com",
+    "diagnostics.support.microsoft.com",
 ];
 
 pub type DnsCacheMap = Arc<RwLock<HashMap<(String, u16), (Vec<u8>, Instant, u32)>>>;
@@ -536,6 +564,20 @@ impl DnsBlocker {
         Ok(())
     }
 
+    pub fn get_custom_rules(&self) -> Vec<String> {
+        self.custom_blocked
+            .read()
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn get_allowed_rules(&self) -> Vec<String> {
+        self.custom_allowed
+            .read()
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
     pub fn set_silent_sinkhole(&self, enabled: bool) {
         self.silent_sinkhole_enabled
             .store(enabled, Ordering::SeqCst);
@@ -911,6 +953,103 @@ impl DnsBlocker {
         Some(r)
     }
 
+    pub fn is_legit_local_domain(domain: &str) -> bool {
+        let d = domain.to_lowercase();
+        let trimmed = d.trim_end_matches('.');
+        trimmed == "localhost"
+            || trimmed.ends_with(".localhost")
+            || trimmed.ends_with(".local")
+            || trimmed.ends_with(".lan")
+            || trimmed.ends_with(".home")
+            || trimmed.ends_with(".internal")
+            || trimmed.ends_with(".intranet")
+            || trimmed.ends_with(".arpa")
+            || trimmed.ends_with(".localdomain")
+    }
+
+    pub fn is_private_ip_record(resp: &[u8]) -> bool {
+        if resp.len() < 12 {
+            return false;
+        }
+        let ancount = u16::from_be_bytes([resp[6], resp[7]]) as usize;
+        if ancount == 0 {
+            return false;
+        }
+
+        let qdcount = u16::from_be_bytes([resp[4], resp[5]]) as usize;
+        let mut pos = 12;
+        for _ in 0..qdcount {
+            while pos < resp.len() {
+                let len = resp[pos] as usize;
+                if len == 0 {
+                    pos += 1;
+                    break;
+                }
+                if len & 0xC0 == 0xC0 {
+                    pos += 2;
+                    break;
+                }
+                pos += 1 + len;
+            }
+            if pos + 4 > resp.len() {
+                return false;
+            }
+            pos += 4;
+        }
+
+        for _ in 0..ancount {
+            if pos >= resp.len() {
+                break;
+            }
+            while pos < resp.len() {
+                let len = resp[pos] as usize;
+                if len == 0 {
+                    pos += 1;
+                    break;
+                }
+                if len & 0xC0 == 0xC0 {
+                    pos += 2;
+                    break;
+                }
+                pos += 1 + len;
+            }
+            if pos + 10 > resp.len() {
+                break;
+            }
+            let rtype = u16::from_be_bytes([resp[pos], resp[pos + 1]]);
+            let rdlength = u16::from_be_bytes([resp[pos + 8], resp[pos + 9]]) as usize;
+            pos += 10;
+
+            if pos + rdlength > resp.len() {
+                break;
+            }
+
+            if rtype == 1 && rdlength == 4 {
+                let ip = &resp[pos..pos + 4];
+                if ip[0] == 127
+                    || ip[0] == 10
+                    || (ip[0] == 172 && (ip[1] >= 16 && ip[1] <= 31))
+                    || (ip[0] == 192 && ip[1] == 168)
+                    || (ip[0] == 169 && ip[1] == 254)
+                    || ip[0] == 0
+                {
+                    return true;
+                }
+            } else if rtype == 28 && rdlength == 16 {
+                let ip6 = &resp[pos..pos + 16];
+                if (ip6[..15].iter().all(|&b| b == 0) && ip6[15] == 1)
+                    || (ip6[0] == 0xfe && (ip6[1] & 0xc0) == 0x80)
+                    || ((ip6[0] & 0xfe) == 0xfc)
+                {
+                    return true;
+                }
+            }
+            pos += rdlength;
+        }
+
+        false
+    }
+
     pub async fn run_dns_server(
         self: Arc<Self>,
         addr: &str,
@@ -994,6 +1133,17 @@ impl DnsBlocker {
             return;
         }
 
+        if mon.security_engine.is_quarantined(&src_ip) {
+            warn!(
+                "Quarantine Enforced: Dropping all DNS resolution for isolated device {}",
+                src_ip
+            );
+            if let Some(r) = Self::build_nxdomain(&pkt) {
+                let _ = sock.send_to(&r, src).await;
+            }
+            return;
+        }
+
         if let Some(_incident) = mon.security_engine.inspect_dns_query(&src_ip, &query_name) {
             mon.lan_scanner
                 .record_activity(&src_ip, &query_name, true, true);
@@ -1060,8 +1210,42 @@ impl DnsBlocker {
         }
 
         let fwd_resp = self.forward_parallel_racing(&pkt, &doh_urls).await;
-        if let Some(resp) = fwd_resp {
-            self.store_cache_response(&query_name, qtype, &resp);
+        if let Some(mut resp) = fwd_resp {
+            if !Self::is_legit_local_domain(&query_name) && Self::is_private_ip_record(&resp) {
+                warn!(
+                    "DNS Rebinding Attack detected: domain '{}' resolved to internal private IP space for client {}",
+                    query_name, src_ip
+                );
+                mon.security_engine.record_incident(
+                    crate::modules::i18n::tr(
+                        "Tấn công DNS Rebinding (Private IP Leak)",
+                        "DNS Rebinding Attack (Private IP Leak)",
+                        "DNS 重绑定攻击 (Private IP Leak)",
+                    ),
+                    &src_ip,
+                    &format!(
+                        "{} '{}' {}",
+                        crate::modules::i18n::tr("Tên miền công cộng", "Public domain", "公共域名"),
+                        query_name,
+                        crate::modules::i18n::tr(
+                            "trả về địa chỉ IP nội bộ LAN (127.0.0.1 / 192.168.x / 10.x). Đã kích hoạt cơ chế tự vệ.",
+                            "resolved to LAN private IP (127.0.0.1 / 192.168.x / 10.x). Self-defense triggered.",
+                            "解析为局域网私有 IP (127.0.0.1 / 192.168.x / 10.x)。已触发防御机制。"
+                        )
+                    ),
+                    "CRITICAL",
+                    crate::modules::i18n::tr(
+                        "Đã chặn phân giải IP nội bộ giả mạo (Trả về NXDOMAIN)",
+                        "Blocked forged internal IP answer (Returned NXDOMAIN)",
+                        "已拦截伪造内网 IP 解析 (返回 NXDOMAIN)",
+                    ),
+                );
+                if let Some(nx) = Self::build_nxdomain(&pkt) {
+                    resp = nx;
+                }
+            } else {
+                self.store_cache_response(&query_name, qtype, &resp);
+            }
             let _ = sock.send_to(&resp, src).await;
         } else if let Some(servfail) = Self::build_servfail(&pkt) {
             let _ = sock.send_to(&servfail, src).await;
@@ -1475,6 +1659,25 @@ mod tests {
         assert!(blocker
             .cached_response_for("stale.test", 1, &query_a)
             .is_none());
+    }
+
+    #[test]
+    fn test_dns_rebinding_detection() {
+        assert!(DnsBlocker::is_legit_local_domain("router.local"));
+        assert!(DnsBlocker::is_legit_local_domain("printer.lan"));
+        assert!(DnsBlocker::is_legit_local_domain("localhost"));
+        assert!(!DnsBlocker::is_legit_local_domain("evil-bank-phish.com"));
+
+        let query = vec![
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, b'e',
+            b'v', b'i', b'l', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+        ];
+        let forged_private_resp =
+            DnsBlocker::build_sinkhole_a_record(&query, [192, 168, 1, 1]).unwrap();
+        assert!(DnsBlocker::is_private_ip_record(&forged_private_resp));
+
+        let public_resp = DnsBlocker::build_sinkhole_a_record(&query, [8, 8, 8, 8]).unwrap();
+        assert!(!DnsBlocker::is_private_ip_record(&public_resp));
     }
 
     #[test]

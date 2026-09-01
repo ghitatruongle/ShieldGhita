@@ -2,25 +2,26 @@ import { Button, LineEdit, ListView } from "std-widgets.slint";
 import {
     I18n, NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry,
     DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem,
-    AttackHistoryItem, CameraItem, BehaviorProfileItem,
+    AttackHistoryItem, CameraItem, BehaviorProfileItem, DnsBenchmarkItem,
 } from "common.slint";
 import { TabButton, StatCard } from "widgets.slint";
 
 export { I18n }
 export { NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry }
 export { DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem }
-export { AttackHistoryItem, CameraItem, BehaviorProfileItem }
+export { AttackHistoryItem, CameraItem, BehaviorProfileItem, DnsBenchmarkItem }
 
 // One row of the LAN device list (Security tab, subview 0).
 component LanDeviceRow inherits Rectangle {
     in property <NetworkDevice> device;
     callback view-logs(string);
+    callback toggle-quarantine(string, bool);
 
-    height: 64px;
-    background: #111827;
+    height: 68px;
+    background: device.is-quarantined ? #3b0712 : #111827;
     border-radius: 8px;
     border-width: 1px;
-    border-color: device.threats-detected > 0 ? #ef4444 : #1f2937;
+    border-color: device.is-quarantined ? #f43f5e : (device.threats-detected > 0 ? #ef4444 : #1f2937);
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 14px;
@@ -30,9 +31,23 @@ component LanDeviceRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             min-width: 250px;
-            Text { text: device.name; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
-            Text { text: (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + device.vendor; font-size: 11px; color: #38bdf8; }
-            Text { text: (I18n.t("Xác thực nhận diện: ", "Detection confidence: ", "识别置信度: ")) + device.confidence + "%"; font-size: 10px; color: #64748b; }
+            HorizontalLayout {
+                spacing: 6px;
+                Text { text: device.name; font-size: 13px; font-weight: 700; color: #f1f5f9; overflow: elide; }
+                if device.is-quarantined : Rectangle {
+                    height: 16px;
+                    border-radius: 8px;
+                    background: #e11d48;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        alignment: center;
+                        Text { text: I18n.t("⛔ CÔ LẬP", "⛔ ISOLATED", "⛔ 已隔离"); font-size: 9px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
+                    }
+                }
+            }
+            Text { text: (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + device.vendor + (device.os-name != "" ? (" • " + device.os-name) : ""); font-size: 11px; color: #38bdf8; overflow: elide; }
+            Text { text: (I18n.t("Độ tin cậy: ", "Confidence: ", "识别置信度: ")) + device.confidence + "%"; font-size: 10px; color: #64748b; }
         }
 
         VerticalLayout {
@@ -70,14 +85,14 @@ component LanDeviceRow inherits Rectangle {
                     }
                 }
             }
-            Text { text: (I18n.t("Domain gần nhất: ", "Last: ", "最近域名: ")) + device.last-domain; font-size: 11px; color: #94a3b8; overflow: elide; }
+            Text { text: (I18n.t("Domain: ", "Domain: ", "域名: ")) + device.last-domain; font-size: 11px; color: #94a3b8; overflow: elide; }
         }
 
         Rectangle { horizontal-stretch: 1; }
 
         VerticalLayout {
             alignment: center;
-            min-width: 140px;
+            min-width: 130px;
             Text {
                 text: device.is-online ? (I18n.t("🟢 TRỰC TUYẾN", "🟢 ONLINE", "🟢 在线")) : (I18n.t("🔴 NGOẠI TUYẾN", "🔴 OFFLINE", "🔴 离线"));
                 font-size: 11px;
@@ -87,9 +102,67 @@ component LanDeviceRow inherits Rectangle {
             Text { text: device.risk-level != "" ? device.risk-level : (I18n.t("Độ trễ: ", "Latency: ", "延迟: ") + device.latency); font-size: 11px; color: #94a3b8; }
         }
 
-        Button {
-            text: I18n.t("📋 Xem Log", "📋 View Logs", "📋 查看日志");
-            clicked => { root.view-logs(device.ip); }
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+            Button {
+                text: I18n.t("📋 Log", "📋 Log", "📋 日志");
+                clicked => { root.view-logs(device.ip); }
+            }
+            if !device.is-local : Button {
+                text: device.is-quarantined ? I18n.t("🟢 Mở", "🟢 Free", "🟢 解除") : I18n.t("⛔ Cách ly", "⛔ Isolate", "⛔ 隔离");
+                clicked => { root.toggle-quarantine(device.ip, !device.is-quarantined); }
+            }
+        }
+    }
+}
+
+// Row of the DNS Benchmark list
+component DnsBenchmarkRow inherits Rectangle {
+    in property <DnsBenchmarkItem> item;
+
+    height: 48px;
+    background: item.is-fastest ? #062e24 : #111827;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: item.is-fastest ? #10b981 : #1f2937;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 14px;
+        alignment: center;
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 240px;
+            Text { text: item.provider-name; font-size: 13px; font-weight: 700; color: #f1f5f9; }
+            Text { text: "IP: " + item.ip; font-size: 11px; color: #94a3b8; }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        if item.is-fastest : Rectangle {
+            height: 22px;
+            border-radius: 11px;
+            background: #059669;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                alignment: center;
+                Text { text: I18n.t("⚡ NHANH NHẤT", "⚡ FASTEST", "⚡ 最快"); font-size: 10px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 100px;
+            Text {
+                text: item.status;
+                font-size: 13px;
+                font-weight: 800;
+                color: item.is-fastest ? #34d399 : (item.response-ms < 100 ? #38bdf8 : #f59e0b);
+                horizontal-alignment: right;
+            }
         }
     }
 }
@@ -270,6 +343,35 @@ export component AppWindow inherits Window {
     in-out property <int> active-attacks-count: 0;
     in-out property <[CameraItem]> camera-list;
 
+    in-out property <bool> camera-live-modal-open: false;
+    in-out property <image> camera-live-frame;
+    in-out property <string> camera-live-title: "";
+    in-out property <string> camera-live-ip: "";
+    in-out property <string> camera-live-vendor: "";
+    in-out property <string> camera-live-rtsp: "";
+    in-out property <string> camera-live-status: "";
+    in-out property <string> camera-live-user: "admin";
+    in-out property <string> camera-live-pass: "";
+    in-out property <bool> camera-live-is-playing: false;
+    in-out property <bool> camera-live-has-frame: false;
+    in-out property <string> camera-security-status: "";
+    in-out property <string> camera-save-user: "";
+    in-out property <string> camera-save-pass: "";
+    in-out property <bool> camera-security-is-vulnerable: false;
+
+    in-out property <[DnsBenchmarkItem]> dns-benchmarks;
+    in-out property <bool> is-running-benchmark: false;
+    in-out property <float> net-down-mbps: 0;
+    in-out property <float> net-up-mbps: 0;
+    in-out property <string> net-if-name: "";
+    in-out property <float> speed-download: -1;
+    in-out property <float> speed-upload: -1;
+    in-out property <int> speed-ping-ms: -1;
+    in-out property <string> speed-detail: "";
+    in-out property <bool> is-running-speed: false;
+    in-out property <string> benchmark-domain-input: "google.com";
+    in-out property <int> active-diag-view: 0;
+
     callback toggle-protection(bool);
     callback toggle-master-lock(bool);
     callback toggle-silent-sinkhole(bool);
@@ -296,6 +398,8 @@ export component AppWindow inherits Window {
     callback filter-logs(string, string, int);
     callback filter-logs-by-ip(string);
     callback dismiss-toast();
+    callback refresh-upstream-speed();
+    callback check-update();
     callback open-latest-release();
     callback trigger-proximity-scan();
     callback refresh-admin-data();
@@ -304,8 +408,19 @@ export component AppWindow inherits Window {
     callback scan-cameras();
     callback open-camera-stream(string);
     callback copy-camera-url(string);
+    callback start-camera-live-stream(string, string, string);
+    callback stop-camera-live-stream();
+    callback audit-camera-security(string);
+    callback save-camera-credential(string, string, string);
+    callback save-camera-snapshot(string);
+    callback send-camera-ptz(string);
     callback toggle-minimize-to-tray-on-minimize(bool);
     callback toggle-start-hidden-in-tray(bool);
+    callback run-speed-test();
+    callback run-dns-benchmark(string);
+    callback toggle-device-quarantine(string, bool);
+    callback export-config-backup();
+    callback import-config-backup();
 
     if root.show-toast : Rectangle {
         z: 100;
@@ -555,6 +670,13 @@ export component AppWindow inherits Window {
                 active: root.active-tab == 4;
                 active-color: #38bdf8;
                 clicked => { root.active-tab = 4; }
+            }
+
+            TabButton {
+                text: I18n.t("🩺 Chẩn đoán", "🩺 Diagnostics", "🩺 网络诊断");
+                active: root.active-tab == 6;
+                active-color: #38bdf8;
+                clicked => { root.active-tab = 6; }
             }
 
             if root.is-admin-edition : TabButton {
@@ -825,6 +947,7 @@ export component AppWindow inherits Window {
                         for device in root.devices : LanDeviceRow {
                             device: device;
                             view-logs(ip) => { root.filter-logs-by-ip(ip); }
+                            toggle-quarantine(ip, q) => { root.toggle-device-quarantine(ip, q); }
                         }
                     }
 
@@ -1490,6 +1613,14 @@ export component AppWindow inherits Window {
                     padding: 16px;
                     spacing: 14px;
 
+                    Text {
+                        text: I18n.t("🌐 Web Panel (điện thoại/máy khác trong mạng): ", "🌐 Web Panel (phone/other device on this LAN): ", "🌐 网页面板（局域网内手机/其他设备）: ") + "http://" + root.host-lan-ip + ":2525";
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: #34d399;
+                        horizontal-alignment: center;
+                    }
+
                     HorizontalLayout {
                         spacing: 12px;
 
@@ -1581,6 +1712,14 @@ export component AppWindow inherits Window {
                         Button {
                             text: I18n.t("🔄 Làm mới dữ liệu", "🔄 Refresh Data", "🔄 刷新数据");
                             clicked => { root.refresh-admin-data(); }
+                        }
+                        Button {
+                            text: I18n.t("📦 Sao Lưu", "📦 Backup", "📦 备份");
+                            clicked => { root.export-config-backup(); }
+                        }
+                        Button {
+                            text: I18n.t("📥 Phục Hồi", "📥 Restore", "📥 恢复");
+                            clicked => { root.import-config-backup(); }
                         }
                         Rectangle { horizontal-stretch: 1; }
                         Text {
@@ -1787,7 +1926,7 @@ export component AppWindow inherits Window {
                     if root.admin-subview-mode == 2 && root.camera-list.length > 0 : HorizontalLayout {
                         spacing: 8px;
                         Text {
-                            text: I18n.t("💡 Mở stream cần trình phát hỗ trợ RTSP (VLC). App không thử mật khẩu giúp bạn.", "Playing a stream needs an RTSP player (VLC). The app does not try passwords for you.", "播放视频流需要支持 RTSP 的播放器（VLC）。应用不会替您尝试密码。");
+                            text: I18n.t("💡 Xem Live & mở VLC: app tự thử không-mật-khẩu + mật khẩu mặc định giúp bạn (Basic/Digest).", "💡 Live view & VLC open: the app auto-tries no-auth and default passwords for you (Basic/Digest).", "💡 实时预览和 VLC 打开：应用自动尝试无密码和默认密码（Basic/Digest）。");
                             font-size: 10px;
                             color: #64748b;
                         }
@@ -1819,6 +1958,20 @@ export component AppWindow inherits Window {
                                 Text { text: cam.rtsp-url; font-size: 10px; color: #38bdf8; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
 
                                 Button {
+                                    text: I18n.t("👁️ Xem Live", "👁️ Live View", "👁️ 实时预览");
+                                    clicked => {
+                                        root.camera-live-ip = cam.ip;
+                                        root.camera-live-vendor = cam.vendor;
+                                        root.camera-live-rtsp = cam.rtsp-url;
+                                        root.camera-live-title = cam.vendor + " (" + cam.ip + ")";
+                                        root.camera-live-status = "Connecting...";
+                                        root.camera-live-has-frame = false;
+                                        root.camera-security-status = "";
+                                        root.camera-live-modal-open = true;
+                                        root.start-camera-live-stream(cam.ip, "", "");
+                                    }
+                                }
+                                Button {
                                     text: I18n.t("📋 Copy", "📋 Copy", "📋 复制");
                                     clicked => { root.copy-camera-url(cam.rtsp-url); }
                                 }
@@ -1830,11 +1983,183 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
+
+            }
+        }
+
+        if root.active-tab == 6 : VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                Button {
+                    text: root.active-diag-view == 0 ? (I18n.t("● ⚡ Đo Tốc Độ DNS", "● ⚡ DNS Benchmark", "● ⚡ DNS 测速")) : (I18n.t("⚡ Đo Tốc Độ DNS", "⚡ DNS Benchmark", "⚡ DNS 测速"));
+                    clicked => { root.active-diag-view = 0; }
+                }
+                Button {
+                    text: root.active-diag-view == 1 ? (I18n.t("● 🚀 Test Tốc Độ", "● 🚀 Speed Test", "● 🚀 测速")) : (I18n.t("🚀 Test Tốc Độ", "🚀 Speed Test", "🚀 测速"));
+                    clicked => { root.active-diag-view = 1; }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: root.active-diag-view == 0 ? (I18n.t("So sánh tốc độ phân giải DNS với các máy chủ công cộng lớn nhất thế giới:", "Benchmark DNS resolution speeds against major global upstream servers:", "与全球顶级上游公共 DNS 服务器对比解析速度:")) : (I18n.t("Đo tốc độ tải xuống / tải lên Internet qua kết nối đang dùng (Cloudflare):", "Measure Internet download / upload speed on the active connection (Cloudflare):", "测量当前连接的互联网下载 / 上传速度（Cloudflare）:"));
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #94a3b8;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                height: 64px;
+                background: #020617;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #1e293b;
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 16px;
+                    Text { text: "📡 " + (root.net-if-name == "" ? "…" : root.net-if-name); font-size: 12px; font-weight: 700; color: #94a3b8; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: "⬇ " + root.net-down-mbps + " Mbps"; font-size: 20px; font-weight: 800; color: #34d399; vertical-alignment: center; }
+                    Text { text: "⬆ " + root.net-up-mbps + " Mbps"; font-size: 20px; font-weight: 800; color: #38bdf8; vertical-alignment: center; }
+                }
+            }
+
+            if root.active-diag-view == 0 : VerticalLayout {
+                spacing: 10px;
+                vertical-stretch: 1;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    height: 38px;
+                    Text {
+                        text: I18n.t("Tên miền kiểm tra:", "Benchmark Domain:", "测试域名:");
+                        font-size: 13px;
+                        font-weight: 700;
+                        color: #cbd5e1;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        text <=> root.benchmark-domain-input;
+                        placeholder-text: "google.com";
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: root.is-running-benchmark ? (I18n.t("⏳ Đang kiểm tra…", "⏳ Testing…", "⏳ 正在测试…")) : (I18n.t("🚀 Bắt đầu Benchmark", "🚀 Run Benchmark", "🚀 开始测速"));
+                        clicked => {
+                            if !root.is-running-benchmark {
+                                root.is-running-benchmark = true;
+                                root.run-dns-benchmark(root.benchmark-domain-input);
+                            }
+                        }
+                    }
+                }
+
+                if root.dns-benchmarks.length == 0 : Text {
+                    text: I18n.t("Bấm '🚀 Bắt đầu Benchmark' để đo độ trễ các máy chủ DNS phổ biến.", "Click '🚀 Run Benchmark' to test response times of popular DNS servers.", "点击'🚀 开始测速'测试常用 DNS 服务器的响应时间。");
+                    font-size: 12px;
+                    color: #64748b;
+                    horizontal-alignment: center;
+                }
+
+                ListView {
+                    vertical-stretch: 1;
+                    for item in root.dns-benchmarks : DnsBenchmarkRow {
+                        item: item;
+                    }
+                }
+            }
+
+            if root.active-diag-view == 1 : VerticalLayout {
+                spacing: 10px;
+                vertical-stretch: 1;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    height: 38px;
+                    Rectangle { horizontal-stretch: 1; }
+                    Button {
+                        text: root.is-running-speed ? (I18n.t("⏳ Đang đo…", "⏳ Testing…", "⏳ 正在测速…")) : (I18n.t("🚀 Bắt Đầu Test Tốc Độ", "🚀 Run Speed Test", "🚀 开始测速"));
+                        clicked => {
+                            if !root.is-running-speed {
+                                root.is-running-speed = true;
+                                root.run-speed-test();
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    height: 95px;
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        background: #111827;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #1f2937;
+                        VerticalLayout {
+                            padding: 10px;
+                            alignment: center;
+                            Text { text: I18n.t("TẢI XUỐNG (DOWNLOAD)", "DOWNLOAD", "下载"); font-size: 10px; font-weight: 700; color: #34d399; }
+                            Text { text: root.speed-download >= 0 ? (root.speed-download + " Mbps") : "—"; font-size: 24px; font-weight: 800; color: #34d399; }
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        background: #111827;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #1f2937;
+                        VerticalLayout {
+                            padding: 10px;
+                            alignment: center;
+                            Text { text: I18n.t("TẢI LÊN (UPLOAD)", "UPLOAD", "上传"); font-size: 10px; font-weight: 700; color: #38bdf8; }
+                            Text { text: root.speed-upload >= 0 ? (root.speed-upload + " Mbps") : "—"; font-size: 24px; font-weight: 800; color: #38bdf8; }
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        background: #111827;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #1f2937;
+                        VerticalLayout {
+                            padding: 10px;
+                            alignment: center;
+                            Text { text: I18n.t("ĐỘ TRỄ (PING)", "PING LATENCY", "延迟"); font-size: 10px; font-weight: 700; color: #a78bfa; }
+                            Text { text: root.speed-ping-ms >= 0 ? (root.speed-ping-ms + " ms") : "—"; font-size: 24px; font-weight: 800; color: #c084fc; }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: #020617;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: #1e293b;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text {
+                            text: root.speed-detail != "" ? root.speed-detail : I18n.t("Bấm '🚀 Bắt Đầu Test Tốc Độ' để đo. Kết quả chi tiết sẽ hiển thị tại đây.", "Press '🚀 Run Speed Test' to measure. Detailed progress will appear here.", "点击'🚀 开始测速'进行测量。详细进度将在此处显示。");
+                            font-size: 11px;
+                            color: #94a3b8;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
             }
         }
     }
 
-    if root.attack-modal-open : Rectangle {
+    if root.is-admin-edition && root.attack-modal-open : Rectangle {
         z: 150;
         width: root.width;
         height: root.height;
@@ -1844,7 +2169,7 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.attack-modal-open : Rectangle {
+    if root.is-admin-edition && root.attack-modal-open : Rectangle {
         z: 160;
         width: 620px;
         height: 470px;
@@ -1996,6 +2321,275 @@ export component AppWindow inherits Window {
                         clicked => {
                             root.launch-attack(root.attack-target-ip, root.attack-target-mac, root.attack-message, root.attack-mode, root.attack-duration-min);
                             root.attack-modal-open = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.is-admin-edition && root.camera-live-modal-open : Rectangle {
+        z: 170;
+        width: root.width;
+        height: root.height;
+        background: #000000cc;
+
+        TouchArea {
+            clicked => {
+                root.camera-live-modal-open = false;
+                root.stop-camera-live-stream();
+            }
+        }
+
+        Rectangle {
+            z: 180;
+            width: 880px;
+            height: 610px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #0d121f;
+            border-radius: 14px;
+            border-width: 2px;
+            border-color: #38bdf8;
+            drop-shadow-color: #000000ee;
+            drop-shadow-blur: 28px;
+
+            // TouchArea inside intercepts all clicks to prevent backdrop dismissal
+            TouchArea {}
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 70px;
+                        height: 24px;
+                        background: #dc2626;
+                        border-radius: 4px;
+                        Text {
+                            text: "● LIVE";
+                            font-size: 11px;
+                            font-weight: 800;
+                            color: #ffffff;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: root.camera-live-title;
+                        font-size: 15px;
+                        font-weight: 700;
+                        color: #f8fafc;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    Button {
+                        text: I18n.t("✕ Đóng", "✕ Close", "✕ 关闭");
+                        clicked => {
+                            root.camera-live-modal-open = false;
+                            root.stop-camera-live-stream();
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 14px;
+                    vertical-stretch: 1;
+
+                    // Left Video Display
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        background: #020617;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #1e293b;
+                        clip: true;
+
+                        if root.camera-live-has-frame : Image {
+                            source: root.camera-live-frame;
+                            width: 100%;
+                            height: 100%;
+                            image-fit: contain;
+                        }
+
+                        if !root.camera-live-has-frame : VerticalLayout {
+                            alignment: center;
+                            spacing: 8px;
+                            Text {
+                                text: root.camera-live-status;
+                                font-size: 13px;
+                                font-weight: 700;
+                                color: #94a3b8;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: I18n.t("Đang tự động quét cổng và giải mã luồng camera (không cần nhập mật khẩu)...", "Auto-probing camera ports & stream (no manual password needed)...", "正在自动探测摄像头端口并解析画面（无需手动输入密码）...");
+                                font-size: 11px;
+                                color: #64748b;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Right PTZ & Action Control Pad
+                    Rectangle {
+                        width: 220px;
+                        background: #111827;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #1f2937;
+
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 10px;
+
+                            Text {
+                                text: I18n.t("ĐIỀU KHIỂN (PTZ)", "PTZ CONTROL", "云台控制 (PTZ)");
+                                font-size: 11px;
+                                font-weight: 800;
+                                color: #38bdf8;
+                                horizontal-alignment: center;
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Button {
+                                    text: "▲ " + I18n.t("Lên", "Up", "上");
+                                    clicked => { root.send-camera-ptz("up"); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: center;
+                                Button {
+                                    text: "◄ " + I18n.t("Trái", "Left", "左");
+                                    clicked => { root.send-camera-ptz("left"); }
+                                }
+                                Button {
+                                    text: "⏹ " + I18n.t("Dừng", "Stop", "停");
+                                    clicked => { root.send-camera-ptz("stop"); }
+                                }
+                                Button {
+                                    text: "► " + I18n.t("Phải", "Right", "右");
+                                    clicked => { root.send-camera-ptz("right"); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Button {
+                                    text: "▼ " + I18n.t("Xuống", "Down", "下");
+                                    clicked => { root.send-camera-ptz("down"); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: center;
+                                Button {
+                                    text: "+ " + I18n.t("Phóng to", "Zoom In", "放大");
+                                    clicked => { root.send-camera-ptz("zoom_in"); }
+                                }
+                                Button {
+                                    text: "- " + I18n.t("Thu nhỏ", "Zoom Out", "缩小");
+                                    clicked => { root.send-camera-ptz("zoom_out"); }
+                                }
+                            }
+
+                            Rectangle { height: 1px; background: #374151; }
+
+                            Button {
+                                text: I18n.t("📸 Chụp Ảnh", "📸 Snapshot", "📸 抓图");
+                                clicked => { root.save-camera-snapshot(root.camera-live-ip); }
+                            }
+
+                            Button {
+                                text: I18n.t("⚡ Khởi Động Lại", "⚡ Reboot", "⚡ 重启设备");
+                                clicked => { root.send-camera-ptz("reboot"); }
+                            }
+
+                            Button {
+                                text: I18n.t("▶ Mở Trình Phát Ngoài", "▶ Open External VLC", "▶ 外部播放器");
+                                clicked => { root.open-camera-stream(root.camera-live-rtsp); }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    Button {
+                        text: I18n.t("🔄 Thử Lại", "🔄 Retry", "🔄 重试");
+                        clicked => {
+                            root.camera-live-status = "Connecting...";
+                            root.start-camera-live-stream(root.camera-live-ip, "", "");
+                        }
+                    }
+
+                    Button {
+                        text: I18n.t("🛡️ Chẩn Đoán Camera", "🛡️ Camera Diagnosis", "🛡️ 诊断摄像头");
+                        clicked => {
+                            root.audit-camera-security(root.camera-live-ip);
+                        }
+                    }
+                }
+
+                if root.camera-security-status != "" : HorizontalLayout {
+                    spacing: 6px;
+                    alignment: center;
+                    Text {
+                        text: root.camera-security-status;
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: root.camera-security-is-vulnerable ? #ef4444 : #10b981;
+                        horizontal-alignment: center;
+                    }
+                }
+
+                if root.camera-security-status != "" && !root.camera-security-is-vulnerable : Rectangle {
+                    background: #111827;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: #334155;
+                    HorizontalLayout {
+                        padding: 10px;
+                        spacing: 8px;
+                        Text {
+                            text: I18n.t("Mật khẩu đúng của camera (lưu 1 lần, xem mãi):", "The camera's real password (saved once, view forever):", "Mật khẩu đúng của camera (lưu 1 lần, xem mãi):");
+                            font-size: 11px;
+                            color: #94a3b8;
+                            vertical-alignment: center;
+                        }
+                        LineEdit {
+                            text <=> root.camera-save-user;
+                            placeholder-text: "admin";
+                            width: 80px;
+                        }
+                        LineEdit {
+                            text <=> root.camera-save-pass;
+                            placeholder-text: I18n.t("mk cũ; mk khác…", "pass; another…", "mk cũ; mk khác…");
+                            width: 160px;
+                            input-type: password;
+                        }
+                        Button {
+                            text: I18n.t("💾 Lưu & Xem", "💾 Save & View", "💾 保存并查看");
+                            clicked => {
+                                root.save-camera-credential(root.camera-live-ip, root.camera-save-user, root.camera-save-pass);
+                                root.camera-save-user = "";
+                                root.camera-save-pass = "";
+                                root.stop-camera-live-stream();
+                                root.start-camera-live-stream(root.camera-live-ip, "", "");
+                            }
                         }
                     }
                 }

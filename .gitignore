@@ -25,6 +25,8 @@ dns_logs.csv
 *.sqlite-journal
 
 src/modules/local/
+src/modules/admin_auth.rs
+src/modules/panel.rs
 src/app/ui_bridge/admin.rs
 local/
 local_*.json

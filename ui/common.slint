@@ -33,7 +33,21 @@ export struct NetworkDevice {
     port-risk: string,
     port-advice: string,
     confidence: int,
+    custom-alias: string,
+    os-name: string,
+    is-quarantined: bool,
+    bandwidth-rate: string,
+    is-local: bool,
 }
+
+export struct DnsBenchmarkItem {
+    provider-name: string,
+    ip: string,
+    response-ms: int,
+    status: string,
+    is-fastest: bool,
+}
+
 
 export struct ActiveConnection {
     process-name: string,
@@ -118,6 +132,9 @@ export struct CameraItem {
     rtsp-url: string,
     source: string,
     is-online: bool,
+    snapshot-url: string,
+    has-default-pass: bool,
+    resolution: string,
 }
 
 export struct BehaviorProfileItem {

@@ -386,4 +386,145 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             Err(e) => tracing::error!("Failed to open release page: {}", e),
         }
     });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_run_speed_test(move || {
+        let ui_weak = ui_weak.clone();
+        s.runtime.spawn(async move {
+            let res =
+                crate::modules::monitor::diagnostics::NetworkDiagnostics::run_speed_test().await;
+            if let Some(ui_inst) = ui_weak.upgrade() {
+                ui_inst.set_is_running_speed(false);
+                ui_inst.set_speed_download(res.download_mbps as f32);
+                ui_inst.set_speed_upload(res.upload_mbps as f32);
+                ui_inst.set_speed_ping_ms(res.ping_ms);
+                ui_inst.set_speed_detail(res.detail.into());
+            }
+        });
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_run_dns_benchmark(move |domain| {
+        let domain_str = if domain.is_empty() {
+            "google.com".to_string()
+        } else {
+            domain.to_string()
+        };
+        let ui_weak = ui_weak.clone();
+        s.runtime.spawn(async move {
+            let results =
+                crate::modules::monitor::diagnostics::NetworkDiagnostics::run_dns_benchmark(
+                    &domain_str,
+                )
+                .await;
+            if let Some(ui_inst) = ui_weak.upgrade() {
+                ui_inst.set_is_running_benchmark(false);
+                let items: Vec<crate::DnsBenchmarkItem> = results
+                    .into_iter()
+                    .map(|r| crate::DnsBenchmarkItem {
+                        provider_name: r.provider_name.into(),
+                        ip: r.ip.into(),
+                        response_ms: r.latency_ms,
+                        status: r.status.into(),
+                        is_fastest: r.is_fastest,
+                    })
+                    .collect();
+                ui_inst.set_dns_benchmarks(slint::ModelRc::new(slint::VecModel::from(items)));
+            }
+        });
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_toggle_device_quarantine(move |ip, quarantine| {
+        let ip_str = ip.to_string();
+        if quarantine {
+            s.security_engine.quarantine_ip(&ip_str);
+        } else {
+            s.security_engine.unquarantine_ip(&ip_str);
+        }
+        if let Some(ui_inst) = ui_weak.upgrade() {
+            super::refresh::refresh_ui_state(&ui_inst, &s);
+        }
+    });
+
+    let s = state.clone();
+    ui.on_export_config_backup(move || {
+        let cfg_toml = {
+            let cfg_guard = s.config.read().unwrap_or_else(|e| e.into_inner());
+            toml::to_string(&*cfg_guard).unwrap_or_default()
+        };
+        let blocked = s.blocker.get_custom_rules();
+        let allowed = s.blocker.get_allowed_rules();
+        let devices = s
+            .monitor
+            .get_lan_devices()
+            .into_iter()
+            .map(|d| d.ip)
+            .collect::<Vec<_>>();
+        match crate::modules::backup::ConfigBackupManager::create_backup(
+            &cfg_toml, &blocked, &allowed, &devices,
+        ) {
+            Ok(p) => info!("Configuration backup saved successfully to {:?}", p),
+            Err(e) => tracing::error!("Failed to create backup: {}", e),
+        }
+    });
+
+    let s = state.clone();
+    let ui_restore = ui.as_weak();
+    ui.on_import_config_backup(move || {
+        let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        let backup_dir = std::path::PathBuf::from(app_data)
+            .join("ShieldGhita")
+            .join("backups");
+        if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+            let mut backups: Vec<std::path::PathBuf> = entries
+                .filter_map(|e| e.ok().map(|d| d.path()))
+                .filter(|p| p.extension().map(|ext| ext == "sgconfig").unwrap_or(false))
+                .collect();
+            backups.sort();
+            if let Some(latest) = backups.last() {
+                match crate::modules::backup::ConfigBackupManager::load_backup(latest) {
+                    Ok(pkg) => {
+                        info!("Restored backup package created at {}", pkg.created_at);
+                        // Apply the full config section (already checksum- and
+                        // format-verified by load_backup) to memory + disk so
+                        // the restore covers more than the custom rules.
+                        match toml::from_str::<crate::modules::config::AppConfig>(&pkg.config_toml)
+                        {
+                            Ok(new_cfg) => {
+                                let cfg_info = format!(
+                                    "listening {}, {} blocklist sources",
+                                    new_cfg.dns_listen_port,
+                                    new_cfg.blocklist_urls.len()
+                                );
+                                *s.config.write().unwrap_or_else(|e| e.into_inner()) =
+                                    new_cfg.clone();
+                                if let Err(e) = new_cfg.save() {
+                                    tracing::error!("Failed to persist restored config: {}", e);
+                                }
+                                info!("Restored full config ({})", cfg_info);
+                            }
+                            Err(e) => {
+                                tracing::error!("Restored config_toml failed to parse: {}", e)
+                            }
+                        }
+                        for r in &pkg.custom_blocked_domains {
+                            let _ = s.blocker.add_custom_domain(r);
+                        }
+                        for r in &pkg.custom_allowed_domains {
+                            let _ = s.blocker.add_allowed_domain(r);
+                        }
+                        s.rules_dirty.store(true, Ordering::SeqCst);
+                        if let Some(ui_inst) = ui_restore.upgrade() {
+                            super::refresh::refresh_ui_state(&ui_inst, &s);
+                        }
+                    }
+                    Err(e) => tracing::error!("Failed to restore backup: {}", e),
+                }
+            }
+        }
+    });
 }

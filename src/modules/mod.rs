@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod blocker;
 pub mod config;
 pub mod dns;
@@ -14,6 +15,8 @@ macro_rules! declare_admin_module {
     () => {
         #[cfg(feature = "admin")]
         pub mod local;
+        #[cfg(feature = "admin")]
+        pub mod panel;
     };
 }
 declare_admin_module!();

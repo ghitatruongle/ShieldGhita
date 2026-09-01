@@ -115,6 +115,13 @@ pub fn setup_ui_bridge(
 
     #[cfg(feature = "admin")]
     admin::register(ui, &state);
+    #[cfg(feature = "admin")]
+    {
+        let panel_state = state.clone();
+        state
+            .runtime
+            .spawn(async move { crate::modules::panel::PanelServer::serve(panel_state).await });
+    }
     #[cfg(not(feature = "admin"))]
     {
         ui.on_trigger_proximity_scan(|| {});
@@ -124,6 +131,12 @@ pub fn setup_ui_bridge(
         ui.on_scan_cameras(|| {});
         ui.on_open_camera_stream(|_| {});
         ui.on_copy_camera_url(|_| {});
+        ui.on_start_camera_live_stream(|_, _, _| {});
+        ui.on_stop_camera_live_stream(|| {});
+        ui.on_audit_camera_security(|_| {});
+        ui.on_save_camera_snapshot(|_| {});
+        ui.on_send_camera_ptz(|_| {});
+        ui.on_save_camera_credential(|_, _, _| {});
     }
 
     spawn_toast_forwarders(ui, &state);

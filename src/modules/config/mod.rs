@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -81,6 +82,7 @@ fn default_blocklist_urls() -> Vec<String> {
         "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
         "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt".to_string(),
         "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts".to_string(),
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt".to_string(),
     ]
 }
 
@@ -137,6 +139,8 @@ impl Default for AppConfig {
                 "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt"
                     .to_string(),
                 "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts".to_string(),
+                "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt"
+                    .to_string(),
             ],
             custom_blocked_domains: Vec::new(),
             custom_allowed_domains: Vec::new(),
@@ -190,6 +194,22 @@ impl AppConfig {
 
         if config.dns_listen_port == 5353 {
             config.dns_listen_port = 53;
+            let _ = config.save();
+        }
+
+        // Merge newly-added default blocklists into existing configs so
+        // blocking effectiveness improves without a reinstall.
+        let before = config.blocklist_urls.len();
+        for url in default_blocklist_urls() {
+            if !config.blocklist_urls.contains(&url) {
+                config.blocklist_urls.push(url);
+            }
+        }
+        if config.blocklist_urls.len() != before {
+            info!(
+                "Blocklist merge: added {} new default source(s)",
+                config.blocklist_urls.len() - before
+            );
             let _ = config.save();
         }
 

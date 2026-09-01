@@ -32,6 +32,7 @@ pub struct SecurityEngine {
     incidents: Arc<RwLock<Vec<SecurityIncident>>>,
     incident_counter: Arc<AtomicU64>,
     last_known_gateway: Arc<RwLock<Option<(String, String)>>>,
+    quarantined_ips: Arc<RwLock<std::collections::HashSet<String>>>,
     port_probe_history: PortProbeHistory,
     port_scan_alert_cooldown: Arc<RwLock<HashMap<String, Instant>>>,
     pub alert_tx: broadcast::Sender<SecurityIncident>,
@@ -56,6 +57,7 @@ impl SecurityEngine {
             hard_query_history: Arc::new(RwLock::new(HashMap::new())),
             hard_drop_count: Arc::new(AtomicU64::new(0)),
             blocked_ips: Arc::new(RwLock::new(HashMap::new())),
+            quarantined_ips: Arc::new(RwLock::new(std::collections::HashSet::new())),
             incidents: Arc::new(RwLock::new(Vec::new())),
             incident_counter: Arc::new(AtomicU64::new(1)),
             last_known_gateway: Arc::new(RwLock::new(None)),
@@ -222,6 +224,114 @@ impl SecurityEngine {
         if let Ok(mut list) = self.incidents.write() {
             list.clear();
         }
+    }
+
+    pub fn quarantine_ip(&self, ip: &str) {
+        let clean = ip.trim().to_string();
+        if clean.is_empty() || clean == "127.0.0.1" || clean == "::1" {
+            return;
+        }
+        if let Ok(mut set) = self.quarantined_ips.write() {
+            set.insert(clean.clone());
+            info!("Device {} has been quarantined by administrator", clean);
+        }
+        self.record_incident(
+            i18n::tr(
+                "Thiết bị đã bị cô lập (Quarantined)",
+                "Device Quarantined by Admin",
+                "设备已被管理员隔离",
+            ),
+            &clean,
+            &format!(
+                "{} {}",
+                i18n::tr(
+                    "Quản trị viên đã đưa thiết bị vào chế độ cách ly kiểm dịch mạng:",
+                    "Administrator isolated network device:",
+                    "管理员已将网络设备隔离:"
+                ),
+                clean
+            ),
+            "HIGH",
+            i18n::tr(
+                "Đã ngắt toàn bộ quyền truy cập Internet/DNS",
+                "All Internet & DNS access severed",
+                "已阻断所有互联网与 DNS 访问",
+            ),
+        );
+    }
+
+    pub fn unquarantine_ip(&self, ip: &str) {
+        let clean = ip.trim();
+        if let Ok(mut set) = self.quarantined_ips.write() {
+            set.remove(clean);
+            info!("Device {} has been released from quarantine", clean);
+        }
+    }
+
+    pub fn is_quarantined(&self, ip: &str) -> bool {
+        self.quarantined_ips
+            .read()
+            .map(|s| s.contains(ip.trim()))
+            .unwrap_or(false)
+    }
+
+    #[allow(dead_code)]
+    pub fn get_quarantined_ips(&self) -> Vec<String> {
+        self.quarantined_ips
+            .read()
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)]
+    pub fn inspect_rogue_dhcp(
+        &self,
+        server_ip: &str,
+        server_mac: &str,
+        expected_gateway: &str,
+    ) -> Option<SecurityIncident> {
+        if !self.is_detection_enabled() {
+            return None;
+        }
+        if server_ip.is_empty() || server_ip == "0.0.0.0" || server_ip == "127.0.0.1" {
+            return None;
+        }
+
+        if !expected_gateway.is_empty() && server_ip != expected_gateway {
+            let details = match i18n::current_index() {
+                i18n::EN => format!(
+                    "Rogue DHCP server detected at IP {} ({})! Expected authorized gateway DHCP: {}",
+                    server_ip, server_mac, expected_gateway
+                ),
+                i18n::ZH => format!(
+                    "检测到非法 DHCP 服务器：IP {} ({})！预期授权网关 DHCP：{}",
+                    server_ip, server_mac, expected_gateway
+                ),
+                _ => format!(
+                    "Phát hiện máy chủ DHCP giả mạo tại IP {} ({})! Gateway DHCP chính thức dự kiến: {}",
+                    server_ip, server_mac, expected_gateway
+                ),
+            };
+
+            let incident = self.record_incident(
+                i18n::tr(
+                    "Máy chủ DHCP giả mạo (Rogue DHCP Server)",
+                    "Rogue DHCP Server Detected",
+                    "非法 DHCP 服务器 (Rogue DHCP)",
+                ),
+                server_ip,
+                &details,
+                "CRITICAL",
+                i18n::tr(
+                    "Cảnh báo: Nguy cơ chiếm quyền cấp phát IP và chuyển hướng mạng",
+                    "Alert: Risk of IP allocation hijacking and traffic redirection",
+                    "告警：存在 IP 分配劫持及流量重定向风险",
+                ),
+            );
+            return Some(incident);
+        }
+
+        None
     }
 
     pub fn calc_entropy(s: &str) -> f64 {

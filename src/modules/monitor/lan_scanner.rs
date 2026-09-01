@@ -30,6 +30,10 @@ pub struct LanDevice {
     pub port_risk: String,
     pub port_advice: String,
     pub confidence: i32,
+    pub custom_alias: String,
+    pub os_name: String,
+    pub is_quarantined: bool,
+    pub bandwidth_rate: String,
 }
 
 pub type DeviceActivityMap = Arc<RwLock<HashMap<String, (u64, u64, u64, String, String)>>>;
@@ -578,6 +582,102 @@ impl LanScanner {
         }
     }
 
+    pub fn estimate_os(
+        vendor: &str,
+        open_ports: &[OpenPort],
+        service_type: Option<&str>,
+        host: Option<&str>,
+    ) -> String {
+        let v = vendor.to_lowercase();
+        let port_nums: Vec<u16> = open_ports.iter().map(|p| p.port).collect();
+
+        if port_nums.contains(&445) || port_nums.contains(&3389) || port_nums.contains(&139) {
+            return "Windows 11 / 10".to_string();
+        }
+        if port_nums.contains(&62078)
+            || (v.contains("apple") && (v.contains("iphone") || v.contains("ipad")))
+        {
+            return "Apple iOS / iPadOS".to_string();
+        }
+        if v.contains("apple") && (v.contains("mac") || v.contains("macbook")) {
+            return "Apple macOS".to_string();
+        }
+        if port_nums.contains(&5555)
+            || v.contains("android")
+            || v.contains("samsung")
+            || v.contains("xiaomi")
+            || v.contains("oppo")
+            || v.contains("vivo")
+            || v.contains("realme")
+        {
+            return "Android OS".to_string();
+        }
+        if v.contains("router")
+            || v.contains("modem")
+            || v.contains("tp-link")
+            || v.contains("tenda")
+            || v.contains("draytek")
+            || v.contains("cisco")
+            || v.contains("vnpt")
+            || v.contains("viettel")
+        {
+            return "RouterOS / Embedded Linux".to_string();
+        }
+        if v.contains("camera")
+            || v.contains("hikvision")
+            || v.contains("dahua")
+            || v.contains("ezviz")
+            || v.contains("imou")
+            || v.contains("axis")
+            || port_nums.contains(&554)
+            || port_nums.contains(&8899)
+        {
+            return "Embedded Linux (IP Camera)".to_string();
+        }
+        if v.contains("tv")
+            || v.contains("lg")
+            || v.contains("sony")
+            || port_nums.contains(&8008)
+            || port_nums.contains(&8009)
+        {
+            return "Smart TV OS (webOS / Tizen / Android TV)".to_string();
+        }
+        if port_nums.contains(&22) {
+            return "Linux / Unix Server".to_string();
+        }
+        if let Some(h) = host {
+            let lh = h.to_lowercase();
+            if lh.contains("desktop")
+                || lh.contains("laptop")
+                || lh.contains("pc")
+                || lh.contains("win")
+            {
+                return "Windows PC".to_string();
+            }
+            if lh.contains("iphone") || lh.contains("ipad") {
+                return "Apple iOS".to_string();
+            }
+            if lh.contains("macbook") || lh.contains("imac") {
+                return "macOS".to_string();
+            }
+        }
+        if let Some(st) = service_type {
+            if st.contains("Windows") {
+                return "Windows PC".to_string();
+            }
+            if st.contains("iOS") || st.contains("iPhone") {
+                return "Apple iOS".to_string();
+            }
+            if st.contains("Android") {
+                return "Android OS".to_string();
+            }
+            if st.contains("Camera") {
+                return "Embedded Linux".to_string();
+            }
+        }
+        "Network Device OS".to_string()
+    }
+
     pub async fn scan_network(
         &self,
         sec_engine: Option<Arc<crate::modules::security::SecurityEngine>>,
@@ -688,6 +788,10 @@ impl LanScanner {
             port_risk: String::new(),
             port_advice: String::new(),
             confidence: 100,
+            custom_alias: String::new(),
+            os_name: "Windows 11 (Host OS)".into(),
+            is_quarantined: false,
+            bandwidth_rate: "0 KB/s".into(),
         });
 
         let hints = super::discovery::collect_hints().await;
@@ -741,6 +845,8 @@ impl LanScanner {
                     .map(|r| r.as_str().to_string())
                     .unwrap_or_default();
                 let port_advice = port_scanner::worst_port_advice(&open_ports);
+                let os_name =
+                    Self::estimate_os(&vendor, &open_ports, service_type, netbios_name.as_deref());
 
                 LanDevice {
                     name,
@@ -761,6 +867,10 @@ impl LanScanner {
                     port_risk,
                     port_advice,
                     confidence,
+                    custom_alias: String::new(),
+                    os_name,
+                    is_quarantined: false,
+                    bandwidth_rate: "0 KB/s".into(),
                 }
             }));
         }
