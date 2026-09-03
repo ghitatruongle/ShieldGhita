@@ -80,9 +80,30 @@ pub struct ConnectionTracker {
 
 const PROC_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
+fn evaluate_connection_safety(proc_name: &str, remote_port: u16) -> bool {
+    let lower = proc_name.to_lowercase();
+    if lower.contains("malware")
+        || lower.contains("trojan")
+        || lower.contains("miner")
+        || lower.contains("backdoor")
+        || lower.contains("meterpreter")
+    {
+        return false;
+    }
+    let dangerous_ports: [u16; 11] = [
+        4444, 5555, 1337, 6667, 31337, 4443, 7001, 8081, 9999, 12345, 27017,
+    ];
+    if dangerous_ports.contains(&remote_port) {
+        return false;
+    }
+    true
+}
+
 impl ConnectionTracker {
     pub fn new(security_engine: Arc<crate::modules::security::SecurityEngine>) -> Self {
-        let mut sys = System::new();
+        let mut sys = System::new_with_specifics(
+            sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::new()),
+        );
         sys.refresh_processes();
         Self {
             connections: Arc::new(RwLock::new(Vec::new())),
@@ -249,9 +270,7 @@ impl ConnectionTracker {
                         }
                     });
 
-                    let is_safe = !proc_name.to_lowercase().contains("malware")
-                        && !proc_name.to_lowercase().contains("trojan")
-                        && !proc_name.to_lowercase().contains("miner");
+                    let is_safe = evaluate_connection_safety(&proc_name, remote_port);
 
                     list.push(ActiveConnection {
                         process_name: proc_name,
@@ -407,9 +426,11 @@ impl ConnectionTracker {
                     }
                 });
 
-                let is_safe = !proc_name.to_lowercase().contains("malware")
-                    && !proc_name.to_lowercase().contains("trojan")
-                    && !proc_name.to_lowercase().contains("miner");
+                let rport: u16 = remote
+                    .rsplit_once(':')
+                    .and_then(|(_, p)| p.parse().ok())
+                    .unwrap_or(0);
+                let is_safe = evaluate_connection_safety(&proc_name, rport);
 
                 list.push(ActiveConnection {
                     process_name: proc_name,

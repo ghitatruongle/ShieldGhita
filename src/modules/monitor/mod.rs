@@ -59,12 +59,16 @@ impl NetworkMonitor {
         let _ = fs::create_dir_all(&log_dir);
         let log_file_path = log_dir.join("dns_log.json");
 
-        let mut sys = System::new();
-        sys.refresh_cpu();
-        sys.refresh_memory();
-
-        let mut nets = Networks::new_with_refreshed_list();
-        nets.refresh();
+        // Startup optimization (beta3 Track D): sysinfo's first refresh_cpu()
+        // only establishes a baseline (returns 0) and the 1s poller refreshes
+        // CPU/mem/networks anyway — doing it here cost ~300ms of process
+        // enumeration for nothing.
+        let sys = System::new_with_specifics(
+            sysinfo::RefreshKind::new()
+                .with_cpu(sysinfo::CpuRefreshKind::everything())
+                .with_memory(sysinfo::MemoryRefreshKind::everything()),
+        );
+        let nets = Networks::new_with_refreshed_list();
 
         let monitor = Self {
             logs: Arc::new(RwLock::new(VecDeque::new())),

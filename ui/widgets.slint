@@ -1,4 +1,3 @@
-// Reusable visual widgets shared across Shield Ghita screens.
 import { I18n } from "common.slint";
 
 export component TabButton inherits Rectangle {
@@ -18,12 +17,12 @@ export component TabButton inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: 10px;
+        padding-right: 10px;
         alignment: center;
         Text {
             text: root.text;
-            font-size: 12px;
+            font-size: 11.5px;
             font-weight: root.active ? 800 : 600;
             color: root.active ? root.active-color : #94a3b8;
             vertical-alignment: center;

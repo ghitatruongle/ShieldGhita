@@ -34,6 +34,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(log_buffer: Arc<AppLogBuffer>) -> Result<Arc<Self>, Box<dyn std::error::Error>> {
+        let t0 = std::time::Instant::now();
         let cfg = AppConfig::load();
         let runtime = Arc::new(
             tokio::runtime::Builder::new_multi_thread()
@@ -41,11 +42,17 @@ impl AppState {
                 .enable_all()
                 .build()?,
         );
+        tracing::info!(
+            "Startup sub [config+runtime]: {} ms",
+            t0.elapsed().as_millis()
+        );
 
+        let t1 = std::time::Instant::now();
         let wfp_blocker = Arc::new(WfpBlocker::new());
         if let Err(e) = wfp_blocker.initialize() {
             tracing::warn!("WFP initialization non-critical notice: {}", e);
         }
+        tracing::info!("Startup sub [wfp-init]: {} ms", t1.elapsed().as_millis());
 
         let mut self_def = SelfDefense::new();
         if cfg.protection_enabled {
@@ -67,13 +74,26 @@ impl AppState {
 
         let sinkhole = Arc::new(SilentSinkhole::new());
         let protection_atomic = Arc::new(AtomicBool::new(cfg.protection_enabled));
+        let t2 = std::time::Instant::now();
         let monitor = Arc::new(NetworkMonitor::new(
             cfg.log_max_entries,
             security_engine.clone(),
         ));
+        tracing::info!(
+            "Startup sub [monitor-init]: {} ms",
+            t2.elapsed().as_millis()
+        );
 
         #[cfg(feature = "admin")]
-        let local_manager = Arc::new(crate::modules::local::LocalManager::new(monitor.clone()));
+        let local_manager = {
+            let t = std::time::Instant::now();
+            let lm = Arc::new(crate::modules::local::LocalManager::new(monitor.clone()));
+            tracing::info!(
+                "Startup sub [local-manager]: {} ms",
+                t.elapsed().as_millis()
+            );
+            lm
+        };
 
         #[cfg(feature = "admin")]
         local_manager.attach_dns_policy(&dns_blocker);
@@ -95,7 +115,9 @@ impl AppState {
             local_manager,
         });
 
+        let t4 = std::time::Instant::now();
         Self::start_background_services(&state);
+        tracing::info!("Startup sub [bg-services]: {} ms", t4.elapsed().as_millis());
         Ok(state)
     }
 

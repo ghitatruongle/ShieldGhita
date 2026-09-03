@@ -15,6 +15,21 @@ slint::include_modules!();
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let startup_started = std::time::Instant::now();
+    // Per-phase startup instrumentation (beta3 Track D): each phase logs its
+    // own elapsed time so regressions are attributable, not just the total.
+    let mut phase_at = startup_started;
+    macro_rules! phase_log {
+        ($name:expr) => {{
+            let now = std::time::Instant::now();
+            info!(
+                "Startup phase [{}]: {} ms",
+                $name,
+                (now - phase_at).as_millis()
+            );
+            phase_at = now;
+        }};
+    }
+
     let log_buffer = Arc::new(AppLogBuffer::new(500));
     let in_app_layer = InAppTracingLayer {
         buffer: log_buffer.clone(),
@@ -50,6 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         default_panic_hook(info);
     }));
     std::mem::forget(log_guard);
+    phase_log!("logging-init");
 
     info!(
         "Starting Shield Ghita v{} Master Controller...",
@@ -60,9 +76,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("Shield Ghita running without elevated Administrator token. Run as Administrator for full DNS & Firewall proxy enforcement.");
     }
     dns_manager::register_safety_cleanup();
+    phase_log!("dns-safety");
 
     let state = AppState::new(log_buffer)?;
+    phase_log!("app-state");
+
     let ui = AppWindow::new()?;
+    phase_log!("slint-window");
 
     let _single_instance_guard = match modules::system::SingleInstanceGuard::try_acquire(
         ui.as_weak(),
@@ -73,6 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
+    phase_log!("single-instance");
 
     let args: Vec<String> = std::env::args().collect();
     let is_autostart = args
@@ -87,6 +108,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(false);
 
     let _tray_icon = app::ui_bridge::setup_ui_bridge(&ui, state)?;
+    phase_log!("ui-bridge");
+    let _ = phase_at; // last phase stamp consumed (silences unused_assignments)
     info!(
         "Startup baseline: UI & services ready in {} ms",
         startup_started.elapsed().as_millis()

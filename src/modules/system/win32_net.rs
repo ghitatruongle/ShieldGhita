@@ -31,10 +31,18 @@ pub fn send_arp_probe(ip: Ipv4Addr) -> Option<String> {
     }
 }
 
-#[cfg_attr(not(feature = "admin"), allow(dead_code))]
+#[allow(dead_code)]
 pub fn resolve_mac(ip: &IpAddr) -> Option<String> {
     match ip {
         IpAddr::V4(v4) => send_arp_probe(*v4),
         IpAddr::V6(_) => None,
     }
+}
+
+pub fn detect_default_gateway_ip() -> Option<String> {
+    if let Some(ip) = crate::modules::monitor::lan_scanner::LanScanner::get_local_outbound_ip() {
+        let octets = ip.octets();
+        return Some(format!("{}.{}.{}.1", octets[0], octets[1], octets[2]));
+    }
+    None
 }

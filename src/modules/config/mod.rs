@@ -57,6 +57,21 @@ pub struct AppConfig {
     pub minimize_to_tray_on_minimize: bool,
     #[serde(default)]
     pub start_hidden_in_tray: bool,
+    /// Admin Edition only: serve the LAN web panel on port 2525.
+    /// Toggling requires an app restart (the listener binds once at startup).
+    #[serde(default = "default_true")]
+    pub admin_panel_enabled: bool,
+    /// RAM Map: automatically purge the standby list when free RAM drops
+    /// below the threshold. Off by default — the manual buttons always work.
+    #[serde(default)]
+    pub rammap_auto_clean_enabled: bool,
+    /// Free-RAM threshold (MB) that triggers the RAM Map auto-clean purge.
+    #[serde(default = "default_ram_clean_threshold_mb")]
+    pub rammap_auto_clean_threshold_mb: u64,
+}
+
+fn default_ram_clean_threshold_mb() -> u64 {
+    512
 }
 
 fn default_listen_addr() -> String {
@@ -164,6 +179,9 @@ impl Default for AppConfig {
             window_maximized: false,
             minimize_to_tray_on_minimize: true,
             start_hidden_in_tray: false,
+            admin_panel_enabled: true,
+            rammap_auto_clean_enabled: false,
+            rammap_auto_clean_threshold_mb: default_ram_clean_threshold_mb(),
         }
     }
 }

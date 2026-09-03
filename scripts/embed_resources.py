@@ -94,7 +94,25 @@ def ustr(s):
     return s.encode("utf-16-le") + b"\x00\x00"
 
 
-APP_VERSION = "0.1.0-beta1"
+def _read_cargo_version() -> str:
+    """Single source of truth: [package].version in Cargo.toml (repo root).
+
+    Keeps the embedded VS_VERSIONINFO in lockstep with the crate version —
+    the beta2 installer shipped FileVersion=0.1.0-beta1 precisely because
+    this constant was hardcoded and forgotten during the version bump.
+    """
+    root = Path(__file__).resolve().parent.parent
+    in_package = False
+    for line in (root / "Cargo.toml").read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if s == "[package]":
+            in_package = True
+        elif in_package and s.startswith("version"):
+            return s.split("=", 1)[1].strip().strip('"')
+    raise RuntimeError("version not found under [package] in Cargo.toml")
+
+
+APP_VERSION = _read_cargo_version()
 
 
 def pad4(buf):
@@ -102,7 +120,7 @@ def pad4(buf):
 
 
 def version_numeric_fields(version_str):
-    """Map '0.1.0-beta1' -> MS/LS dword pair (non-numeric tail becomes 0)."""
+    """Map '0.1.0-betaN' -> MS/LS dword pair (non-numeric tail becomes 0)."""
     nums = []
     for part in version_str.split(".")[:4]:
         digits = ""

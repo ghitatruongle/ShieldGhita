@@ -167,10 +167,12 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             let _ = cfg_guard.save();
         }
         crate::modules::i18n::set_language(&lang_str);
+        super::update_tray_menu_language();
         if let Some(ui_inst) = ui_weak_lang.upgrade() {
             ui_inst
                 .global::<crate::I18n>()
                 .set_lang(crate::modules::i18n::current_index() as i32);
+            super::refresh::refresh_ui_state(&ui_inst, &s);
         }
         info!("Language preference set to: {}", lang_str);
     });
@@ -392,15 +394,35 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
     ui.on_run_speed_test(move || {
         let ui_weak = ui_weak.clone();
         s.runtime.spawn(async move {
-            let res =
-                crate::modules::monitor::diagnostics::NetworkDiagnostics::run_speed_test().await;
-            if let Some(ui_inst) = ui_weak.upgrade() {
-                ui_inst.set_is_running_speed(false);
-                ui_inst.set_speed_download(res.download_mbps as f32);
-                ui_inst.set_speed_upload(res.upload_mbps as f32);
-                ui_inst.set_speed_ping_ms(res.ping_ms);
-                ui_inst.set_speed_detail(res.detail.into());
-            }
+            let ui_weak_progress = ui_weak.clone();
+            let res = crate::modules::monitor::diagnostics::NetworkDiagnostics::run_speed_test_with_progress(
+                move |dl, up, ping| {
+                    let u = ui_weak_progress.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui_inst) = u.upgrade() {
+                            if dl > 0.0 {
+                                ui_inst.set_speed_download(dl as f32);
+                            }
+                            if up > 0.0 {
+                                ui_inst.set_speed_upload(up as f32);
+                            }
+                            if ping >= 0 {
+                                ui_inst.set_speed_ping_ms(ping);
+                            }
+                        }
+                    });
+                },
+            )
+            .await;
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = ui_weak.upgrade() {
+                    ui_inst.set_is_running_speed(false);
+                    ui_inst.set_speed_download(res.download_mbps as f32);
+                    ui_inst.set_speed_upload(res.upload_mbps as f32);
+                    ui_inst.set_speed_ping_ms(res.ping_ms);
+                    ui_inst.set_speed_detail(res.detail.into());
+                }
+            });
         });
     });
 
@@ -433,6 +455,58 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                     .collect();
                 ui_inst.set_dns_benchmarks(slint::ModelRc::new(slint::VecModel::from(items)));
             }
+        });
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_run_ping(move |target| {
+        let target_str = target.to_string();
+        let ui_weak = ui_weak.clone();
+        s.runtime.spawn(async move {
+            let res =
+                crate::modules::monitor::diagnostics::NetworkDiagnostics::run_ping(&target_str, 4)
+                    .await;
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = ui_weak.upgrade() {
+                    ui_inst.set_is_running_ping(false);
+                    ui_inst.set_ping_result(crate::PingResultItem {
+                        target: res.target.into(),
+                        min_ms: res.min_ms,
+                        avg_ms: res.avg_ms,
+                        max_ms: res.max_ms,
+                        jitter_ms: res.jitter_ms,
+                        loss_pct: res.loss_pct,
+                        status_text: res.status_text.into(),
+                        details: res.details.into(),
+                    });
+                }
+            });
+        });
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_run_network_health(move || {
+        let ui_weak = ui_weak.clone();
+        s.runtime.spawn(async move {
+            let rep =
+                crate::modules::monitor::diagnostics::NetworkDiagnostics::run_network_health_check(
+                )
+                .await;
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = ui_weak.upgrade() {
+                    ui_inst.set_is_running_health(false);
+                    ui_inst.set_health_report(crate::NetworkHealthReport {
+                        gateway_status: rep.gateway_status.into(),
+                        dns_status: rep.dns_status.into(),
+                        internet_status: rep.internet_status.into(),
+                        stability_status: rep.stability_status.into(),
+                        summary_score: rep.summary_score,
+                        overall_text: rep.overall_text.into(),
+                    });
+                }
+            });
         });
     });
 
@@ -489,9 +563,6 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 match crate::modules::backup::ConfigBackupManager::load_backup(latest) {
                     Ok(pkg) => {
                         info!("Restored backup package created at {}", pkg.created_at);
-                        // Apply the full config section (already checksum- and
-                        // format-verified by load_backup) to memory + disk so
-                        // the restore covers more than the custom rules.
                         match toml::from_str::<crate::modules::config::AppConfig>(&pkg.config_toml)
                         {
                             Ok(new_cfg) => {
@@ -526,5 +597,130 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 }
             }
         }
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_ram_empty(move |idx| {
+        let op = match idx {
+            0 => crate::modules::rammap::EmptyOp::WorkingSets,
+            1 => crate::modules::rammap::EmptyOp::SystemWorkingSet,
+            2 => crate::modules::rammap::EmptyOp::ModifiedPageList,
+            3 => crate::modules::rammap::EmptyOp::StandbyList,
+            _ => crate::modules::rammap::EmptyOp::Priority0StandbyList,
+        };
+        let ui_weak = ui_weak.clone();
+        s.runtime.spawn(async move {
+            if let Some(ui_inst) = ui_weak.upgrade() {
+                ui_inst.set_ram_is_busy(true);
+            }
+            let result = tokio::task::spawn_blocking(move || crate::modules::rammap::empty(op))
+                .await
+                .unwrap_or_else(|e| Err(format!("join error: {e}")));
+            let msg = match result {
+                Ok(freed) => format!(
+                    "✓ {} — {} ~{} MB",
+                    op.label(),
+                    crate::modules::i18n::tr("đã giải phóng", "freed", "已释放"),
+                    freed
+                ),
+                Err(e) => format!("✗ {e}"),
+            };
+            if let Some(ui_inst) = ui_weak.upgrade() {
+                ui_inst.set_ram_is_busy(false);
+                ui_inst.set_ram_last_action(msg.into());
+            }
+        });
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_ram_scan_memory(move || {
+        let ui_weak = ui_weak.clone();
+        let s2 = s.clone();
+        s.runtime.spawn(async move {
+            if let Some(ui_inst) = ui_weak.upgrade() {
+                ui_inst.set_ram_is_busy(true);
+            }
+            let found = tokio::task::spawn_blocking(|| {
+                crate::modules::rammap::scan_suspicious_processes(40, 4.0)
+            })
+            .await
+            .unwrap_or_default();
+            let n = found.len();
+            for sp in &found {
+                let severity = if sp.rwx_regions > 0 { "HIGH" } else { "MEDIUM" };
+                s2.security_engine.record_incident(
+                    "Memory Injection Suspect",
+                    &format!("PID {}", sp.pid),
+                    &format!(
+                        "{} — {} {} (~{:.0} MB){}",
+                        sp.name,
+                        sp.regions,
+                        crate::modules::i18n::tr(
+                            "vùng nhớ riêng thực thi được",
+                            "executable private regions",
+                            "个可执行私有内存区"
+                        ),
+                        sp.total_mb,
+                        if sp.rwx_regions > 0 {
+                            crate::modules::i18n::tr(
+                                " · có vùng RWX",
+                                " · contains RWX",
+                                " · 含RWX区域",
+                            )
+                        } else {
+                            ""
+                        }
+                    ),
+                    severity,
+                    crate::modules::i18n::tr(
+                        "RAM Map scan — hãy quét tiến trình này bằng phần mềm diệt virus",
+                        "RAM Map scan — scan this process with antivirus",
+                        "RAM Map 扫描 — 请使用杀毒软件扫描此进程",
+                    ),
+                );
+            }
+            let msg = if n == 0 {
+                crate::modules::i18n::tr(
+                    "✓ Không phát hiện vùng nhớ đáng ngờ (An toàn)",
+                    "✓ No suspicious memory regions detected (Safe)",
+                    "✓ 未发现可疑内存区域（安全）",
+                )
+                .to_string()
+            } else {
+                format!(
+                    "{} {} {}",
+                    crate::modules::i18n::tr("⚠ Phát hiện", "⚠ Detected", "⚠ 发现"),
+                    n,
+                    crate::modules::i18n::tr(
+                        "tiến trình có vùng nhớ đáng ngờ — xem tab An ninh",
+                        "suspect process(es) with suspicious memory — see Security tab",
+                        "个存在可疑内存的进程 — 请查看安全选项卡",
+                    )
+                )
+            };
+            if let Some(ui_inst) = ui_weak.upgrade() {
+                ui_inst.set_ram_is_busy(false);
+                ui_inst.set_ram_threat_count(n as i32);
+                ui_inst.set_ram_last_action(msg.into());
+            }
+        });
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_ram_toggle_auto_clean(move |on| {
+        if let Ok(mut cfg_guard) = s.config.write() {
+            cfg_guard.rammap_auto_clean_enabled = on;
+            let _ = cfg_guard.save();
+        }
+        if let Some(ui_inst) = ui_weak.upgrade() {
+            ui_inst.set_ram_auto_clean(on);
+        }
+        tracing::info!(
+            "RAM Map auto-clean {}",
+            if on { "enabled" } else { "disabled" }
+        );
     });
 }

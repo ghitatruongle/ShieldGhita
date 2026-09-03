@@ -6,6 +6,7 @@ pub mod i18n;
 pub mod logger;
 pub mod monitor;
 pub mod perf;
+pub mod rammap;
 pub mod security;
 pub mod sinkhole;
 pub mod stats;

@@ -24,17 +24,25 @@ dns_logs.csv
 *.sqlite
 *.sqlite-journal
 
+# --- Admin Edition: source + artifacts stay LOCAL ONLY (never commit) ---
+# Rust admin modules (exact files + wildcards for future siblings/subdirs):
 src/modules/local/
-src/modules/admin_auth.rs
+src/modules/admin_*.rs
 src/modules/panel.rs
+src/modules/panel/
 src/app/ui_bridge/admin.rs
+src/app/ui_bridge/admin/
+# Panel credentials file (salted password hash) if ever copied into the repo:
+admin_panel.toml
+# Runtime data of admin modules:
 local/
 local_*.json
 local_*.log
-
+# Admin installer script + all setup outputs (public & admin & smoke):
 installer_admin.iss
 installer_output/
 installer_admin_output/
+installer_smoke_output/
 
 Thumbs.db
 Desktop.ini
@@ -49,3 +57,5 @@ smoke_*/
 *_smoke/
 *.stale
 stale_*.exe
+# ZCode session data (plans/transcripts can quote admin source):
+.zcode/

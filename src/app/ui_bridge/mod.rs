@@ -12,11 +12,38 @@ pub mod refresh;
 use crate::app::AppState;
 use crate::modules::system::dns_manager;
 use slint::ComponentHandle;
+use std::cell::RefCell;
 use std::sync::Arc;
 use tray_icon::{
     menu::{Menu, MenuId, MenuItem},
     Icon, TrayIcon, TrayIconBuilder,
 };
+
+thread_local! {
+    static TRAY_MENU_ITEMS: RefCell<Option<(MenuItem, MenuItem, MenuItem)>> = const { RefCell::new(None) };
+}
+
+pub fn update_tray_menu_language() {
+    TRAY_MENU_ITEMS.with(|cell| {
+        if let Some((ref show, ref toggle, ref quit)) = *cell.borrow() {
+            show.set_text(crate::modules::i18n::tr(
+                "Mở giao diện Shield Ghita",
+                "Open Shield Ghita",
+                "打开 Shield Ghita 界面",
+            ));
+            toggle.set_text(crate::modules::i18n::tr(
+                "Bật / Tắt bảo vệ",
+                "Toggle Protection",
+                "开启 / 关闭防护",
+            ));
+            quit.set_text(crate::modules::i18n::tr(
+                "Thoát hoàn toàn",
+                "Quit Completely",
+                "彻底退出",
+            ));
+        }
+    });
+}
 
 pub fn load_official_icon() -> Result<Icon, Box<dyn std::error::Error>> {
     const OFFICIAL_LOGO_32_RGBA: &[u8] = include_bytes!("../../../assets/logo_32.rgba");
@@ -87,6 +114,10 @@ pub fn setup_ui_bridge(
     let _ = tray_menu.append(&item_toggle);
     let _ = tray_menu.append(&item_quit);
 
+    TRAY_MENU_ITEMS.with(|cell| {
+        *cell.borrow_mut() = Some((item_show.clone(), item_toggle.clone(), item_quit.clone()));
+    });
+
     let tray_icon = match load_official_icon() {
         Ok(icon) => TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
@@ -110,17 +141,22 @@ pub fn setup_ui_bridge(
     crate::modules::config::AppConfig::set_autostart_registry(cfg.start_with_windows);
 
     handlers::register(ui, &state);
+    ui.set_ram_auto_clean(cfg.rammap_auto_clean_enabled);
 
     crate::app::hotkey::spawn_protection_hotkey(state.clone());
 
     #[cfg(feature = "admin")]
     admin::register(ui, &state);
     #[cfg(feature = "admin")]
-    {
+    if cfg.admin_panel_enabled {
         let panel_state = state.clone();
         state
             .runtime
             .spawn(async move { crate::modules::panel::PanelServer::serve(panel_state).await });
+    } else {
+        tracing::info!(
+            "Admin panel disabled (admin_panel_enabled=false in config.toml) — restart to apply"
+        );
     }
     #[cfg(not(feature = "admin"))]
     {
@@ -134,43 +170,33 @@ pub fn setup_ui_bridge(
         ui.on_start_camera_live_stream(|_, _, _| {});
         ui.on_stop_camera_live_stream(|| {});
         ui.on_audit_camera_security(|_| {});
+        ui.on_save_camera_credential(|_, _, _| {});
         ui.on_save_camera_snapshot(|_| {});
         ui.on_send_camera_ptz(|_| {});
-        ui.on_save_camera_credential(|_, _, _| {});
     }
 
-    spawn_toast_forwarders(ui, &state);
+    let _timer = poller::start(ui, state.clone(), (show_id, toggle_id, quit_id));
+    std::mem::forget(_timer);
+
     spawn_initial_scan(&state);
+    spawn_toast_forwarders(ui, &state);
 
-    let timer = poller::start(ui, state.clone(), (show_id, toggle_id, quit_id));
-    std::mem::forget(timer);
-
-    if cfg.start_hidden_in_tray {
-        poller::WINDOW_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
-        let ui_weak = ui.as_weak();
-        slint::Timer::single_shot(std::time::Duration::from_millis(250), move || {
-            if let Some(ui_inst) = ui_weak.upgrade() {
-                let _ = ui_inst.hide();
-            }
-        });
-    }
-
+    let state_close = state.clone();
     let ui_weak_close = ui.as_weak();
-    let s_close = state.clone();
     ui.window().on_close_requested(move || {
-        if let Some(ui_inst) = ui_weak_close.upgrade() {
-            poller::save_window_state_now(&ui_inst, &s_close);
-        }
-        let minimize = s_close
+        let min_to_tray = state_close
             .config
             .read()
             .map(|c| c.minimize_to_tray)
             .unwrap_or(true);
-        if minimize {
-            if let Some(ui_inst) = ui_weak_close.upgrade() {
-                let _ = ui_inst.hide();
-            }
+
+        poller::save_window_state_now(&ui_weak_close.upgrade().unwrap(), &state_close);
+
+        if min_to_tray {
             poller::WINDOW_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
+            if let Some(ui_inst) = ui_weak_close.upgrade() {
+                ui_inst.window().hide().unwrap();
+            }
             slint::CloseRequestResponse::KeepWindowShown
         } else {
             let _ = dns_manager::restore_system_dns();

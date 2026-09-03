@@ -45,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           $exe = "target\release\shield_ghita.exe"
-          $markers = @("Cross-Subnet Port Sweep", "WS-Discovery UDP 3702", "BehaviorProfile", "AmbientWifiNode")
+          $markers = @("Cross-Subnet Port Sweep", "WS-Discovery UDP 3702", "BehaviorProfile", "AmbientWifiNode", "sgpanel", "SGPanelMemory")
           foreach ($m in $markers) {
             $found = Select-String -Path $exe -Pattern $m -SimpleMatch -Quiet
             if ($found) {

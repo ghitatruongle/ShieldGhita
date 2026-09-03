@@ -1,10 +1,10 @@
 [package]
 name = "shield_ghita"
-version = "0.1.0-beta2"
+version = "0.1.0-beta3"
 edition = "2021"
 [features]
 default = []
-admin = []
+admin = ["dep:rcgen", "dep:tokio-rustls"]
 [dependencies]
 slint = "1.8"
 tokio = { version = "1", features = ["full"] }
@@ -23,6 +23,11 @@ base64 = "0.22"
 md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"
+getrandom = "0.3"
+# Admin Edition panel HTTPS only (feature-gated: never compiled into public builds).
+# ring provider matches the one reqwest/hyper-rustls already use in this tree.
+rcgen = { version = "0.13", optional = true, default-features = false, features = ["ring"] }
+tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["ring", "tls12"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
@@ -32,6 +37,7 @@ windows = { version = "0.58", features = [
     "Win32_NetworkManagement_WindowsFilteringPlatform",
     "Win32_Networking_WinSock",
     "Win32_Security",
+    "Win32_Security_Cryptography",
     "Win32_System_Console",
     "Win32_System_Registry",
     "Win32_System_Rpc",

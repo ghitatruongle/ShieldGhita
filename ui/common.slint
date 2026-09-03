@@ -1,10 +1,8 @@
-// Shared globals and data structures for all Shield Ghita UI files.
 export global I18n {
     in-out property <int> lang: 0;
     public pure function t(vi: string, en: string, zh: string) -> string {
         return lang == 1 ? en : (lang == 2 ? zh : vi);
     }
-    // Translates data-driven severity/risk tags coming from the backend.
     public pure function sev(v: string) -> string {
         return v == "CRITICAL" ? t("NGHIÊM TRỌNG", "CRITICAL", "严重")
              : v == "HIGH" ? t("CAO", "HIGH", "高")
@@ -48,6 +46,25 @@ export struct DnsBenchmarkItem {
     is-fastest: bool,
 }
 
+export struct PingResultItem {
+    target: string,
+    min-ms: int,
+    avg-ms: int,
+    max-ms: int,
+    jitter-ms: int,
+    loss-pct: int,
+    status-text: string,
+    details: string,
+}
+
+export struct NetworkHealthReport {
+    gateway-status: string,
+    dns-status: string,
+    internet-status: string,
+    stability-status: string,
+    summary-score: int,
+    overall-text: string,
+}
 
 export struct ActiveConnection {
     process-name: string,
@@ -147,4 +164,10 @@ export struct BehaviorProfileItem {
     risk-score: int,
     category: string,
     last-seen: string,
+}
+
+export struct RamProcessItem {
+    pid: int,
+    name: string,
+    working-set-mb: float,
 }

@@ -4,7 +4,7 @@
 
 **Master Internet Controller & Ultra-Fast Network Security Shield for Windows**
 
-[![Version](https://img.shields.io/badge/version-0.1.0--beta1-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
+[![Version](https://img.shields.io/badge/version-0.1.0--beta3-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com)
 
@@ -53,11 +53,6 @@
 - Live upload and download bandwidth throughput metrics read directly from kernel counters.
 - Comprehensive active socket inspector tracking processes (PID, Process Name, Protocol, Local and Remote IP/Port tuples).
 
-### 5. Master Internet Lock & Fail-Safe DNS Restoration
-- **Master Internet Lock**: Instantly isolate and block all outbound internet traffic with one click during security incidents.
-- **100% Fail-Safe DNS Restoration**: Backs up and automatically restores original network DNS settings (DHCP or Static) upon graceful shutdown or crash recovery.
-- **Stealth Background Execution**: Zero black console window flashes or flickering during startup and background operation.
-
 ### 6. Master Internet Lock & Fail-Safe DNS Restoration
 - **Master Internet Lock**: Instantly isolate and block all outbound internet traffic with one click during security incidents.
 - **100% Fail-Safe DNS Restoration**: Backs up and automatically restores original network DNS settings (DHCP or Static) upon graceful shutdown or crash recovery.
@@ -78,7 +73,7 @@
 ## Installation & Getting Started
 
 ### 1. Pre-built Setup Installer
-- Download `ShieldGhita_Setup_v0.1.0-beta1.exe` and execute with **Administrator** privileges.
+- Download `ShieldGhita_Setup_v0.1.0-beta3.exe` and execute with **Administrator** privileges.
 - The installer itself runs in English, Tiếng Việt or 简体中文, lets you choose the application language, automatically terminates running instances, cleanly uninstalls previous versions, and deploys the new release safely.
 
 ### 2. Build From Source (For Developers)
@@ -167,7 +162,7 @@ cargo run --release
 ## Hướng dẫn cài đặt & Sử dụng
 
 ### 1. Cài đặt nhanh qua bộ Setup
-- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.0-beta1.exe` và chạy với quyền **Administrator**.
+- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.0-beta3.exe` và chạy với quyền **Administrator**.
 - Trình cài đặt hỗ trợ tiếng Việt / English / 简体中文, cho phép chọn ngôn ngữ ứng dụng, tự động dừng ứng dụng cũ, dọn sạch phiên bản trước và cập nhật phiên bản mới một cách an toàn.
 
 ### 2. Chạy từ mã nguồn (Dành cho Developer)

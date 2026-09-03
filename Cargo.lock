@@ -4725,6 +4725,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
+]
+
+[[package]]
 name = "read-fonts"
 version = "0.39.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5205,12 +5217,14 @@ dependencies = [
 
 [[package]]
 name = "shield_ghita"
-version = "0.1.0-beta2"
+version = "0.1.0-beta3"
 dependencies = [
  "base64",
  "chrono",
+ "getrandom 0.3.4",
  "image",
  "md-5",
+ "rcgen",
  "reqwest",
  "serde",
  "serde_json",
@@ -5220,6 +5234,7 @@ dependencies = [
  "slint-build",
  "sysinfo",
  "tokio",
+ "tokio-rustls",
  "toml 0.8.2",
  "tracing",
  "tracing-appender",
@@ -7397,6 +7412,15 @@ name = "y4m"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
+]
 
 [[package]]
 name = "yazi"

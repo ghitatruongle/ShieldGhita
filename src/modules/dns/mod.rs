@@ -1,8 +1,11 @@
+pub mod disk_store;
+
+use disk_store::{DiskBlocklist, FastDomainCache};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
@@ -106,7 +109,9 @@ const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
 pub type DnsCacheMap = Arc<RwLock<HashMap<(String, u16), (Vec<u8>, Instant, u32)>>>;
 
 pub struct DnsBlocker {
-    blocked_domains: Arc<RwLock<HashSet<String>>>,
+    disk_store: Arc<RwLock<Option<DiskBlocklist>>>,
+    fast_cache: Arc<FastDomainCache>,
+    builtin_domains: Arc<RwLock<HashSet<String>>>,
     allowed_domains: Arc<RwLock<HashSet<String>>>,
     custom_blocked: Arc<RwLock<HashSet<String>>>,
     custom_allowed: Arc<RwLock<HashSet<String>>>,
@@ -118,6 +123,7 @@ pub struct DnsBlocker {
     pub silent_sinkhole_enabled: Arc<AtomicBool>,
     pub blocked_events_tx: tokio::sync::broadcast::Sender<(String, String)>,
     response_policy: Arc<RwLock<Option<ResponsePolicyFn>>>,
+    pub rules_count: Arc<AtomicUsize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,10 +273,24 @@ impl DnsBlocker {
             initial_blocked.insert(domain.to_string());
         }
 
+        let bin_path = Self::disk_store_path();
+        let (disk_store, initial_count) = if bin_path.exists() {
+            if let Ok(disk) = DiskBlocklist::open(&bin_path) {
+                let cnt = disk.total_domains();
+                (Some(disk), cnt)
+            } else {
+                (None, 0)
+            }
+        } else {
+            (None, 0)
+        };
+
         let (blocked_events_tx, _) = tokio::sync::broadcast::channel(256);
 
         Self {
-            blocked_domains: Arc::new(RwLock::new(initial_blocked)),
+            disk_store: Arc::new(RwLock::new(disk_store)),
+            fast_cache: Arc::new(FastDomainCache::new()),
+            builtin_domains: Arc::new(RwLock::new(initial_blocked)),
             allowed_domains: Arc::new(RwLock::new(HashSet::new())),
             custom_blocked: Arc::new(RwLock::new(HashSet::new())),
             custom_allowed: Arc::new(RwLock::new(HashSet::new())),
@@ -284,13 +304,20 @@ impl DnsBlocker {
             silent_sinkhole_enabled: Arc::new(AtomicBool::new(true)),
             blocked_events_tx,
             response_policy: Arc::new(RwLock::new(None)),
+            rules_count: Arc::new(AtomicUsize::new(initial_count)),
         }
     }
 
     pub fn get_rules_count(&self) -> usize {
-        let base = self.blocked_domains.read().map(|b| b.len()).unwrap_or(0);
-        let custom = self.custom_blocked.read().map(|c| c.len()).unwrap_or(0);
-        base + custom
+        let base = self.rules_count.load(Ordering::Relaxed);
+        let custom = self.custom_blocked.read().map(|b| b.len()).unwrap_or(0);
+        let builtin = self.builtin_domains.read().map(|b| b.len()).unwrap_or(0);
+        base.max(builtin) + custom
+    }
+
+    fn disk_store_path() -> PathBuf {
+        let d = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+        PathBuf::from(d).join("ShieldGhita").join("blocklist.bin")
     }
 
     fn cache_path() -> PathBuf {
@@ -322,40 +349,46 @@ impl DnsBlocker {
     }
 
     pub fn load_cache(&self) -> Result<usize, String> {
+        let bin_path = Self::disk_store_path();
+        if bin_path.exists() {
+            let disk = DiskBlocklist::open(&bin_path)?;
+            let count = disk.total_domains();
+            *self.disk_store.write().unwrap_or_else(|e| e.into_inner()) = Some(disk);
+            self.fast_cache.clear();
+            self.rules_count.store(count, Ordering::Relaxed);
+            info!("Loaded {} cached domains into blocker from disk", count);
+            return Ok(count);
+        }
+
         let p = Self::cache_path();
-        if !p.exists() {
-            return Err("no cache found".into());
+        if p.exists() {
+            if let Ok(content) = fs::read_to_string(&p) {
+                let mut domains: Vec<String> = content
+                    .lines()
+                    .map(|l| l.trim().to_lowercase())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                for d in BUILTIN_VIDEO_AUDIO_AD_DOMAINS {
+                    domains.push(d.to_string());
+                }
+                if let Ok(count) = DiskBlocklist::build(&bin_path, domains) {
+                    let _ = fs::remove_file(&p);
+                    if let Ok(disk) = DiskBlocklist::open(&bin_path) {
+                        *self.disk_store.write().unwrap_or_else(|e| e.into_inner()) = Some(disk);
+                        self.fast_cache.clear();
+                        self.rules_count.store(count, Ordering::Relaxed);
+                        info!("Migrated legacy cache to disk blocklist: {} domains", count);
+                        return Ok(count);
+                    }
+                }
+            }
         }
-        let content = fs::read_to_string(&p).map_err(|e| e.to_string())?;
-        let mut set: HashSet<String> = content
-            .lines()
-            .map(|l| l.trim().to_lowercase())
-            .filter(|l| !l.is_empty())
-            .collect();
-
-        for domain in BUILTIN_VIDEO_AUDIO_AD_DOMAINS {
-            set.insert(domain.to_string());
-        }
-
-        let count = set.len();
-        if count == 0 {
-            return Err("cache empty".into());
-        }
-        if let Ok(mut blocked) = self.blocked_domains.write() {
-            *blocked = set;
-        }
-        info!("Loaded {} cached domains into blocker", count);
-        Ok(count)
+        Err("no cache found".into())
     }
 
+    #[allow(dead_code)]
     fn save_cache(&self) -> Result<(), String> {
-        let p = Self::cache_path();
-        if let Some(parent) = p.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let blocked = self.blocked_domains.read().map_err(|e| e.to_string())?;
-        let list: Vec<&str> = blocked.iter().map(|s| s.as_str()).collect();
-        fs::write(&p, list.join("\n")).map_err(|e| e.to_string())?;
+        // Disk-backed blocklist is already persistent on disk
         Ok(())
     }
 
@@ -494,7 +527,7 @@ impl DnsBlocker {
 
         if unchanged > 0 && fetched == 0 && !any_success && unchanged == urls.len() {
             // Every source answered HTTP 304 — the on-disk cache is already current.
-            let count = self.blocked_domains.read().map(|b| b.len()).unwrap_or(0);
+            let count = self.get_rules_count();
             if count > 0 {
                 info!(
                     "Blocklists unchanged (ETag {} hits in {} ms): {} rules stay active",
@@ -508,15 +541,23 @@ impl DnsBlocker {
 
         let count = domains.len();
         if count > 0 && any_success {
-            if let Ok(mut blocked) = self.blocked_domains.write() {
-                *blocked = domains;
+            let bin_path = Self::disk_store_path();
+            match DiskBlocklist::build(&bin_path, domains.into_iter().collect()) {
+                Ok(built_count) => {
+                    if let Ok(disk) = DiskBlocklist::open(&bin_path) {
+                        *self.disk_store.write().unwrap_or_else(|e| e.into_inner()) = Some(disk);
+                        self.fast_cache.clear();
+                        self.rules_count.store(built_count, Ordering::Relaxed);
+                    }
+                    crate::modules::system::trim_process_working_set();
+                    info!(
+                        "Loaded {} unique domains into disk blocklist in {} ms",
+                        built_count,
+                        fetch_start.elapsed().as_millis()
+                    );
+                }
+                Err(e) => warn!("Failed to build disk blocklist: {}", e),
             }
-            let _ = self.save_cache();
-            info!(
-                "Loaded {} unique domains into blocklist in {} ms",
-                count,
-                fetch_start.elapsed().as_millis()
-            );
         }
         Ok(count)
     }
@@ -534,12 +575,14 @@ impl DnsBlocker {
                 .filter_map(|s| Self::validate_domain(s).ok())
                 .collect();
         }
+        self.fast_cache.clear();
     }
 
     pub fn add_custom_domain(&self, domain: &str) -> Result<(), String> {
         let d = Self::validate_domain(domain)?;
         let mut cb = self.custom_blocked.write().map_err(|e| e.to_string())?;
         cb.insert(d);
+        self.fast_cache.clear();
         Ok(())
     }
 
@@ -547,6 +590,7 @@ impl DnsBlocker {
         let d = domain.trim().to_lowercase();
         let mut cb = self.custom_blocked.write().map_err(|e| e.to_string())?;
         cb.remove(&d);
+        self.fast_cache.clear();
         Ok(())
     }
 
@@ -554,6 +598,7 @@ impl DnsBlocker {
         let d = Self::validate_domain(domain)?;
         let mut ca = self.custom_allowed.write().map_err(|e| e.to_string())?;
         ca.insert(d);
+        self.fast_cache.clear();
         Ok(())
     }
 
@@ -561,6 +606,7 @@ impl DnsBlocker {
         let d = domain.trim().to_lowercase();
         let mut ca = self.custom_allowed.write().map_err(|e| e.to_string())?;
         ca.remove(&d);
+        self.fast_cache.clear();
         Ok(())
     }
 
@@ -614,6 +660,7 @@ impl DnsBlocker {
             }
         }
 
+        // 2. Custom blocked blacklist check
         {
             let cb = self
                 .custom_blocked
@@ -624,16 +671,55 @@ impl DnsBlocker {
             }
         }
 
+        // 3. Builtin blacklist check
         {
-            let gb = self
-                .blocked_domains
+            let bb = self
+                .builtin_domains
                 .read()
                 .unwrap_or_else(|e| e.into_inner());
-            if Self::match_domain_hierarchy(&clean, &gb) {
+            if Self::match_domain_hierarchy(&clean, &bb) {
                 return true;
             }
         }
 
+        // 4. Fast in-memory cache check
+        let h = disk_store::hash_domain(&clean);
+        if let Some(res) = self.fast_cache.get(h) {
+            return res;
+        }
+
+        // 5. Disk blocklist hierarchy check
+        let is_blocked = self.check_disk_hierarchy(&clean);
+        self.fast_cache.insert(h, is_blocked);
+        is_blocked
+    }
+
+    fn check_disk_hierarchy(&self, domain: &str) -> bool {
+        let guard = self.disk_store.read().unwrap_or_else(|e| e.into_inner());
+        let Some(ref disk) = *guard else {
+            return false;
+        };
+        if disk.contains(domain) {
+            return true;
+        }
+        let mut rest = domain;
+        while let Some(dot_pos) = rest.find('.') {
+            rest = &rest[dot_pos + 1..];
+            if !rest.is_empty() {
+                let h = disk_store::hash_domain(rest);
+                if let Some(cached) = self.fast_cache.get(h) {
+                    if cached {
+                        return true;
+                    }
+                } else {
+                    let blocked = disk.contains(rest);
+                    self.fast_cache.insert(h, blocked);
+                    if blocked {
+                        return true;
+                    }
+                }
+            }
+        }
         false
     }
 
@@ -653,9 +739,7 @@ impl DnsBlocker {
 
     #[allow(dead_code)]
     pub fn blocked_count(&self) -> usize {
-        let gb = self.blocked_domains.read().map(|d| d.len()).unwrap_or(0);
-        let cb = self.custom_blocked.read().map(|d| d.len()).unwrap_or(0);
-        gb + cb
+        self.get_rules_count()
     }
 
     pub fn parse_query_info(pkt: &[u8]) -> Option<(String, u16)> {

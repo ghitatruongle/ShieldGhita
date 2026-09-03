@@ -42,7 +42,6 @@ const PORT_SCAN_WINDOW: Duration = Duration::from_secs(60);
 const PORT_SCAN_DISTINCT_PORTS: usize = 10;
 const PORT_SCAN_ALERT_COOLDOWN: Duration = Duration::from_secs(600);
 
-/// remote host -> (local port, first-seen) probes inside the scan window.
 type PortProbeHistory = Arc<RwLock<HashMap<String, Vec<(u16, Instant)>>>>;
 
 impl SecurityEngine {
@@ -367,6 +366,117 @@ impl SecurityEngine {
         }
     }
 
+    pub fn is_dga_domain(domain: &str) -> bool {
+        let clean = domain.trim().trim_end_matches('.');
+        let parts: Vec<&str> = clean.split('.').collect();
+        if parts.len() < 2 {
+            return false;
+        }
+        let sld = parts[parts.len() - 2];
+        if sld.len() < 8 || sld.len() > 36 {
+            return false;
+        }
+        let mut consonants = 0usize;
+        let mut vowels = 0usize;
+        let mut digits = 0usize;
+        let mut max_consecutive_consonants = 0usize;
+        let mut current_consonant_run = 0usize;
+
+        for ch in sld.chars() {
+            let lower = ch.to_ascii_lowercase();
+            if matches!(lower, 'a' | 'e' | 'i' | 'o' | 'u') {
+                vowels += 1;
+                current_consonant_run = 0;
+            } else if lower.is_ascii_alphabetic() {
+                consonants += 1;
+                current_consonant_run += 1;
+                if current_consonant_run > max_consecutive_consonants {
+                    max_consecutive_consonants = current_consonant_run;
+                }
+            } else if lower.is_ascii_digit() {
+                digits += 1;
+                current_consonant_run = 0;
+            }
+        }
+
+        if max_consecutive_consonants >= 6 {
+            return true;
+        }
+        if sld.len() >= 12 && vowels == 0 {
+            return true;
+        }
+        if sld.len() >= 14 && digits >= 3 && consonants >= 7 {
+            let ent = Self::calc_entropy(sld);
+            if ent >= 3.55 {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn inspect_hosts_file(&self) -> Option<SecurityIncident> {
+        let hosts_path = if cfg!(windows) {
+            std::path::PathBuf::from(r"C:\Windows\System32\drivers\etc\hosts")
+        } else {
+            std::path::PathBuf::from("/etc/hosts")
+        };
+
+        if !hosts_path.exists() {
+            return None;
+        }
+
+        let content = std::fs::read_to_string(&hosts_path).ok()?;
+        let sensitive_targets = [
+            "microsoft.com",
+            "windowsupdate.com",
+            "google.com",
+            "bing.com",
+            "kaspersky",
+            "bitdefender",
+            "symantec",
+            "bank",
+            "paypal",
+            "binance",
+        ];
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') || trimmed.is_empty() {
+                continue;
+            }
+            let lower = trimmed.to_lowercase();
+            for target in &sensitive_targets {
+                if lower.contains(target) {
+                    let incident = self.record_incident(
+                        i18n::tr(
+                            "Phát hiện chỉnh sửa độc hại tệp Hosts (Hosts Tamper)",
+                            "Hosts File Tampering / Malicious Hijack Detected",
+                            "检测到恶意篡改 Hosts 文件 (Hosts Tamper)",
+                        ),
+                        "127.0.0.1",
+                        &format!(
+                            "{}: '{}'",
+                            i18n::tr(
+                                "Tệp hosts chứa bản ghi chuyển hướng tên miền nhạy cảm",
+                                "Hosts file contains sensitive domain redirection",
+                                "Hosts 文件包含敏感域名重定向记录"
+                            ),
+                            trimmed
+                        ),
+                        "CRITICAL",
+                        i18n::tr(
+                            "Đề xuất: Khôi phục tệp hosts về trạng thái mặc định của Windows",
+                            "Recommended: Restore hosts file to default Windows clean state",
+                            "建议：将 hosts 文件恢复为 Windows 默认干净状态",
+                        ),
+                    );
+                    return Some(incident);
+                }
+            }
+        }
+        None
+    }
+
     pub fn inspect_dns_query(&self, source_ip: &str, domain: &str) -> Option<SecurityIncident> {
         if !self.is_detection_enabled() {
             return None;
@@ -496,6 +606,43 @@ impl SecurityEngine {
             }
         }
 
+        if Self::is_dga_domain(domain) {
+            let mitigation = if auto_block {
+                self.block_ip_temporarily(source_ip, Duration::from_secs(120));
+                i18n::tr(
+                    "Đã hủy gói tin & cô lập IP kết nối botnet",
+                    "Dropped query & isolated botnet communication",
+                    "已丢弃查询并隔离僵尸网络通信",
+                )
+            } else {
+                i18n::tr(
+                    "Đã ghi nhận cảnh báo tên miền DGA",
+                    "DGA domain alert logged",
+                    "已记录 DGA 域名告警",
+                )
+            };
+            let details = format!(
+                "{}: '{}'",
+                i18n::tr(
+                    "Tên miền có đặc tính sinh tự động từ Botnet DGA",
+                    "Domain matches Botnet DGA characteristics",
+                    "域名符合僵尸网络 DGA 特征"
+                ),
+                domain
+            );
+            return Some(self.record_incident(
+                i18n::tr(
+                    "Phát hiện tên miền Botnet DGA (Algorithmically Generated Domain)",
+                    "Botnet DGA Domain Detected",
+                    "检测到僵尸网络 DGA 域名",
+                ),
+                source_ip,
+                &details,
+                "HIGH",
+                mitigation,
+            ));
+        }
+
         let lower = domain.to_lowercase();
         if lower.ends_with(".onion") || lower.ends_with(".bit") || lower.ends_with(".bazar") {
             let mitigation = if auto_block {
@@ -592,11 +739,6 @@ impl SecurityEngine {
         None
     }
 
-    /// Feed one observed inbound half-open connection (TCP SYN_RCVD) into the
-    /// port-scan detector. Called for every snapshot of the TCP table, so the
-    /// same (source, port) pair inside the window is deduplicated and repeated
-    /// snapshots do not inflate the count. Returns an incident once a single
-    /// remote IP touches enough distinct local ports within the window.
     pub fn record_inbound_port_probe(
         &self,
         remote_ip: &str,
@@ -782,6 +924,15 @@ mod tests {
     }
 
     #[test]
+    fn test_dga_domain_detection() {
+        assert!(SecurityEngine::is_dga_domain("bcdfghjklmn.com"));
+        assert!(SecurityEngine::is_dga_domain("x987bfdsklfjq93.biz"));
+        assert!(!SecurityEngine::is_dga_domain("google.com"));
+        assert!(!SecurityEngine::is_dga_domain("facebook.com"));
+        assert!(!SecurityEngine::is_dga_domain("vnexpress.net"));
+    }
+
+    #[test]
     fn test_hard_rate_limit_without_ids() {
         let sec = SecurityEngine::new();
         sec.set_detection_enabled(false);
@@ -825,10 +976,7 @@ mod tests {
         let alert = alert.expect("port scan must be flagged after threshold ports");
         assert!(alert.incident_type.contains("Port Scan"));
 
-        // Cooldown: further probes from the same IP stay quiet.
         assert!(sec.record_inbound_port_probe(scanner_ip, 50000).is_none());
-
-        // Loopback probes are never incidents.
         assert!(sec.record_inbound_port_probe("127.0.0.1", 60000).is_none());
     }
 

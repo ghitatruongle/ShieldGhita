@@ -42,3 +42,15 @@ pub fn open_url_in_default_browser(url: &str) -> Result<(), String> {
 pub fn open_url_in_default_browser(_url: &str) -> Result<(), String> {
     Err("Opening URLs is only supported on Windows".to_string())
 }
+
+/// Trims physical memory pages of current process back to the OS (Working Set Trimming).
+#[cfg(windows)]
+pub fn trim_process_working_set() {
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
+        let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn trim_process_working_set() {}

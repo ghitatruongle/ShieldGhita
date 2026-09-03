@@ -10,6 +10,7 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 use super::TrayMenuIds;
 
 pub static WINDOW_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static RAM_PROCS_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq)]
 struct WindowGeom {
@@ -130,6 +131,9 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
     let mut geom_applied = false;
 
     let mut networks = sysinfo::Networks::new_with_refreshed_list();
+    let mut ram_tick: u32 = 0;
+    let mut trim_tick: u32 = 0;
+    let mut last_auto_clean = Instant::now();
 
     let timer = slint::Timer::default();
     timer.start(
@@ -156,9 +160,10 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
             handle_tray_icon_events(&ui_win);
             handle_minimize_to_tray(&ui_win, &state, &mut tray_hide_armed);
             track_window_geom(&ui_win, &state, &mut last_seen_geom, &mut geom_dirty_since);
-            super::refresh::refresh_ui_state(&ui_win, &state);
+            if WINDOW_VISIBLE.load(Ordering::SeqCst) {
+                super::refresh::refresh_ui_state(&ui_win, &state);
+            }
 
-            // Live per-second bandwidth for the busiest non-loopback interface.
             networks.refresh();
             let mut best_rx: u64 = 0;
             let mut best_tx: u64 = 0;
@@ -177,6 +182,84 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
             ui_win.set_net_down_mbps((best_rx as f64 * 8.0 / 1_000_000.0) as f32);
             ui_win.set_net_up_mbps((best_tx as f64 * 8.0 / 1_000_000.0) as f32);
             ui_win.set_net_if_name(best_name.into());
+
+            ram_tick = ram_tick.wrapping_add(1);
+            if ui_win.get_active_tab() == 7 {
+                let b = crate::modules::rammap::snapshot();
+                ui_win.set_ram_total_mb(b.total_mb as f32);
+                ui_win.set_ram_available_mb(b.available_mb as f32);
+                ui_win.set_ram_active_mb(b.active_mb as f32);
+                ui_win.set_ram_standby_mb(b.standby_mb as f32);
+                ui_win.set_ram_modified_mb(b.modified_mb as f32);
+                ui_win.set_ram_free_mb(b.free_mb as f32);
+                ui_win.set_ram_zero_mb(b.zero_mb as f32);
+                ui_win.set_ram_page_cache_mb(b.page_cache_mb as f32);
+                ui_win.set_ram_kernel_mb(b.kernel_mb as f32);
+                ui_win.set_ram_commit_mb(b.commit_mb as f32);
+                ui_win.set_ram_commit_limit_mb(b.commit_limit_mb as f32);
+                ui_win.set_ram_lists_available(b.lists_available);
+                if ram_tick.is_multiple_of(3) && !RAM_PROCS_BUSY.swap(true, Ordering::SeqCst) {
+                    let ui_weak_bg = ui_weak.clone();
+                    state.runtime.spawn(async move {
+                        let procs = tokio::task::spawn_blocking(|| {
+                            crate::modules::rammap::top_processes(25)
+                        })
+                        .await
+                        .unwrap_or_default();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            RAM_PROCS_BUSY.store(false, Ordering::SeqCst);
+                            if let Some(u) = ui_weak_bg.upgrade() {
+                                let models: Vec<crate::RamProcessItem> = procs
+                                    .into_iter()
+                                    .map(|p| crate::RamProcessItem {
+                                        pid: p.pid as i32,
+                                        name: p.name.into(),
+                                        working_set_mb: p.working_set_mb as f32,
+                                    })
+                                    .collect();
+                                u.set_ram_processes(slint::ModelRc::new(slint::VecModel::from(
+                                    models,
+                                )));
+                            }
+                        });
+                    });
+                }
+            }
+
+            let (auto_clean_on, threshold_mb) = state
+                .config
+                .read()
+                .map(|c| {
+                    (
+                        c.rammap_auto_clean_enabled,
+                        c.rammap_auto_clean_threshold_mb,
+                    )
+                })
+                .unwrap_or((false, 512));
+            if auto_clean_on
+                && crate::modules::rammap::get_available_ram_mb() < threshold_mb
+                && last_auto_clean.elapsed() >= Duration::from_secs(60)
+            {
+                last_auto_clean = Instant::now();
+                let rt = state.runtime.clone();
+                rt.spawn(async move {
+                    let res = tokio::task::spawn_blocking(|| {
+                        crate::modules::rammap::empty(crate::modules::rammap::EmptyOp::StandbyList)
+                    })
+                    .await;
+                    match res {
+                        Ok(Ok(freed)) => tracing::info!("RAM Map auto-clean: freed ~{freed} MB"),
+                        Ok(Err(e)) => tracing::warn!("RAM Map auto-clean failed: {e}"),
+                        Err(e) => tracing::warn!("RAM Map auto-clean join error: {e}"),
+                    }
+                });
+            }
+
+            trim_tick = trim_tick.wrapping_add(1);
+            if trim_tick.is_multiple_of(30) || !WINDOW_VISIBLE.load(Ordering::SeqCst) {
+                crate::modules::system::trim_process_working_set();
+                state.security_engine.inspect_hosts_file();
+            }
         },
     );
     timer
