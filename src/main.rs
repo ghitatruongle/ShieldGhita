@@ -107,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|c| c.start_hidden_in_tray)
             .unwrap_or(false);
 
-    let _tray_icon = app::ui_bridge::setup_ui_bridge(&ui, state)?;
+    let _tray_icon = app::ui_bridge::setup_ui_bridge(&ui, state.clone())?;
     phase_log!("ui-bridge");
     let _ = phase_at; // last phase stamp consumed (silences unused_assignments)
     info!(
@@ -124,6 +124,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     slint::run_event_loop_until_quit()?;
 
+    // Graceful teardown: disable WFP / self-defense and restore system DNS
+    // so quitting never leaves the host with residual filters or DNS override.
+    app::ui_bridge::handlers::apply_protection(&state, false);
     let _ = dns_manager::restore_system_dns();
     Ok(())
 }

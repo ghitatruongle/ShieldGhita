@@ -88,6 +88,16 @@ impl LanScanner {
     pub fn record_activity(&self, ip: &str, domain: &str, is_blocked: bool, is_threat: bool) {
         let time_str = chrono::Local::now().format("%H:%M:%S").to_string();
         if let Ok(mut map) = self.activity_map.write() {
+            // Cap map growth so long-running processes do not leak memory
+            // when many ephemeral client IPs appear. Evict ~1024 entries
+            // instead of clear() so long-lived device history survives.
+            if map.len() > 4096 {
+                let excess = map.len().saturating_sub(3072);
+                let keys: Vec<String> = map.keys().take(excess).cloned().collect();
+                for k in keys {
+                    map.remove(&k);
+                }
+            }
             let entry =
                 map.entry(ip.to_string())
                     .or_insert((0, 0, 0, "-".to_string(), "-".to_string()));
@@ -360,29 +370,31 @@ impl LanScanner {
             ),
         ];
 
-        let start = Instant::now();
         let mut join_set = tokio::task::JoinSet::new();
 
         for (port, dev_type) in ports_and_types {
             let addr = format!("{}:{}", ip, port);
             join_set.spawn(async move {
+                // Per-port Instant: measuring from a shared scan start inflates
+                // latency by join ordering instead of the actual connect time.
+                let t0 = Instant::now();
                 let connected =
                     tokio::time::timeout(Duration::from_millis(80), TcpStream::connect(&addr))
                         .await
                         .is_ok_and(|r| r.is_ok());
-                (port, dev_type, connected)
+                (port, dev_type, connected, t0.elapsed().as_millis())
             });
         }
 
         let mut open_hits: Vec<(usize, &'static str, u128)> = Vec::new();
         while let Some(res) = join_set.join_next().await {
-            if let Ok((port, dev_type, connected)) = res {
+            if let Ok((port, dev_type, connected, elapsed_ms)) = res {
                 if connected {
                     let priority = ports_and_types
                         .iter()
                         .position(|(p, _)| *p == port)
                         .unwrap_or(usize::MAX);
-                    open_hits.push((priority, dev_type, start.elapsed().as_millis()));
+                    open_hits.push((priority, dev_type, elapsed_ms));
                 }
             }
         }
@@ -405,17 +417,38 @@ impl LanScanner {
         crate::modules::monitor::oui_db::lookup_vendor(mac)
     }
 
+    /// True only when `ip` is the OS-reported default gateway. A bare
+    /// `.1` / `.254` suffix is not sufficient — many LANs use .254/.250 or
+    /// non-/24 layouts, and mislabeling a printer/NAS as "Router" poisons
+    /// the ARP-spoof baseline.
+    pub fn is_gateway_ip(ip: &str) -> bool {
+        match crate::modules::system::win32_net::detect_default_gateway_ip() {
+            Some(gw) => {
+                if gw.trim() == ip.trim() {
+                    return true;
+                }
+                // Same-/24 .1/.254 keeps the classic heuristic for common
+                // home routers without mislabeling foreign-subnet hosts.
+                let same_subnet_24 = |a: &str, b: &str| {
+                    let pa: Vec<&str> = a.split('.').collect();
+                    let pb: Vec<&str> = b.split('.').collect();
+                    pa.len() == 4 && pb.len() == 4 && pa[..3] == pb[..3]
+                };
+                (ip.ends_with(".1") || ip.ends_with(".254")) && same_subnet_24(ip, &gw)
+            }
+            // No route info (e.g. probe failed): fall back to the classic
+            // heuristic so the gateway row does not disappear entirely.
+            None => ip.ends_with(".1") || ip.ends_with(".254"),
+        }
+    }
+
     pub fn classify_final(
         ip: &str,
         vendor: &str,
         service_type: Option<&'static str>,
         hostname: Option<&str>,
     ) -> (&'static str, &'static str) {
-        if ip.ends_with(".1")
-            || ip.ends_with(".254")
-            || vendor.contains("Router")
-            || vendor.contains("Modem")
-        {
+        if Self::is_gateway_ip(ip) || vendor.contains("Router") || vendor.contains("Modem") {
             return (
                 i18n::tr(
                     "📡 Router Wi-Fi / Gateway",
@@ -682,9 +715,26 @@ impl LanScanner {
         &self,
         sec_engine: Option<Arc<crate::modules::security::SecurityEngine>>,
     ) -> Vec<LanDevice> {
-        if let Ok(mut guard) = self.is_scanning.write() {
-            *guard = true;
+        // Mutual exclusion: skip overlapping scans (manual + periodic).
+        {
+            let mut scanning = self.is_scanning.write().unwrap_or_else(|e| e.into_inner());
+            if *scanning {
+                info!("LAN scan already in progress; skipping concurrent request");
+                return self.devices.read().map(|d| d.clone()).unwrap_or_default();
+            }
+            *scanning = true;
         }
+        // Ensure the flag is cleared even if a later path returns early.
+        struct ScanGuard<'a>(&'a std::sync::RwLock<bool>);
+        impl Drop for ScanGuard<'_> {
+            fn drop(&mut self) {
+                if let Ok(mut g) = self.0.write() {
+                    *g = false;
+                }
+            }
+        }
+        let _scan_guard = ScanGuard(&self.is_scanning);
+
         let scan_start = Instant::now();
         let mut discovered_map: HashMap<String, String> = HashMap::new();
 
@@ -695,29 +745,38 @@ impl LanScanner {
 
         if let Some(local_ip) = local_ip_opt {
             let octets = local_ip.octets();
-            let mut join_handles = Vec::with_capacity(254);
+            // Spawn all 253 probes immediately; each task acquires the
+            // semaphore *inside* so the loop never blocks serially. Use
+            // tokio::spawn (not spawn_blocking per IP) — SendARP is a short
+            // FFI call, and the blocking pool would be exhausted by 253
+            // simultaneous blocking tasks.
             let arp_semaphore = Arc::new(tokio::sync::Semaphore::new(64));
+            let mut join_set = tokio::task::JoinSet::new();
 
             for i in 1..=254u8 {
                 let target_ip = Ipv4Addr::new(octets[0], octets[1], octets[2], i);
                 if target_ip == local_ip {
                     continue;
                 }
-                let permit = arp_semaphore
-                    .clone()
-                    .acquire_owned()
+                let sem = arp_semaphore.clone();
+                join_set.spawn(async move {
+                    let Ok(_permit) = sem.acquire_owned().await else {
+                        return (target_ip.to_string(), None);
+                    };
+                    // Offload the blocking SendARP call without occupying a
+                    // blocking-pool thread while waiting for the permit.
+                    let mac_res = tokio::task::spawn_blocking(move || {
+                        crate::modules::system::win32_net::send_arp_probe(target_ip)
+                    })
                     .await
-                    .expect("ARP semaphore closed");
-                let handle = tokio::task::spawn_blocking(move || {
-                    let _permit = permit;
-                    let mac_res = crate::modules::system::win32_net::send_arp_probe(target_ip);
+                    .ok()
+                    .flatten();
                     (target_ip.to_string(), mac_res)
                 });
-                join_handles.push(handle);
             }
 
-            for handle in join_handles {
-                if let Ok((ip_str, Some(mac_str))) = handle.await {
+            while let Some(res) = join_set.join_next().await {
+                if let Ok((ip_str, Some(mac_str))) = res {
                     discovered_map.insert(ip_str, mac_str);
                 }
             }
@@ -796,6 +855,9 @@ impl LanScanner {
 
         let hints = super::discovery::collect_hints().await;
 
+        // Bound enrichment (probe + port scan per device) so a /24 full of
+        // hosts cannot spawn hundreds of simultaneous heavy tasks.
+        let enrich_sem = Arc::new(tokio::sync::Semaphore::new(24));
         let mut enrich_handles = Vec::new();
         for (ip, mac) in discovered_map {
             if ip == local_ip_str || ip == "127.0.0.1" {
@@ -803,8 +865,12 @@ impl LanScanner {
             }
 
             let hint = hints.get(&ip).cloned();
+            let sem = enrich_sem.clone();
 
             enrich_handles.push(tokio::spawn(async move {
+                let Ok(_permit) = sem.acquire_owned().await else {
+                    return None;
+                };
                 let vendor = Self::lookup_vendor(&mac);
                 let vendor_unknown = i18n::tr("Không xác định", "Unknown", "未知");
                 let vendor_private_mac = i18n::tr("MAC riêng tư", "Private MAC", "随机 MAC");
@@ -831,7 +897,7 @@ impl LanScanner {
                 let (device_label, _) =
                     Self::classify_final(&ip, &vendor, classify_hint, netbios_name.as_deref());
 
-                let name = if ip.ends_with(".1") || ip.ends_with(".254") {
+                let name = if Self::is_gateway_ip(&ip) {
                     format!("📡 Router Wi-Fi / Gateway ({})", vendor)
                 } else if let Some(ref host) = netbios_name {
                     format!("{} - {}", host, device_label)
@@ -848,7 +914,7 @@ impl LanScanner {
                 let os_name =
                     Self::estimate_os(&vendor, &open_ports, service_type, netbios_name.as_deref());
 
-                LanDevice {
+                Some(LanDevice {
                     name,
                     ip,
                     mac,
@@ -871,21 +937,28 @@ impl LanScanner {
                     os_name,
                     is_quarantined: false,
                     bandwidth_rate: "0 KB/s".into(),
-                }
+                })
             }));
         }
 
         for handle in enrich_handles {
-            if let Ok(dev) = handle.await {
+            if let Ok(Some(dev)) = handle.await {
                 devices.push(dev);
             }
         }
 
         if let Some(sec) = sec_engine {
+            // Only the OS-reported default gateway feeds the ARP-spoof
+            // baseline; guessing .1/.254 misattributes legitimate hosts.
+            let gateway_ip = crate::modules::system::win32_net::detect_default_gateway_ip();
             for dev in &devices {
-                if dev.ip.ends_with(".1")
-                    || dev.ip.ends_with(".254")
+                let is_gw = match &gateway_ip {
+                    Some(gw) => &dev.ip == gw,
+                    None => false,
+                };
+                if is_gw
                     || dev.name.contains(i18n::tr("Router", "Router", "路由器"))
+                        && Self::is_gateway_ip(&dev.ip)
                 {
                     sec.inspect_arp_gateway(&dev.ip, &dev.mac);
                     break;
@@ -920,18 +993,14 @@ impl LanScanner {
             }
         }
 
-        devices.sort_by(|a, b| {
-            if a.ip.ends_with(".1") {
-                std::cmp::Ordering::Less
-            } else if b.ip.ends_with(".1") {
-                std::cmp::Ordering::Greater
-            } else if a.name.contains("This PC") {
-                std::cmp::Ordering::Less
-            } else if b.name.contains("This PC") {
-                std::cmp::Ordering::Greater
-            } else {
-                a.ip.cmp(&b.ip)
-            }
+        // Total-order sort key: gateway first, then this PC, then by IP.
+        // The previous comparator returned Less in both directions when two
+        // devices both looked like `.1` (or both named "This PC"), which can
+        // panic in debug builds and produce unstable order in release.
+        devices.sort_by_key(|d| {
+            let is_gateway = if Self::is_gateway_ip(&d.ip) { 0u8 } else { 1u8 };
+            let is_this_pc = if d.name.contains("This PC") { 0u8 } else { 1u8 };
+            (is_gateway, is_this_pc, d.ip.clone())
         });
 
         info!(
@@ -942,10 +1011,6 @@ impl LanScanner {
 
         if let Ok(mut dev_guard) = self.devices.write() {
             *dev_guard = devices.clone();
-        }
-
-        if let Ok(mut guard) = self.is_scanning.write() {
-            *guard = false;
         }
 
         devices
@@ -987,7 +1052,10 @@ mod tests {
 
     #[test]
     fn test_classify_final() {
-        let (label, tag) = LanScanner::classify_final("192.168.1.1", "TP-Link", None, None);
+        // Deterministic: "192.0.2.1" is TEST-NET (never a live LAN gateway,
+        // not even on CI runners), so ROUTER must come from the vendor string,
+        // not from is_gateway_ip()'s live default-gateway lookup.
+        let (label, tag) = LanScanner::classify_final("192.0.2.1", "TP-Link Router", None, None);
         assert_eq!(tag, "ROUTER");
         assert!(label.contains("Router"));
 

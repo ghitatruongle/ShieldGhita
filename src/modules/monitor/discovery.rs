@@ -59,18 +59,21 @@ pub async fn probe_ssdp_hints() -> Vec<DiscoveryHint> {
     let msg = "M-SEARCH * HTTP/1.1\r\n\
                HOST: 239.255.255.250:1900\r\n\
                MAN: \"ssdp:discover\"\r\n\
-               MX: 1\r\n\
+               MX: 2\r\n\
                ST: ssdp:all\r\n\r\n";
     let target: SocketAddr = "239.255.255.250:1900".parse().unwrap();
     if socket.send_to(msg.as_bytes(), target).await.is_err() {
         return hints;
     }
 
-    let deadline = Instant::now() + Duration::from_millis(700);
+    let deadline = Instant::now() + Duration::from_millis(1500);
     let mut seen_ips = std::collections::HashSet::new();
     let mut buf = [0u8; 2048];
     while Instant::now() < deadline {
-        let remain = deadline - Instant::now();
+        let remain = deadline.saturating_duration_since(Instant::now());
+        if remain.is_zero() {
+            break;
+        }
         match tokio::time::timeout(remain, socket.recv_from(&mut buf)).await {
             Ok(Ok((len, src))) => {
                 let response = String::from_utf8_lossy(&buf[..len]).to_lowercase();
@@ -239,8 +242,9 @@ pub async fn probe_mdns_hints() -> Vec<DiscoveryHint> {
         Err(_) => return hints,
     };
 
+    // DNS header: TXID=0, flags=0, QDCOUNT=1, ANCOUNT=0, NS=0, AR=0.
     let mut query = vec![
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
     for label in ["_services", "_dns-sd", "_udp", "local"] {
         query.push(label.len() as u8);
@@ -250,15 +254,19 @@ pub async fn probe_mdns_hints() -> Vec<DiscoveryHint> {
     query.extend_from_slice(&12u16.to_be_bytes());
     query.extend_from_slice(&1u16.to_be_bytes());
 
-    let target: SocketAddr = "224.0.0.252:5353".parse().unwrap();
+    // mDNS multicast is 224.0.0.251:5353 (224.0.0.252 is LLMNR, not mDNS).
+    let target: SocketAddr = "224.0.0.251:5353".parse().unwrap();
     if socket.send_to(&query, target).await.is_err() {
         return hints;
     }
 
-    let deadline = Instant::now() + Duration::from_millis(700);
+    let deadline = Instant::now() + Duration::from_millis(1500);
     let mut buf = [0u8; 4096];
     while Instant::now() < deadline {
-        let remain = deadline - Instant::now();
+        let remain = deadline.saturating_duration_since(Instant::now());
+        if remain.is_zero() {
+            break;
+        }
         match tokio::time::timeout(remain, socket.recv_from(&mut buf)).await {
             Ok(Ok((len, src))) => {
                 let ip_str = src.ip().to_string();
@@ -279,11 +287,22 @@ pub async fn probe_mdns_hints() -> Vec<DiscoveryHint> {
 pub async fn collect_hints() -> HashMap<String, DiscoveryHint> {
     let (mdns, ssdp) = tokio::join!(probe_mdns_hints(), probe_ssdp_hints());
     let mut map: HashMap<String, DiscoveryHint> = HashMap::new();
+    // Merge preferring whichever hint carries a device keyword: a keyworded
+    // hint classifies the device, a bare one does not.
+    let mut insert_prefer_keyword = |hint: DiscoveryHint| {
+        map.entry(hint.ip.clone())
+            .and_modify(|existing| {
+                if existing.keyword.is_none() && hint.keyword.is_some() {
+                    *existing = hint.clone();
+                }
+            })
+            .or_insert(hint);
+    };
     for hint in mdns {
-        map.insert(hint.ip.clone(), hint);
+        insert_prefer_keyword(hint);
     }
     for hint in ssdp {
-        map.entry(hint.ip.clone()).or_insert(hint);
+        insert_prefer_keyword(hint);
     }
     map
 }

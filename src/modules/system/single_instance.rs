@@ -3,13 +3,16 @@
 #[cfg(windows)]
 pub struct SingleInstanceGuard {
     _mutex: windows::Win32::Foundation::HANDLE,
-    _event: windows::Win32::Foundation::HANDLE,
+    event: windows::Win32::Foundation::HANDLE,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    waiter: Option<std::thread::JoinHandle<()>>,
 }
 
 #[cfg(windows)]
 impl SingleInstanceGuard {
     pub fn try_acquire(ui_weak: slint::Weak<crate::AppWindow>) -> Option<Self> {
         use slint::ComponentHandle;
+        use std::sync::atomic::Ordering;
         use windows::core::w;
         use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
         use windows::Win32::System::Threading::{
@@ -21,44 +24,35 @@ impl SingleInstanceGuard {
         const EVENT_NAME: windows::core::PCWSTR = w!("Local\\ShieldGhita_ShowWindowEvent");
 
         unsafe {
-            let mut signaled_existing = false;
-            let mut mutex = HANDLE::default();
-            let mut acquired_fresh = false;
-
-            for _ in 0..21u32 {
-                mutex = CreateMutexW(None, true, MUTEX_NAME).unwrap_or_default();
-                if mutex.is_invalid() {
-                    return None;
-                }
-                if GetLastError() != ERROR_ALREADY_EXISTS {
-                    acquired_fresh = true;
-                    break;
+            // Single attempt: if another instance holds the mutex, signal it
+            // and exit immediately. The old 21x300ms retry loop kept the
+            // second process alive ~6s for no benefit.
+            let mutex = CreateMutexW(None, true, MUTEX_NAME).unwrap_or_default();
+            if mutex.is_invalid() {
+                return None;
+            }
+            if GetLastError() == ERROR_ALREADY_EXISTS {
+                if let Ok(event) = OpenEventW(EVENT_MODIFY_STATE, false, EVENT_NAME) {
+                    let _ = SetEvent(event);
+                    let _ = CloseHandle(event);
                 }
                 let _ = CloseHandle(mutex);
-                if !signaled_existing {
-                    signaled_existing = true;
-                    if let Ok(event) = OpenEventW(EVENT_MODIFY_STATE, false, EVENT_NAME) {
-                        let _ = SetEvent(event);
-                        let _ = CloseHandle(event);
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_millis(300));
-            }
-
-            if !acquired_fresh {
                 return None;
             }
 
             let event = CreateEventW(None, false, false, EVENT_NAME).unwrap_or(HANDLE::default());
-            if !event.is_invalid() {
+            let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let waiter = if !event.is_invalid() {
                 let raw_handle = event.0 as usize;
-                std::thread::spawn(move || {
+                let shutdown_flag = shutdown.clone();
+                Some(std::thread::spawn(move || {
                     let ev_handle = HANDLE(raw_handle as *mut core::ffi::c_void);
                     loop {
-                        let res = WaitForSingleObject(
-                            ev_handle,
-                            windows::Win32::System::Threading::INFINITE,
-                        );
+                        if shutdown_flag.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        // Poll with timeout so shutdown is honoured promptly.
+                        let res = WaitForSingleObject(ev_handle, 200);
                         if res == windows::Win32::Foundation::WAIT_OBJECT_0 {
                             let weak_clone = ui_weak.clone();
                             let _ = slint::invoke_from_event_loop(move || {
@@ -72,16 +66,20 @@ impl SingleInstanceGuard {
                                         .store(true, std::sync::atomic::Ordering::SeqCst);
                                 }
                             });
-                        } else {
+                        } else if res != windows::Win32::Foundation::WAIT_TIMEOUT {
                             break;
                         }
                     }
-                });
-            }
+                }))
+            } else {
+                None
+            };
 
             Some(Self {
                 _mutex: mutex,
-                _event: event,
+                event,
+                shutdown,
+                waiter,
             })
         }
     }
@@ -90,10 +88,21 @@ impl SingleInstanceGuard {
 #[cfg(windows)]
 impl Drop for SingleInstanceGuard {
     fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
         use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::SetEvent;
         unsafe {
-            if !self._event.is_invalid() {
-                let _ = CloseHandle(self._event);
+            // Signal shutdown, join the waiter thread *before* closing the
+            // event handle — closing while blocked on it is a Win32 race.
+            self.shutdown.store(true, Ordering::Relaxed);
+            if !self.event.is_invalid() {
+                let _ = SetEvent(self.event);
+            }
+            if let Some(handle) = self.waiter.take() {
+                let _ = handle.join();
+            }
+            if !self.event.is_invalid() {
+                let _ = CloseHandle(self.event);
             }
             if !self._mutex.is_invalid() {
                 let _ = CloseHandle(self._mutex);

@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -68,6 +67,10 @@ pub struct AppConfig {
     /// Free-RAM threshold (MB) that triggers the RAM Map auto-clean purge.
     #[serde(default = "default_ram_clean_threshold_mb")]
     pub rammap_auto_clean_threshold_mb: u64,
+    /// One-time migration flag: legacy 5353 -> 53 port fix. Prevents
+    /// overriding a deliberate user choice of 5353 on every load.
+    #[serde(default)]
+    pub port_migrated_from_5353: bool,
 }
 
 fn default_ram_clean_threshold_mb() -> u64 {
@@ -182,6 +185,7 @@ impl Default for AppConfig {
             admin_panel_enabled: true,
             rammap_auto_clean_enabled: false,
             rammap_auto_clean_threshold_mb: default_ram_clean_threshold_mb(),
+            port_migrated_from_5353: false,
         }
     }
 }
@@ -196,10 +200,25 @@ impl AppConfig {
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        let mut config = if path.exists() {
+        let file_existed = path.exists();
+        let mut config = if file_existed {
             match fs::read_to_string(&path) {
-                Ok(content) => toml::from_str(&content).unwrap_or_default(),
-                Err(_) => Self::default(),
+                Ok(content) => match toml::from_str::<Self>(&content) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!(
+                            "config.toml is invalid ({}); quarantining and loading defaults",
+                            e
+                        );
+                        let backup = path.with_extension("toml.corrupt");
+                        let _ = fs::rename(&path, &backup);
+                        Self::default()
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("Failed to read config.toml: {}; using defaults", e);
+                    Self::default()
+                }
             }
         } else {
             let config = Self {
@@ -207,29 +226,24 @@ impl AppConfig {
                 ..Self::default()
             };
             let _ = config.save();
-            config
+            // Fresh install already carries the full default blocklists and
+            // port 53, so skip the migration/merge steps below.
+            return config;
         };
 
-        if config.dns_listen_port == 5353 {
+        // One-time 5353 -> 53 migration: legacy dev builds bound 5353. Only
+        // migrate once (flag) so a deliberate user choice of 5353 is honored.
+        if config.dns_listen_port == 5353 && !config.port_migrated_from_5353 {
             config.dns_listen_port = 53;
+            config.port_migrated_from_5353 = true;
             let _ = config.save();
         }
 
-        // Merge newly-added default blocklists into existing configs so
-        // blocking effectiveness improves without a reinstall.
-        let before = config.blocklist_urls.len();
-        for url in default_blocklist_urls() {
-            if !config.blocklist_urls.contains(&url) {
-                config.blocklist_urls.push(url);
-            }
-        }
-        if config.blocklist_urls.len() != before {
-            info!(
-                "Blocklist merge: added {} new default source(s)",
-                config.blocklist_urls.len() - before
-            );
-            let _ = config.save();
-        }
+        // Only merge new defaults on fresh installs (handled via early return
+        // above). Existing user configs are left untouched so user removals
+        // are not resurrected on every restart. New defaults reach existing
+        // users via explicit "Update Blocklists" or a future schema version.
+        let _ = file_existed;
 
         config
     }
@@ -240,7 +254,20 @@ impl AppConfig {
             fs::create_dir_all(parent)?;
         }
         let content = toml::to_string_pretty(self)?;
-        fs::write(path, content)?;
+        // Atomic write: tmp + rename + sync so a crash mid-write cannot leave
+        // a truncated config.toml.
+        let tmp = path.with_extension("toml.tmp");
+        fs::write(&tmp, &content)?;
+        // Best-effort fsync before rename for durability.
+        if let Ok(f) = fs::File::open(&tmp) {
+            let _ = f.sync_all();
+        }
+        fs::rename(&tmp, &path)?;
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
         Ok(())
     }
 
@@ -286,6 +313,7 @@ fn map_ui_language_to_code(langid: u16) -> String {
     match langid & 0x03ff {
         0x002a => "vi".to_string(),
         0x0004 => "zh".to_string(),
+        0x0019 => "ru".to_string(),
         _ => "en".to_string(),
     }
 }
@@ -323,7 +351,7 @@ fn read_installer_language_registry() -> Option<String> {
     let text = String::from_utf16_lossy(&buf[..chars_len]);
     let text = text.trim_end_matches('\0').trim();
     match text {
-        "vi" | "en" | "zh" => Some(text.to_string()),
+        "vi" | "en" | "zh" | "ru" => Some(text.to_string()),
         _ => None,
     }
 }
@@ -422,7 +450,7 @@ dns_listen_port = 53
         assert_eq!(map_ui_language_to_code(0x0804), "zh");
         assert_eq!(map_ui_language_to_code(0x0c04), "zh");
         assert_eq!(map_ui_language_to_code(0x0409), "en");
-        assert_eq!(map_ui_language_to_code(0x0419), "en");
+        assert_eq!(map_ui_language_to_code(0x0419), "ru");
         assert_eq!(map_ui_language_to_code(0x0000), "en");
     }
 
@@ -430,6 +458,6 @@ dns_listen_port = 53
     #[cfg(windows)]
     fn test_detect_first_run_language_returns_supported_code() {
         let code = detect_first_run_language();
-        assert!(code == "vi" || code == "en" || code == "zh");
+        assert!(code == "vi" || code == "en" || code == "zh" || code == "ru");
     }
 }

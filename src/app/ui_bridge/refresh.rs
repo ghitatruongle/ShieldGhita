@@ -5,17 +5,29 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+fn sat_i32_usize(v: usize) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
+fn sat_i32_u64(v: u64) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
+fn sat_i32_u32(v: u32) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
 pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
     let total = s.blocker.total_queries.load(Ordering::Relaxed);
     let blocked = s.blocker.blocked_count.load(Ordering::Relaxed);
     let absorbed = s.sinkhole.absorbed_count.load(Ordering::Relaxed);
     let rules_count = s.blocker.get_rules_count();
-    ui_win.set_total_queries(total as i32);
-    ui_win.set_blocked_count(blocked as i32);
-    ui_win.set_blocked_today(s.monitor.block_stats.day_count() as i32);
-    ui_win.set_blocked_week(s.monitor.block_stats.week_count() as i32);
-    ui_win.set_absorbed_count(absorbed as i32);
-    ui_win.set_active_rules_count(rules_count as i32);
+    ui_win.set_total_queries(sat_i32_u64(total));
+    ui_win.set_blocked_count(sat_i32_u64(blocked));
+    ui_win.set_blocked_today(sat_i32_u64(s.monitor.block_stats.day_count()));
+    ui_win.set_blocked_week(sat_i32_u64(s.monitor.block_stats.week_count()));
+    ui_win.set_absorbed_count(sat_i32_u64(absorbed));
+    ui_win.set_active_rules_count(sat_i32_usize(rules_count));
 
     let is_locked = dns_manager::is_master_internet_locked();
     ui_win.set_master_locked(is_locked);
@@ -106,8 +118,8 @@ pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
 
     let sec_score = s.security_engine.get_security_score();
     ui_win.set_security_score(sec_score);
-    ui_win.set_threats_blocked_count(s.security_engine.incidents_count() as i32);
-    ui_win.set_lan_devices_count(s.monitor.get_lan_device_count() as i32);
+    ui_win.set_threats_blocked_count(sat_i32_usize(s.security_engine.incidents_count()));
+    ui_win.set_lan_devices_count(sat_i32_usize(s.monitor.get_lan_device_count()));
     ui_win.set_is_scanning(s.monitor.is_lan_scanning());
 
     let last_update = last_blocklist_update
@@ -160,9 +172,9 @@ fn refresh_security_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
                         format!("{} ms", d.latency_ms).into()
                     },
                     traffic: d.traffic.into(),
-                    total_queries: d.total_queries as i32,
-                    blocked_queries: d.blocked_queries as i32,
-                    threats_detected: d.threats_detected as i32,
+                    total_queries: sat_i32_u64(d.total_queries),
+                    blocked_queries: sat_i32_u64(d.blocked_queries),
+                    threats_detected: sat_i32_u64(d.threats_detected),
                     last_domain: d.last_domain.into(),
                     last_active: d.last_active.into(),
                     risk_level: d.risk_level.into(),
@@ -184,7 +196,7 @@ fn refresh_security_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
         let incident_models: Vec<crate::SecurityIncident> = incidents
             .into_iter()
             .map(|inc| crate::SecurityIncident {
-                id: inc.id as i32,
+                id: sat_i32_u64(inc.id),
                 time: inc.time.into(),
                 incident_type: inc.incident_type.into(),
                 source_ip: inc.source_ip.into(),
@@ -206,8 +218,8 @@ fn refresh_monitor_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
                     .into_iter()
                     .map(|g| crate::AppConnectionGroup {
                         process_name: g.process_name.into(),
-                        pid: g.pid as i32,
-                        connection_count: g.connection_count as i32,
+                        pid: sat_i32_u32(g.pid),
+                        connection_count: sat_i32_usize(g.connection_count),
                         destinations_summary: g.destinations_summary.into(),
                         protocol_summary: g.protocol_summary.into(),
                         state_summary: g.state_summary.into(),
@@ -221,7 +233,7 @@ fn refresh_monitor_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
                     .into_iter()
                     .map(|c| crate::ActiveConnection {
                         process_name: c.process_name.into(),
-                        pid: c.pid as i32,
+                        pid: sat_i32_u32(c.pid),
                         local_addr: c.local_addr.into(),
                         remote_addr: c.remote_addr.into(),
                         protocol: c.protocol.into(),
@@ -253,8 +265,8 @@ fn refresh_monitor_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
                     .into_iter()
                     .map(|g| crate::DomainLogGroup {
                         domain: g.domain.into(),
-                        total_queries: g.total_queries as i32,
-                        blocked_queries: g.blocked_queries as i32,
+                        total_queries: sat_i32_usize(g.total_queries),
+                        blocked_queries: sat_i32_usize(g.blocked_queries),
                         is_blocked: g.is_blocked,
                         last_seen: g.last_seen.into(),
                         last_ip: g.last_ip.into(),
@@ -266,16 +278,22 @@ fn refresh_monitor_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
             }
         }
         _ => {
-            let clogs = s.log_buffer.get_logs();
-            let clog_models: Vec<crate::ConsoleLogEntry> = clogs
-                .into_iter()
-                .map(|cl| crate::ConsoleLogEntry {
-                    time: cl.time.into(),
-                    level: cl.level.into(),
-                    message: cl.message.into(),
-                })
-                .collect();
-            ui_win.set_console_logs(ModelRc::new(VecModel::from(clog_models)));
+            // Gate console rebuilds on the log-buffer version so we avoid
+            // cloning up to 500 entries every 1s tick when nothing changed.
+            let cur = s.log_buffer.version();
+            if s.console_ui_version.load(Ordering::Relaxed) != cur {
+                let clogs = s.log_buffer.get_logs();
+                let clog_models: Vec<crate::ConsoleLogEntry> = clogs
+                    .into_iter()
+                    .map(|cl| crate::ConsoleLogEntry {
+                        time: cl.time.into(),
+                        level: cl.level.into(),
+                        message: cl.message.into(),
+                    })
+                    .collect();
+                ui_win.set_console_logs(ModelRc::new(VecModel::from(clog_models)));
+                s.console_ui_version.store(cur, Ordering::Relaxed);
+            }
         }
     }
 }

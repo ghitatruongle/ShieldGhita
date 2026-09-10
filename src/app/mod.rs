@@ -28,6 +28,8 @@ pub struct AppState {
     pub protection_atomic: Arc<AtomicBool>,
     pub rules_dirty: AtomicBool,
     pub logs_ui_version: AtomicU64,
+    pub console_ui_version: AtomicU64,
+    pub toast_gen: Arc<AtomicU64>,
     #[cfg(feature = "admin")]
     pub local_manager: Arc<crate::modules::local::LocalManager>,
 }
@@ -72,7 +74,9 @@ impl AppState {
         let dns_blocker = Arc::new(DnsBlocker::new());
         dns_blocker.set_custom_rules(&cfg.custom_blocked_domains, &cfg.custom_allowed_domains);
 
-        let sinkhole = Arc::new(SilentSinkhole::new());
+        let sinkhole = Arc::new(
+            SilentSinkhole::new().with_dns_flag(dns_blocker.silent_sinkhole_enabled.clone()),
+        );
         let protection_atomic = Arc::new(AtomicBool::new(cfg.protection_enabled));
         let t2 = std::time::Instant::now();
         let monitor = Arc::new(NetworkMonitor::new(
@@ -111,6 +115,8 @@ impl AppState {
             protection_atomic,
             rules_dirty: AtomicBool::new(true),
             logs_ui_version: AtomicU64::new(0),
+            console_ui_version: AtomicU64::new(0),
+            toast_gen: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "admin")]
             local_manager,
         });
@@ -139,9 +145,12 @@ impl AppState {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     let logs = mon.get_logs();
+                    // get_logs() is newest-first (push_front): logs[..delta]
+                    // holds the new entries, iterate rev() for chronological
+                    // behavior profiling.
                     if logs.len() > seen {
                         let delta = logs.len() - seen;
-                        for entry in logs[..delta].iter() {
+                        for entry in logs[..delta].iter().rev() {
                             local.record_dns_event(
                                 &entry.source_ip,
                                 &entry.domain,
@@ -175,10 +184,16 @@ impl AppState {
 
         {
             let prot = state.protection_atomic.clone();
-            let listen_addr = cfg.dns_listen_addr.clone();
+            // Watchdog must check the effective bind addr (0.0.0.0 when
+            // network-wide mode is on), not just the loopback config value.
+            let effective_watch_addr = if cfg.network_wide_adblock_enabled {
+                "0.0.0.0".to_string()
+            } else {
+                cfg.dns_listen_addr.clone()
+            };
             let rt = state.runtime.clone();
             rt.spawn(async move {
-                dns_manager::start_dns_guard_watchdog(prot, listen_addr).await;
+                dns_manager::start_dns_guard_watchdog(prot, effective_watch_addr).await;
             });
         }
 
@@ -234,7 +249,15 @@ impl AppState {
                         }
                     }
                     Err(e) => {
-                        tracing::error!("DNS Server Task Error: {}", e);
+                        // Ready-channel failure means the server task died
+                        // before binding — treat like a bind failure so we
+                        // never leave protection ON with no DNS server.
+                        tracing::error!("DNS Server Task Error: {}. Protection disabled to prevent network blackout.", e);
+                        protection_flag.store(false, Ordering::SeqCst);
+                        if let Ok(mut cfg_guard) = config.write() {
+                            cfg_guard.protection_enabled = false;
+                            let _ = cfg_guard.save();
+                        }
                     }
                 }
 

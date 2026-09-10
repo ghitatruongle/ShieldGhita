@@ -1,0 +1,409 @@
+import { Button, ScrollView, ListView } from "std-widgets.slint";
+import { I18n, FileScanResult, FileScanFindingItem } from "common.slint";
+
+export component FileFindingRow inherits Rectangle {
+    in property <FileScanFindingItem> finding;
+
+    height: 76px;
+    background: #111827;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: finding.severity == "CRITICAL" ? #dc2626 :
+                  finding.severity == "HIGH" ? #ea580c :
+                  finding.severity == "MEDIUM" ? #d97706 : #334155;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 12px;
+        alignment: center;
+
+        Rectangle {
+            width: 72px;
+            height: 24px;
+            border-radius: 6px;
+            background: finding.severity == "CRITICAL" ? #ef444433 :
+                        finding.severity == "HIGH" ? #f9731633 :
+                        finding.severity == "MEDIUM" ? #f59e0b33 : #3b82f633;
+            border-width: 1px;
+            border-color: finding.severity == "CRITICAL" ? #ef4444 :
+                          finding.severity == "HIGH" ? #f97316 :
+                          finding.severity == "MEDIUM" ? #f59e0b : #3b82f6;
+
+            Text {
+                text: finding.severity;
+                font-size: 10px;
+                font-weight: 800;
+                color: finding.severity == "CRITICAL" ? #fca5a5 :
+                       finding.severity == "HIGH" ? #fdba74 :
+                       finding.severity == "MEDIUM" ? #fde68a : #93c5fd;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: finding.category;
+                font-size: 12px;
+                font-weight: 700;
+                color: #f1f5f9;
+                overflow: elide;
+            }
+
+            Text {
+                text: finding.description;
+                font-size: 11px;
+                color: #cbd5e1;
+                overflow: elide;
+            }
+
+            if finding.snippet != "" : Text {
+                text: "🔍 " + finding.snippet;
+                font-size: 10px;
+                font-family: "Consolas";
+                color: #f87171;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+export component FileAnalyzerTab inherits Rectangle {
+    in property <FileScanResult> result;
+    in property <[FileScanFindingItem]> findings;
+    in property <bool> is-scanning: false;
+    in property <string> scan-status: "";
+
+    callback pick-file-and-scan();
+    callback rescan-current-file();
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: center;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: I18n.t4("🔬 PHÂN TÍCH TỆP & MÃ ĐỘC ẨN (BETA)", "🔬 FILE ANALYZER & HIDDEN PAYLOAD DETECTOR (BETA)", "🔬 文件深度分析与隐藏恶意代码检测 (Beta)", "🔬 АНАЛИЗАТОР ФАЙЛОВ И СКРЫТОГО ВРЕДОНОСНОГО ПО (BETA)");
+                    font-size: 15px;
+                    font-weight: 800;
+                    color: #fb923c;
+                }
+
+                Text {
+                    text: I18n.t4("Phân tích tĩnh an toàn offline • Bóc tách mã độc đội lốt câu chào, ký tự Zero-width tàng hình, Base64 & PE nhúng lén.", "Safe offline static analysis • Unmasks greeting wrappers, zero-width stego, embedded Base64 & PE files.", "安全离线静态分析 • 揭露打招呼伪装壳、零宽隐写字符、嵌套Base64与可执行文件。", "Безопасный офлайн-анализ • Обнаружение псевдо-приветствий, zero-width символов, Base64 и PE.");
+                    font-size: 11px;
+                    color: #94a3b8;
+                }
+            }
+
+            Button {
+                text: root.is-scanning ? I18n.t4("⏳ Đang quét...", "⏳ Scanning...", "⏳ 分析中...", "⏳ Сканирование...") : I18n.t4("📂 Chọn tệp kiểm tra", "📂 Pick file to scan", "📂 选择检查文件", "📂 Выбрать файл для анализа");
+                enabled: !root.is-scanning;
+                clicked => { root.pick-file-and-scan(); }
+            }
+
+            if root.result.file-path != "" : Button {
+                text: I18n.t4("🔄 Quét lại", "🔄 Rescan", "🔄 重新分析", "🔄 Повторить");
+                enabled: !root.is-scanning;
+                clicked => { root.rescan-current-file(); }
+            }
+        }
+
+        if root.scan-status != "" : Rectangle {
+            height: 38px;
+            background: #0f172a;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #0284c7;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                alignment: center;
+                spacing: 8px;
+                Text {
+                    text: root.scan-status;
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: #38bdf8;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        if root.result.file-path == "" && !root.is-scanning : Rectangle {
+            vertical-stretch: 1;
+            background: #111827;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #1f2937;
+
+            VerticalLayout {
+                padding: 30px;
+                alignment: center;
+                spacing: 12px;
+
+                Text {
+                    text: "🛡️";
+                    font-size: 40px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: I18n.t4("Chưa chọn tệp nào để kiểm tra", "No file selected for analysis", "未选择任何文件", "Файл для анализа не выбран");
+                    font-size: 16px;
+                    font-weight: 800;
+                    color: #f1f5f9;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: I18n.t4("Bấm nút 'Chọn tệp kiểm tra' ở trên để mở bất kỳ file nào (script .bat/.ps1, tài liệu, file thực thi .exe, tệp văn bản nghi ngờ...).\nỨng dụng sẽ thực hiện quét tĩnh an toàn trong sandbox bộ nhớ, tuyệt đối không chạy code, phát hiện tức thì các lệnh nguy hiểm ẩn giấu đằng sau câu chào xã giao.", "Click 'Pick file to scan' above to inspect any file (.bat, .ps1, documents, executables, suspicious texts...).\nThe app performs safe static inspection in memory without running code, detecting hidden malicious commands behind polite greetings.", "点击上方'选择检查文件'按钮检测任何文件（脚本、可执行文件、可疑文本等）。\n程序在内存沙箱中只读静态分析，绝不执行代码，秒级识别打招呼包装下的暗藏指令。", "Нажмите 'Выбрать файл для анализа', чтобы проверить любой подозрительный файл.\nПриложение выполняет безопасный статический анализ без исполнения кода.");
+                    font-size: 12px;
+                    color: #94a3b8;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if root.result.file-path != "" || root.is-scanning : VerticalLayout {
+            vertical-stretch: 1;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                height: 84px;
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: root.result.risk-level == "MALICIOUS" ? #3b0712 :
+                                root.result.risk-level == "SUSPICIOUS" ? #2e1065 : #062e24;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: root.result.risk-level == "MALICIOUS" ? #ef4444 :
+                                  root.result.risk-level == "SUSPICIOUS" ? #a855f7 : #10b981;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        alignment: center;
+
+                        Text {
+                            text: I18n.t4("MỨC ĐỘ RỦI RO", "THREAT LEVEL", "风险评级", "УРОВЕНЬ УГРОЗЫ");
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: #94a3b8;
+                        }
+
+                        Text {
+                            text: root.result.risk-level == "MALICIOUS" ? I18n.t4("🚨 NGUY HIỂM", "🚨 MALICIOUS", "🚨 极高风险", "🚨 ВРЕДОНОСНО") :
+                                  root.result.risk-level == "SUSPICIOUS" ? I18n.t4("⚠️ NGHI VẤN", "⚠️ SUSPICIOUS", "⚠️ 可疑威胁", "⚠️ ПОДОЗРИТЕЛЬНО") :
+                                  I18n.t4("✅ AN TOÀN", "✅ SAFE", "✅ 安全正常", "✅ БЕЗОПАСНО");
+                            font-size: 16px;
+                            font-weight: 800;
+                            color: root.result.risk-level == "MALICIOUS" ? #f87171 :
+                                   root.result.risk-level == "SUSPICIOUS" ? #c084fc : #34d399;
+                        }
+
+                        Text {
+                            text: (I18n.t4("Điểm: ", "Score: ", "风险分: ", "Баллы: ")) + root.result.risk-score + "/100";
+                            font-size: 11px;
+                            color: #cbd5e1;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: #111827;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: #1f2937;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        alignment: center;
+
+                        Text {
+                            text: I18n.t4("DUNG LƯỢNG & ĐỊNH DẠNG", "SIZE & FORMAT", "文件大小与格式", "РАЗМЕР И ФОРМАТ");
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: #64748b;
+                        }
+
+                        Text {
+                            text: Math.round(root.result.file-size-bytes / 1024) + " KB";
+                            font-size: 16px;
+                            font-weight: 800;
+                            color: #38bdf8;
+                        }
+
+                        Text {
+                            text: root.result.is-pe ? (I18n.t4("PE Thực thi", "PE Executable", "PE可执行文件", "Исполняемый PE")) :
+                                  (I18n.t4("Script / Dữ liệu", "Script / Data", "脚本/数据文件", "Скрипт / Данные"));
+                            font-size: 11px;
+                            color: #94a3b8;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: #111827;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: #1f2937;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        alignment: center;
+
+                        Text {
+                            text: I18n.t4("ĐỘ HỖN LOẠN (ENTROPY)", "SHANNON ENTROPY", "信息熵 (Entropy)", "ЭНТРОПИЯ (ENTROPY)");
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: #64748b;
+                        }
+
+                        Text {
+                            text: Math.round(root.result.entropy * 100) / 100 + " / 8.0";
+                            font-size: 16px;
+                            font-weight: 800;
+                            color: root.result.is-packed ? #f59e0b : #a78bfa;
+                        }
+
+                        Text {
+                            text: root.result.is-packed ? (I18n.t4("Nén/Mã hóa (Packed)", "Packed/Encrypted", "高熵压缩/混淆", "Упакован/Зашифрован")) :
+                                  (I18n.t4("Bình thường", "Standard", "标准熵值", "Стандартная"));
+                            font-size: 11px;
+                            color: root.result.is-packed ? #fbbf24 : #94a3b8;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: #111827;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: #1f2937;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        alignment: center;
+
+                        Text {
+                            text: I18n.t4("PHÁT HIỆN ĐÁNG NGỜ", "FINDINGS COUNT", "告警特征数", "НАЙДЕНО УГРОЗ");
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: #64748b;
+                        }
+
+                        Text {
+                            text: root.result.findings-count + "";
+                            font-size: 16px;
+                            font-weight: 800;
+                            color: root.result.findings-count > 0 ? #f87171 : #4ade80;
+                        }
+
+                        Text {
+                            text: root.result.findings-count > 0 ? (I18n.t4("Cần kiểm tra kỹ", "Review needed", "需复核", "Требует внимания")) :
+                                  (I18n.t4("Không có dấu hiệu lạ", "Clean", "无异常", "Чисто"));
+                            font-size: 11px;
+                            color: #94a3b8;
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                background: #111827;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #1f2937;
+                height: 52px;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 12px;
+                    alignment: center;
+
+                    Text {
+                        text: "📁 " + root.result.file-name;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: #f1f5f9;
+                        overflow: elide;
+                        min-width: 180px;
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    Text {
+                        text: "SHA256: " + root.result.sha256;
+                        font-size: 11px;
+                        font-family: "Consolas";
+                        color: #64748b;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            Text {
+                text: (I18n.t4("📋 CHI TIẾT CÁC ĐẶC TRƯNG MÃ ĐỘC PHÁT HIỆN ĐƯỢC (", "📋 DETECTED MALICIOUS INDICATORS (", "📋 检测到的恶意特征详情 (", "📋 НАЙДЕННЫЕ ИНДИКАТОРЫ УГРОЗ (")) + root.findings.length + "):";
+                font-size: 12px;
+                font-weight: 700;
+                color: #cbd5e1;
+            }
+
+            if root.findings.length == 0 : Rectangle {
+                vertical-stretch: 1;
+                background: #111827;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #1f2937;
+
+                VerticalLayout {
+                    padding: 24px;
+                    alignment: center;
+                    spacing: 8px;
+
+                    Text {
+                        text: "✨ " + I18n.t4("Không phát hiện câu lệnh ẩn, steganography hay mã độc nhúng trong tệp.", "No hidden commands, stego or embedded payloads detected in this file.", "未在文件中发现隐藏指令、隐写术或嵌入的恶意代码。", "В файле не обнаружено скрытых команд, стеганографии или вредоносного ПО.");
+                        font-size: 13px;
+                        font-weight: 700;
+                        color: #34d399;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: root.result.summary-text != "" ? root.result.summary-text : I18n.t4("Tệp an toàn đối với các mẫu kiểm tra nhận diện hiện tại.", "File is considered safe according to current behavioral indicators.", "按照当前特征库规则，此文件安全。", "Файл считается безопасным по текущим сигнатурам.");
+                        font-size: 11px;
+                        color: #94a3b8;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            if root.findings.length > 0 : ListView {
+                vertical-stretch: 1;
+                for item in root.findings : FileFindingRow {
+                    finding: item;
+                }
+            }
+        }
+    }
+}

@@ -138,10 +138,25 @@ pub fn setup_ui_bridge(
     let toggle_id = item_toggle.id().clone();
     let quit_id = item_quit.id().clone();
 
-    crate::modules::config::AppConfig::set_autostart_registry(cfg.start_with_windows);
+    // reg.exe blocks (~50-200ms); never run it on the Slint event-loop thread.
+    {
+        let autostart_on = cfg.start_with_windows;
+        let rt = state.runtime.clone();
+        rt.spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::modules::config::AppConfig::set_autostart_registry(autostart_on);
+            })
+            .await;
+        });
+    }
 
     handlers::register(ui, &state);
     ui.set_ram_auto_clean(cfg.rammap_auto_clean_enabled);
+    // Clamp before the u64→i32 cast: a hand-edited config must not wrap the
+    // UI threshold to a negative number.
+    ui.set_ram_auto_clean_threshold_mb(
+        i32::try_from(cfg.rammap_auto_clean_threshold_mb.clamp(64, 65536)).unwrap_or(i32::MAX),
+    );
 
     crate::app::hotkey::spawn_protection_hotkey(state.clone());
 
@@ -190,18 +205,25 @@ pub fn setup_ui_bridge(
             .map(|c| c.minimize_to_tray)
             .unwrap_or(true);
 
-        poller::save_window_state_now(&ui_weak_close.upgrade().unwrap(), &state_close);
+        let ui_opt = ui_weak_close.upgrade();
+        if let Some(ui_inst) = &ui_opt {
+            poller::save_window_state_now(ui_inst, &state_close);
+        }
 
         if min_to_tray {
             poller::WINDOW_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
-            if let Some(ui_inst) = ui_weak_close.upgrade() {
-                ui_inst.window().hide().unwrap();
+            if let Some(ui_inst) = ui_opt {
+                let _ = ui_inst.window().hide();
             }
-            slint::CloseRequestResponse::KeepWindowShown
-        } else {
-            let _ = dns_manager::restore_system_dns();
-            std::process::exit(0);
+            return slint::CloseRequestResponse::KeepWindowShown;
         }
+
+        // Full teardown: WFP + self-defense + DNS restore, then quit the
+        // event loop so main() runs its graceful cleanup. Hard exit only as
+        // a fallback if the loop is already gone.
+        crate::app::ui_bridge::handlers::apply_protection(&state_close, false);
+        slint::quit_event_loop().unwrap_or_else(|_| std::process::exit(0));
+        slint::CloseRequestResponse::HideWindow
     });
 
     Ok(tray_icon)
@@ -212,6 +234,7 @@ fn spawn_toast_forwarders(ui: &crate::AppWindow, state: &Arc<AppState>) {
         let mut rx = state.blocker.blocked_events_tx.subscribe();
         let ui_weak = ui.as_weak();
         let config = state.config.clone();
+        let toast_gen = state.toast_gen.clone();
         state.runtime.spawn(async move {
             while let Ok((domain, time)) = rx.recv().await {
                 let notify_enabled = config
@@ -230,6 +253,9 @@ fn spawn_toast_forwarders(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 )
                 .to_string();
 
+                // Generation guard: a newer toast must not be hidden by an
+                // older timer firing later.
+                let my_gen = toast_gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 let ui_weak_inner = ui_weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui_inst) = ui_weak_inner.upgrade() {
@@ -242,11 +268,19 @@ fn spawn_toast_forwarders(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 });
 
                 let ui_weak_timer = ui_weak.clone();
+                let gen_clone = toast_gen.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(3500)).await;
+                    // Hide only if no newer toast arrived meanwhile.
+                    if gen_clone.load(std::sync::atomic::Ordering::SeqCst) != my_gen {
+                        return;
+                    }
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui_inst) = ui_weak_timer.upgrade() {
-                            ui_inst.set_show_toast(false);
+                            // Re-check inside the event loop for the same race.
+                            if gen_clone.load(std::sync::atomic::Ordering::SeqCst) == my_gen {
+                                ui_inst.set_show_toast(false);
+                            }
                         }
                     });
                 });
@@ -257,6 +291,7 @@ fn spawn_toast_forwarders(ui: &crate::AppWindow, state: &Arc<AppState>) {
     {
         let mut rx_alert = state.security_engine.alert_tx.subscribe();
         let ui_weak = ui.as_weak();
+        let toast_gen = state.toast_gen.clone();
         state.runtime.spawn(async move {
             while let Ok(incident) = rx_alert.recv().await {
                 let ui_weak_inner = ui_weak.clone();
@@ -264,6 +299,7 @@ fn spawn_toast_forwarders(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 let domain_msg = format!("{} [{}]", incident.details, incident.source_ip);
                 let time_str = incident.time.clone();
 
+                let my_gen = toast_gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui_inst) = ui_weak_inner.upgrade() {
                         ui_inst.set_toast_title(title.into());
@@ -275,11 +311,17 @@ fn spawn_toast_forwarders(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 });
 
                 let ui_weak_timer = ui_weak.clone();
+                let gen_clone = toast_gen.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
+                    if gen_clone.load(std::sync::atomic::Ordering::SeqCst) != my_gen {
+                        return;
+                    }
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui_inst) = ui_weak_timer.upgrade() {
-                            ui_inst.set_show_toast(false);
+                            if gen_clone.load(std::sync::atomic::Ordering::SeqCst) == my_gen {
+                                ui_inst.set_show_toast(false);
+                            }
                         }
                     });
                 });

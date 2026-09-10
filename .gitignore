@@ -1,20 +1,66 @@
+# =============================================================================
+# ShieldGhita .gitignore
+# Rust + Slint (Windows) desktop app. Admin Edition source/artifacts stay local.
+# Do not weaken the Admin section below.
+# =============================================================================
+
+# --- Rust / Cargo -------------------------------------------------------------
 /target/
+**/*.rs.bk
 *.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+# Cargo.lock is intentionally tracked (application, not a library crate).
+# rustfmt / clippy local caches
+.rustfmt.toml.bak
+
+# --- Build / release artifacts -------------------------------------------------
+# Installer output folders (public + admin + smoke) — binaries never committed
+installer_output/
+installer_admin_output/
+installer_smoke_output/
+dist/
+out/
+build/
+release/
+# Common binary/package leftovers
 *.exe
+*.msi
+*.msix
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+*.sha256
+*.sha256sum
+checksums.txt
+# Crash / dump files
+*.dmp
+*.mdmp
+*.core
+# Stale experiment binaries
+*.stale
+stale_*.exe
+
+# --- Logs / temp / backup ------------------------------------------------------
 *.log
 *.tmp
+*.temp
 *.bak
+*.old
+*.orig
+*.rej
+*~
+*.swp
+*.swo
+logs/
+*.cache
 
-.slint/
-.idea/
-.vscode/
-*.ipr
-*.iws
-
-QUYTAC
-scripts/*
-!scripts/embed_resources.py
-
+# --- Runtime app data (local machine only) -------------------------------------
 config.json
 rules.json
 custom_rules.txt
@@ -23,8 +69,13 @@ dns_logs.csv
 *.db
 *.sqlite
 *.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+# WFP / DNS runtime snapshots if ever written next to the binary
+*.wfp
+*.etl
 
-# --- Admin Edition: source + artifacts stay LOCAL ONLY (never commit) ---
+# --- Admin Edition: source + artifacts stay LOCAL ONLY (never commit) ----------
 # Rust admin modules (exact files + wildcards for future siblings/subdirs):
 src/modules/local/
 src/modules/admin_*.rs
@@ -38,24 +89,118 @@ admin_panel.toml
 local/
 local_*.json
 local_*.log
-# Admin installer script + all setup outputs (public & admin & smoke):
+# Admin installer script (public installer.iss stays tracked):
 installer_admin.iss
-installer_output/
-installer_admin_output/
-installer_smoke_output/
+# Admin-only UI files (future admin .slint panels / assets):
+ui/admin*.slint
+ui/assets/admin/
+# Admin INTERNAL DOCUMENTATION — feature specs, panel notes, network layouts.
+# These must stay on the owner's machine only:
+docs/admin/
+docs_admin/
+admin_*.md
+ADMIN*.md
+admin_*.txt
+ADMIN*.txt
+*admin*.local.*
+# Panel runtime exports (session logs, access records) if ever dumped in-repo:
+panel_*.log
+panel_sessions*/
 
-Thumbs.db
-Desktop.ini
-.DS_Store
-
-__pycache__/
-*.pyc
+# --- Secrets / certs / credentials ---------------------------------------------
 .env
 .env.*
-logs/
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+secrets.*
+credentials.json
+credentials.toml
+*.keystore
+*.jks
+
+# --- IDE / editor --------------------------------------------------------------
+.idea/
+.vscode/
+.vs/
+*.ipr
+*.iws
+*.iml
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+# Slint LSP / preview local state
+.slint/
+# JetBrains / Rider
+_ReSharper*/
+*.DotSettings.user
+
+# --- OS junk -------------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# --- Python (helper scripts) ---------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# --- Node (scripts/gen_logo.mjs etc.) ------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+
+# --- Project scripts policy ----------------------------------------------------
+# Local/debug/helper scripts stay out of the repo; only the public embed script
+# is allowed back in. (Kept intentionally narrow — do not widen without review.)
+scripts/*
+!scripts/embed_resources.py
+
+# --- Local notes / private rules ------------------------------------------------
+QUYTAC
+*.local.md
+NOTES.local.md
+
+# --- Smoke / QA scratch dirs ----------------------------------------------------
 smoke_*/
 *_smoke/
-*.stale
-stale_*.exe
-# ZCode session data (plans/transcripts can quote admin source):
+tmp_*/
+*.tmp.ps1
+
+# --- Agent / AI tooling local state (can quote private source) -------------------
 .zcode/
+.freebuff/
+.mimocode/
+.claude/settings.local.json
+.opencode/
+.codex/
+.cursor/
+# MiMo / OpenCode project id files if dropped at repo root
+mimocode-project-id
+
+# --- Coverage / test reports -----------------------------------------------------
+coverage/
+*.lcov
+lcov.info
+cobertura.xml
+tarpaulin-report.html
+junit.xml

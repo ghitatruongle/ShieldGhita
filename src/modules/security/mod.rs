@@ -1,3 +1,4 @@
+use crate::modules::i18n;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -7,7 +8,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-use crate::modules::i18n;
+pub mod file_analyzer;
+pub use file_analyzer::{pick_file_dialog, scan_file};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityIncident {
@@ -35,12 +37,16 @@ pub struct SecurityEngine {
     quarantined_ips: Arc<RwLock<std::collections::HashSet<String>>>,
     port_probe_history: PortProbeHistory,
     port_scan_alert_cooldown: Arc<RwLock<HashMap<String, Instant>>>,
+    hard_flood_alert_cooldown: Arc<RwLock<HashMap<String, Instant>>>,
+    flood_alert_cooldown: Arc<RwLock<HashMap<String, Instant>>>,
     pub alert_tx: broadcast::Sender<SecurityIncident>,
 }
 
 const PORT_SCAN_WINDOW: Duration = Duration::from_secs(60);
 const PORT_SCAN_DISTINCT_PORTS: usize = 10;
 const PORT_SCAN_ALERT_COOLDOWN: Duration = Duration::from_secs(600);
+const HARD_FLOOD_ALERT_COOLDOWN: Duration = Duration::from_secs(60);
+const FLOOD_ALERT_COOLDOWN: Duration = Duration::from_secs(60);
 
 type PortProbeHistory = Arc<RwLock<HashMap<String, Vec<(u16, Instant)>>>>;
 
@@ -62,6 +68,8 @@ impl SecurityEngine {
             last_known_gateway: Arc::new(RwLock::new(None)),
             port_probe_history: Arc::new(RwLock::new(HashMap::new())),
             port_scan_alert_cooldown: Arc::new(RwLock::new(HashMap::new())),
+            hard_flood_alert_cooldown: Arc::new(RwLock::new(HashMap::new())),
+            flood_alert_cooldown: Arc::new(RwLock::new(HashMap::new())),
             alert_tx,
         }
     }
@@ -71,39 +79,85 @@ impl SecurityEngine {
     }
 
     pub fn enforce_hard_rate_limit(&self, source_ip: &str) -> bool {
-        if source_ip == "127.0.0.1" || source_ip == "::1" {
-            return false;
-        }
         let base = self.dns_flood_rate_limit.read().map(|g| *g).unwrap_or(80);
-        let hard_limit = (base.saturating_mul(4)).max(200) as usize;
+        let is_loopback = source_ip == "127.0.0.1" || source_ip == "::1";
+        // Loopback is rate-limited too, with a higher threshold (base*10, capped at 2000).
+        let hard_limit = if is_loopback {
+            (base.saturating_mul(10)).clamp(200, 2000) as usize
+        } else {
+            (base.saturating_mul(4)).max(200) as usize
+        };
         let now = Instant::now();
 
         let mut exceeded = false;
         if let Ok(mut hist) = self.hard_query_history.write() {
             if hist.len() > 1000 {
+                // Evict expired entries first, then remove oldest 256 if still over budget.
                 hist.retain(|_, v| {
                     v.iter()
                         .any(|t| now.duration_since(*t) < Duration::from_secs(2))
                 });
+                if hist.len() > 1000 {
+                    Self::evict_oldest_ips(&mut hist, 256, now);
+                }
             }
             let timestamps = hist.entry(source_ip.to_string()).or_default();
             timestamps.retain(|t| now.duration_since(*t) < Duration::from_secs(2));
             timestamps.push(now);
             if timestamps.len() > hard_limit {
-                timestamps.clear();
+                // Keep recent 10 for forensics instead of clearing everything.
+                let len = timestamps.len();
+                if len > 10 {
+                    timestamps.drain(..len - 10);
+                }
                 exceeded = true;
             }
         }
 
         if exceeded {
             self.hard_drop_count.fetch_add(1, Ordering::SeqCst);
-            self.block_ip_temporarily(source_ip, Duration::from_secs(60));
-            warn!(
-                "Security Hard Rate Limit: {} exceeded {} queries/2s — isolating source for 60s",
-                source_ip, hard_limit
-            );
+            // Cooldown per IP to avoid log/block spam on sustained floods.
+            let should_alert = {
+                if let Ok(mut cd) = self.hard_flood_alert_cooldown.write() {
+                    let alert = !matches!(cd.get(source_ip), Some(last) if now.duration_since(*last) < HARD_FLOOD_ALERT_COOLDOWN);
+                    if alert {
+                        if cd.len() > 1024 {
+                            let cutoff = now - HARD_FLOOD_ALERT_COOLDOWN;
+                            cd.retain(|_, t| *t > cutoff);
+                        }
+                        cd.insert(source_ip.to_string(), now);
+                    }
+                    alert
+                } else {
+                    true
+                }
+            };
+            if should_alert {
+                // block_ip_temporarily intentionally exempts loopback (no-op there);
+                // loopback floods are still dropped via the `true` return.
+                self.block_ip_temporarily(source_ip, Duration::from_secs(60));
+                warn!(
+                    "Security Hard Rate Limit: {} exceeded {} queries/2s — isolating source for 60s",
+                    source_ip, hard_limit
+                );
+            }
         }
         exceeded
+    }
+
+    fn evict_oldest_ips(hist: &mut HashMap<String, Vec<Instant>>, count: usize, _now: Instant) {
+        if hist.len() <= count {
+            return;
+        }
+        // Oldest = smallest most-recent timestamp (empty vec = oldest, evict first).
+        let mut keys: Vec<(String, Option<Instant>)> = hist
+            .iter()
+            .map(|(k, v)| (k.clone(), v.iter().max().copied()))
+            .collect();
+        keys.sort_by_key(|(_, t)| *t);
+        for (k, _) in keys.into_iter().take(count) {
+            hist.remove(&k);
+        }
     }
 
     pub fn is_auto_block_enabled(&self) -> bool {
@@ -141,16 +195,30 @@ impl SecurityEngine {
     }
 
     pub fn is_ip_temporarily_blocked(&self, ip: &str) -> bool {
-        if let Ok(mut map) = self.blocked_ips.write() {
-            if let Some(exp) = map.get(ip) {
-                if Instant::now() < *exp {
-                    return true;
-                } else {
-                    map.remove(ip);
-                }
-            }
+        // Fast path: read lock first.
+        let expired_or_missing = match self.blocked_ips.read() {
+            Ok(map) => match map.get(ip) {
+                Some(exp) => Instant::now() >= *exp,
+                None => return false,
+            },
+            Err(_) => return false,
+        };
+        if !expired_or_missing {
+            return true;
         }
-        false
+        // Slow path: take write lock only to expire/remove.
+        if let Ok(mut map) = self.blocked_ips.write() {
+            match map.get(ip) {
+                Some(exp) if Instant::now() < *exp => true,
+                Some(_) => {
+                    map.remove(ip);
+                    false
+                }
+                None => false,
+            }
+        } else {
+            false
+        }
     }
 
     pub fn block_ip_temporarily(&self, ip: &str, duration: Duration) {
@@ -396,6 +464,10 @@ impl SecurityEngine {
             } else if lower.is_ascii_digit() {
                 digits += 1;
                 current_consonant_run = 0;
+            } else {
+                // Non-alphanumeric (hyphen '-', underscore '_', etc.) breaks
+                // consonant runs — e.g. "bcdfg-hjklm" must not count as 11.
+                current_consonant_run = 0;
             }
         }
 
@@ -412,6 +484,34 @@ impl SecurityEngine {
             }
         }
         false
+    }
+
+    /// Policy: `.onion` (Tor), `.bit` (Namecoin/EmerDNS) and `.bazar`
+    /// (EmerDNS/Bazar) are pseudo-TLDs that can never be resolved via standard
+    /// DNS. They are routinely abused for botnet C2 / darknet exfiltration.
+    ///
+    /// Enforcement: **always NXDOMAIN**, even when `auto_block` is disabled.
+    /// Rationale: NXDOMAIN for a non-routable pseudo-TLD cannot break legit
+    /// browsing (no public resolver can answer it), so fail-closed dropping is
+    /// safe. `.bit` / `.bazar` follow the **same always-block policy** as
+    /// `.onion` for consistency.
+    ///
+    /// Callers (DNS dispatch) must check this helper *before* the generic
+    /// `auto_block` gate and NXDOMAIN matching queries unconditionally.
+    pub fn is_darknet_pseudo_tld(domain: &str) -> bool {
+        let lower = domain.trim().trim_end_matches('.').to_lowercase();
+        lower.ends_with(".onion")
+            || lower == "onion"
+            || lower.ends_with(".bit")
+            || lower == "bit"
+            || lower.ends_with(".bazar")
+            || lower == "bazar"
+    }
+
+    /// Alias kept for readability at call sites: darknet pseudo-TLDs must
+    /// always be answered with NXDOMAIN, regardless of IPS/auto-block state.
+    pub fn must_nxdomain_darknet(domain: &str) -> bool {
+        Self::is_darknet_pseudo_tld(domain)
     }
 
     pub fn inspect_hosts_file(&self) -> Option<SecurityIncident> {
@@ -444,33 +544,66 @@ impl SecurityEngine {
             if trimmed.starts_with('#') || trimmed.is_empty() {
                 continue;
             }
-            let lower = trimmed.to_lowercase();
-            for target in &sensitive_targets {
-                if lower.contains(target) {
-                    let incident = self.record_incident(
-                        i18n::tr(
-                            "Phát hiện chỉnh sửa độc hại tệp Hosts (Hosts Tamper)",
-                            "Hosts File Tampering / Malicious Hijack Detected",
-                            "检测到恶意篡改 Hosts 文件 (Hosts Tamper)",
-                        ),
-                        "127.0.0.1",
-                        &format!(
-                            "{}: '{}'",
+            // Strip inline comments: "IP host1 host2 # comment".
+            let without_comment = trimmed.split('#').next().unwrap_or("").trim();
+            if without_comment.is_empty() {
+                continue;
+            }
+            // Hosts format: IP + one or more hostnames.
+            let mut fields = without_comment.split_whitespace();
+            let ip_field = match fields.next() {
+                Some(f) => f,
+                None => continue,
+            };
+            // First field must be an IP; otherwise skip malformed line.
+            if ip_field.parse::<std::net::IpAddr>().is_err() {
+                continue;
+            }
+            let hostnames: Vec<String> = fields
+                .map(|h| h.trim().trim_end_matches('.').to_lowercase())
+                .collect();
+            if hostnames.is_empty() {
+                continue;
+            }
+            for hostname in &hostnames {
+                if hostname.is_empty() {
+                    continue;
+                }
+                for target in &sensitive_targets {
+                    let t = target.to_lowercase();
+                    // Equality / suffix match on hostname boundaries — not a raw
+                    // substring `contains` on the whole line (avoids false
+                    // positives like "mybankexample.com" matching "bank").
+                    let matched = hostname.as_str() == t.as_str()
+                        || hostname.ends_with(&format!(".{t}"))
+                        || hostname.starts_with(&format!("{t}."))
+                        || hostname.contains(&format!(".{t}."));
+                    if matched {
+                        let incident = self.record_incident(
                             i18n::tr(
-                                "Tệp hosts chứa bản ghi chuyển hướng tên miền nhạy cảm",
-                                "Hosts file contains sensitive domain redirection",
-                                "Hosts 文件包含敏感域名重定向记录"
+                                "Phát hiện chỉnh sửa độc hại tệp Hosts (Hosts Tamper)",
+                                "Hosts File Tampering / Malicious Hijack Detected",
+                                "检测到恶意篡改 Hosts 文件 (Hosts Tamper)",
                             ),
-                            trimmed
-                        ),
-                        "CRITICAL",
-                        i18n::tr(
-                            "Đề xuất: Khôi phục tệp hosts về trạng thái mặc định của Windows",
-                            "Recommended: Restore hosts file to default Windows clean state",
-                            "建议：将 hosts 文件恢复为 Windows 默认干净状态",
-                        ),
-                    );
-                    return Some(incident);
+                            "127.0.0.1",
+                            &format!(
+                                "{}: '{}'",
+                                i18n::tr(
+                                    "Tệp hosts chứa bản ghi chuyển hướng tên miền nhạy cảm",
+                                    "Hosts file contains sensitive domain redirection",
+                                    "Hosts 文件包含敏感域名重定向记录"
+                                ),
+                                trimmed
+                            ),
+                            "CRITICAL",
+                            i18n::tr(
+                                "Đề xuất: Khôi phục tệp hosts về trạng thái mặc định của Windows",
+                                "Recommended: Restore hosts file to default Windows clean state",
+                                "建议：将 hosts 文件恢复为 Windows 默认干净状态",
+                            ),
+                        );
+                        return Some(incident);
+                    }
                 }
             }
         }
@@ -491,12 +624,13 @@ impl SecurityEngine {
 
         if let Ok(mut history_map) = self.ip_query_history.write() {
             if history_map.len() > 1000 {
+                // Retain only non-expired entries, then evict oldest 256 if still over budget.
                 history_map.retain(|_, v| {
                     v.iter()
                         .any(|t| now.duration_since(*t) < Duration::from_secs(2))
                 });
                 if history_map.len() > 1000 {
-                    history_map.clear();
+                    Self::evict_oldest_ips(&mut history_map, 256, now);
                 }
             }
             let timestamps = history_map.entry(source_ip.to_string()).or_default();
@@ -506,11 +640,39 @@ impl SecurityEngine {
 
             if query_count_last_sec > limit as usize {
                 is_flooding = true;
-                timestamps.clear();
+                // Keep recent 10 for forensics instead of clearing everything.
+                let len = timestamps.len();
+                if len > 10 {
+                    timestamps.drain(..len - 10);
+                }
             }
         }
 
         if is_flooding {
+            // Cooldown per IP to avoid incident spam on sustained floods.
+            // IPS mode (auto_block on) must still return an incident so the
+            // caller drops (NXDOMAIN); throttling only suppresses duplicate
+            // IDS alerts when auto_block is off (forwarding is intended there).
+            if !auto_block {
+                if let Ok(mut cd) = self.flood_alert_cooldown.write() {
+                    if let Some(last) = cd.get(source_ip) {
+                        if now.duration_since(*last) < FLOOD_ALERT_COOLDOWN {
+                            return None;
+                        }
+                    }
+                    if cd.len() > 1024 {
+                        let cutoff = now - FLOOD_ALERT_COOLDOWN;
+                        cd.retain(|_, t| *t > cutoff);
+                    }
+                    cd.insert(source_ip.to_string(), now);
+                }
+            } else if let Ok(mut cd) = self.flood_alert_cooldown.write() {
+                if cd.len() > 1024 {
+                    let cutoff = now - FLOOD_ALERT_COOLDOWN;
+                    cd.retain(|_, t| *t > cutoff);
+                }
+                cd.insert(source_ip.to_string(), now);
+            }
             let mitigation = if auto_block {
                 self.block_ip_temporarily(source_ip, Duration::from_secs(300));
                 i18n::tr(
@@ -643,21 +805,21 @@ impl SecurityEngine {
             ));
         }
 
-        let lower = domain.to_lowercase();
-        if lower.ends_with(".onion") || lower.ends_with(".bit") || lower.ends_with(".bazar") {
-            let mitigation = if auto_block {
-                i18n::tr(
-                    "Đã tự động cách ly tên miền độc hại (NXDOMAIN Drop)",
-                    "Malicious domain auto-isolated (NXDOMAIN Drop)",
-                    "已自动隔离恶意域名 (NXDOMAIN 丢弃)",
-                )
-            } else {
-                i18n::tr(
-                    "Cảnh báo truy cập Darknet/Botnet",
-                    "Darknet/Botnet access alert",
-                    "Darknet/僵尸网络访问告警",
-                )
-            };
+        // Policy: `.onion` (Tor), `.bit` (Namecoin/EmerDNS) and `.bazar`
+        // (EmerDNS/Bazar) are pseudo-TLDs never resolvable via standard DNS
+        // and frequently abused for C2/botnet. Enforcement is ALWAYS NXDOMAIN,
+        // even when `auto_block` is off — returning NXDOMAIN for non-routable
+        // pseudo-TLDs is safe (legit DNS can never resolve them) and prevents
+        // silent leaks to upstream resolvers. `.bit`/`.bazar` follow the same
+        // always-block policy as `.onion`.
+        if Self::is_darknet_pseudo_tld(domain) {
+            // Always NXDOMAIN — not gated on auto_block. See `is_darknet_pseudo_tld`
+            // docs and the DNS dispatch path which must drop these even in IDS-only mode.
+            let mitigation = i18n::tr(
+                "Đã tự động cách ly tên miền độc hại (NXDOMAIN Drop)",
+                "Malicious domain auto-isolated (NXDOMAIN Drop)",
+                "已自动隔离恶意域名 (NXDOMAIN 丢弃)",
+            );
 
             let details = match i18n::current_index() {
                 i18n::EN => format!("Query to botnet underground domain detected: {}", domain),
@@ -692,48 +854,96 @@ impl SecurityEngine {
         if !self.is_detection_enabled() || !self.is_arp_detection_enabled() {
             return None;
         }
+        if gateway_ip.is_empty() {
+            return None;
+        }
 
-        let mut gw_guard = self.last_known_gateway.write().ok()?;
-        if let Some((ref last_ip, ref last_mac)) = *gw_guard {
-            if last_ip == gateway_ip
-                && last_mac != current_gateway_mac
-                && !current_gateway_mac.is_empty()
-                && current_gateway_mac != "00:00:00:00:00:00"
-            {
+        // Snapshot last known gateway, then drop the lock before recording
+        // incidents (record_incident takes a different lock).
+        let last = self.last_known_gateway.read().ok().and_then(|g| g.clone());
+        if let Some((last_ip, last_mac)) = last {
+            if last_ip == gateway_ip {
+                if last_mac != current_gateway_mac
+                    && !current_gateway_mac.is_empty()
+                    && current_gateway_mac != "00:00:00:00:00:00"
+                {
+                    let details = match i18n::current_index() {
+                        i18n::EN => format!(
+                            "Gateway {} MAC suddenly changed from {} to {}. A rogue device may be sniffing traffic!",
+                            gateway_ip, last_mac, current_gateway_mac
+                        ),
+                        i18n::ZH => format!(
+                            "网关 {} 的 MAC 地址突然从 {} 变为 {}。疑似存在陌生设备正在窃听流量！",
+                            gateway_ip, last_mac, current_gateway_mac
+                        ),
+                        _ => format!(
+                            "Địa chỉ MAC của Gateway {} bất ngờ bị thay đổi từ {} sang {}. Nghi vấn có thiết bị lạ đang nghe lén dữ liệu!",
+                            gateway_ip, last_mac, current_gateway_mac
+                        ),
+                    };
+                    let incident = self.record_incident(
+                        i18n::tr(
+                            "Tấn công giả mạo địa chỉ ARP (ARP Spoofing / MITM)",
+                            "ARP address spoofing attack (ARP Spoofing / MITM)",
+                            "ARP 地址伪造攻击 (ARP 欺骗 / 中间人)",
+                        ),
+                        gateway_ip,
+                        &details,
+                        "CRITICAL",
+                        i18n::tr(
+                            "Cảnh báo khẩn cấp: Đã phát hiện cuộc tấn công chuyển hướng mạng",
+                            "Emergency alert: Network redirection attack detected",
+                            "紧急告警：检测到网络流量劫持攻击",
+                        ),
+                    );
+                    if let Ok(mut gw_guard) = self.last_known_gateway.write() {
+                        *gw_guard = Some((gateway_ip.to_string(), current_gateway_mac.to_string()));
+                    }
+                    return Some(incident);
+                }
+                return None;
+            } else {
+                // Gateway IP changed (DHCP renew, network switch, rogue DHCP).
+                // Update to the new (ip, mac) and emit a single INFO incident —
+                // do not permanently disable detection.
+                if let Ok(mut gw_guard) = self.last_known_gateway.write() {
+                    *gw_guard = Some((gateway_ip.to_string(), current_gateway_mac.to_string()));
+                }
                 let details = match i18n::current_index() {
                     i18n::EN => format!(
-                        "Gateway {} MAC suddenly changed from {} to {}. A rogue device may be sniffing traffic!",
-                        gateway_ip, last_mac, current_gateway_mac
+                        "Default gateway changed from {} ({}) to {} ({}). Network may have switched; monitoring continues.",
+                        last_ip, last_mac, gateway_ip, current_gateway_mac
                     ),
                     i18n::ZH => format!(
-                        "网关 {} 的 MAC 地址突然从 {} 变为 {}。疑似存在陌生设备正在窃听流量！",
-                        gateway_ip, last_mac, current_gateway_mac
+                        "默认网关已从 {} ({}) 变更为 {} ({})。网络可能已切换；监控继续。",
+                        last_ip, last_mac, gateway_ip, current_gateway_mac
                     ),
                     _ => format!(
-                        "Địa chỉ MAC của Gateway {} bất ngờ bị thay đổi từ {} sang {}. Nghi vấn có thiết bị lạ đang nghe lén dữ liệu!",
-                        gateway_ip, last_mac, current_gateway_mac
+                        "Gateway mặc định đã đổi từ {} ({}) sang {} ({}). Có thể mạng đã chuyển; vẫn tiếp tục giám sát.",
+                        last_ip, last_mac, gateway_ip, current_gateway_mac
                     ),
                 };
                 let incident = self.record_incident(
                     i18n::tr(
-                        "Tấn công giả mạo địa chỉ ARP (ARP Spoofing / MITM)",
-                        "ARP address spoofing attack (ARP Spoofing / MITM)",
-                        "ARP 地址伪造攻击 (ARP 欺骗 / 中间人)",
+                        "Gateway thay đổi (Gateway Changed)",
+                        "Default Gateway Changed",
+                        "默认网关变更",
                     ),
                     gateway_ip,
                     &details,
-                    "CRITICAL",
+                    "INFO",
                     i18n::tr(
-                        "Cảnh báo khẩn cấp: Đã phát hiện cuộc tấn công chuyển hướng mạng",
-                        "Emergency alert: Network redirection attack detected",
-                        "紧急告警：检测到网络流量劫持攻击",
+                        "Đã cập nhật gateway mới và tiếp tục giám sát",
+                        "Updated to new gateway and continuing monitoring",
+                        "已更新为新网关并继续监控",
                     ),
                 );
-                *gw_guard = Some((gateway_ip.to_string(), current_gateway_mac.to_string()));
                 return Some(incident);
             }
         } else if !current_gateway_mac.is_empty() && current_gateway_mac != "00:00:00:00:00:00" {
-            *gw_guard = Some((gateway_ip.to_string(), current_gateway_mac.to_string()));
+            if let Ok(mut gw_guard) = self.last_known_gateway.write() {
+                *gw_guard = Some((gateway_ip.to_string(), current_gateway_mac.to_string()));
+            }
         }
 
         None
@@ -781,7 +991,17 @@ impl SecurityEngine {
                 }
             }
             if cooldown.len() > 500 {
-                cooldown.clear();
+                // Evict expired entries instead of clearing everything.
+                cooldown.retain(|_, t| now.duration_since(*t) < PORT_SCAN_ALERT_COOLDOWN);
+                if cooldown.len() > 500 {
+                    // Still over budget: remove oldest entries.
+                    let mut oldest: Vec<(String, Instant)> =
+                        cooldown.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                    oldest.sort_by_key(|(_, t)| *t);
+                    for (k, _) in oldest.into_iter().take(128) {
+                        cooldown.remove(&k);
+                    }
+                }
             }
             cooldown.insert(remote_ip.to_string(), now);
         }
@@ -837,17 +1057,34 @@ impl SecurityEngine {
     }
 
     pub fn export_incidents_csv(&self) -> Result<String, String> {
-        let incidents = self.incidents.read().map_err(|e| e.to_string())?;
+        // Clone under read lock, then drop guard before blocking fs I/O.
+        let incidents: Vec<SecurityIncident> = self
+            .incidents
+            .read()
+            .map(|l| l.clone())
+            .map_err(|e| e.to_string())?;
+        fn csv_escape(field: &str) -> String {
+            let risky = field
+                .chars()
+                .next()
+                .map(|c| matches!(c, '=' | '+' | '-' | '@' | '\t' | '\r'))
+                .unwrap_or(false);
+            let mut s = field.replace('"', "\"\"");
+            if risky {
+                s = format!("'{}", s);
+            }
+            format!("\"{}\"", s)
+        }
         let mut csv = String::from("time,severity,incident_type,source_ip,details,mitigation\n");
         for inc in incidents.iter() {
             csv.push_str(&format!(
-                "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
-                inc.time,
-                inc.severity,
-                inc.incident_type,
-                inc.source_ip,
-                inc.details.replace('"', "\"\""),
-                inc.mitigation.replace('"', "\"\"")
+                "{},{},{},{},{},{}\n",
+                csv_escape(&inc.time),
+                csv_escape(&inc.severity),
+                csv_escape(&inc.incident_type),
+                csv_escape(&inc.source_ip),
+                csv_escape(&inc.details),
+                csv_escape(&inc.mitigation),
             ));
         }
         let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
@@ -855,8 +1092,12 @@ impl SecurityEngine {
             .join("ShieldGhita")
             .join(format!(
                 "incidents_export_{}.csv",
-                Local::now().format("%Y%m%d_%H%M%S")
+                // Millis suffix avoids collision on rapid double-exports.
+                Local::now().format("%Y%m%d_%H%M%S_%3f")
             ));
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
         std::fs::write(&path, &csv).map_err(|e| e.to_string())?;
         info!("Exported {} incidents to {:?}", incidents.len(), path);
         Ok(path.to_string_lossy().to_string())

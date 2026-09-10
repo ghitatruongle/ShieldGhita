@@ -1,12 +1,15 @@
 [package]
 name = "shield_ghita"
-version = "0.1.0-beta3"
+version = "0.1.0"
 edition = "2021"
 [features]
 default = []
 admin = ["dep:rcgen", "dep:tokio-rustls"]
 [dependencies]
-slint = "1.8"
+slint = { version = "1.8", features = ["raw-window-handle-06"] }
+# Needed to extract the Win32 HWND from slint::Window so the pick-file dialog
+# can be parented to the main window (same 0.6.x already in the tree via winit).
+raw-window-handle = "0.6"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -39,6 +42,7 @@ windows = { version = "0.58", features = [
     "Win32_Security",
     "Win32_Security_Cryptography",
     "Win32_System_Console",
+    "Win32_System_Memory",
     "Win32_System_Registry",
     "Win32_System_Rpc",
     "Win32_System_Services",

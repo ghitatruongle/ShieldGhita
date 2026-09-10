@@ -8,6 +8,30 @@ use tracing::info;
 
 static APPLY_PROTECTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Saturating usize/u64 -> i32 for Slint properties (avoids `as i32` wrap).
+fn sat_i32_usize(v: usize) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
+fn sat_i32_u64(v: u64) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
+fn u64_to_f32_sat(v: u64) -> f32 {
+    const F32_MAX_AS_U64: u64 = 16_777_216 * 16_777_216 * 256; // 2^~128 approx guard
+    if v > F32_MAX_AS_U64 {
+        f32::MAX
+    } else {
+        v as f32
+    }
+}
+
+/// Human-readable file size (e.g. "1.2 MB") for status lines.
+#[allow(dead_code)]
+fn bytes_to_mb_string(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+}
+
 pub fn apply_protection(s: &Arc<AppState>, enabled: bool) {
     let _sequence_guard = APPLY_PROTECTION_LOCK
         .lock()
@@ -40,10 +64,108 @@ pub fn apply_protection(s: &Arc<AppState>, enabled: bool) {
     }
 }
 
+/// Raw HWND of the main window (null when unavailable), used to parent the
+/// Win32 file picker so it can never open BEHIND the app window.
+fn main_window_hwnd(ui_weak: &slint::Weak<crate::AppWindow>) -> *mut std::ffi::c_void {
+    use raw_window_handle::HasWindowHandle as _;
+    ui_weak
+        .upgrade()
+        .and_then(|u| {
+            u.window()
+                .window_handle()
+                .window_handle()
+                .ok()
+                .and_then(|h| match h.as_raw() {
+                    raw_window_handle::RawWindowHandle::Win32(w) => {
+                        Some(w.hwnd.get() as *mut std::ffi::c_void)
+                    }
+                    _ => None,
+                })
+        })
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Render a successful File Analyzer scan into the UI properties.
+/// `file_path`/`findings` are cleared on error, so the success path must
+/// overwrite the previous result (done inside `set_file_scan_result`).
+fn fa_render_result(
+    ui_inst: &crate::AppWindow,
+    report: crate::modules::security::file_analyzer::FileScanReport,
+) {
+    let greeting_done = match crate::modules::i18n::current_index() {
+        0 => format!(
+            "👋 Hoàn tất phân tích tệp: {} (Mức độ: {})",
+            report.file_name, report.risk_level
+        ),
+        1 => format!(
+            "👋 Analysis complete: {} (Risk: {})",
+            report.file_name, report.risk_level
+        ),
+        2 => format!(
+            "👋 分析完成：{} (风险级别: {})",
+            report.file_name, report.risk_level
+        ),
+        _ => format!(
+            "👋 Анализ завершен: {} (Уровень риска: {})",
+            report.file_name, report.risk_level
+        ),
+    };
+    ui_inst.set_file_scan_status(greeting_done.into());
+
+    let res_item = crate::FileScanResult {
+        file_path: report.file_path.into(),
+        file_name: report.file_name.into(),
+        file_size_bytes: u64_to_f32_sat(report.file_size_bytes),
+        md5: report.md5.into(),
+        sha1: report.sha1.into(),
+        sha256: report.sha256.into(),
+        entropy: report.entropy as f32,
+        risk_score: report.risk_score,
+        risk_level: report.risk_level.into(),
+        is_pe: report.is_pe,
+        is_packed: report.is_packed,
+        findings_count: sat_i32_usize(report.findings.len()),
+        summary_text: report.summary_text.into(),
+    };
+    let finding_items: Vec<crate::FileScanFindingItem> = report
+        .findings
+        .into_iter()
+        .map(|f| crate::FileScanFindingItem {
+            severity: f.severity.into(),
+            category: f.category.into(),
+            description: f.description.into(),
+            snippet: f.snippet.into(),
+        })
+        .collect();
+
+    ui_inst.set_file_scan_result(res_item);
+    ui_inst.set_file_scan_findings(slint::ModelRc::new(slint::VecModel::from(finding_items)));
+}
+
+/// Render a File Analyzer scan failure. Localized (vi/en/zh/ru) — previously
+/// the "❌ Lỗi:" prefix was Vietnamese-only.
+fn fa_render_error(ui_inst: &crate::AppWindow, err_msg: &str, reset_result: bool) {
+    let label = crate::modules::i18n::tr4("❌ Lỗi:", "❌ Error:", "❌ 错误：", "❌ Ошибка:");
+    ui_inst.set_file_scan_status(format!("{label} {err_msg}").into());
+    if reset_result {
+        let empty_res = crate::FileScanResult {
+            summary_text: format!("✗ {err_msg}").into(),
+            ..Default::default()
+        };
+        ui_inst.set_file_scan_result(empty_res);
+        ui_inst.set_file_scan_findings(slint::ModelRc::new(slint::VecModel::default()));
+    }
+}
+
 pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
     let s = state.clone();
     ui.on_toggle_protection(move |enabled| {
-        apply_protection(&s, enabled);
+        // Offload blocking DNS/WFP/self-defense work so the Slint event loop
+        // stays responsive; apply_protection serializes via its internal lock.
+        let s2 = s.clone();
+        std::thread::spawn(move || {
+            apply_protection(&s2, enabled);
+        });
     });
 
     ui.on_toggle_master_lock(move |locked| {
@@ -111,7 +233,10 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             cfg_guard.start_with_windows = enabled;
             let _ = cfg_guard.save();
         }
-        crate::modules::config::AppConfig::set_autostart_registry(enabled);
+        // reg.exe blocks; keep it off the Slint event-loop thread.
+        std::thread::spawn(move || {
+            crate::modules::config::AppConfig::set_autostart_registry(enabled);
+        });
         info!(
             "Autostart with Windows set to: {}",
             if enabled { "ENABLED" } else { "DISABLED" }
@@ -160,6 +285,7 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         let lang_str = match lang.as_str() {
             "en" => "en".to_string(),
             "zh" => "zh".to_string(),
+            "ru" => "ru".to_string(),
             _ => "vi".to_string(),
         };
         if let Ok(mut cfg_guard) = s.config.write() {
@@ -266,18 +392,27 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 cfg_guard.custom_blocked_domains.push(normalized);
                 let _ = cfg_guard.save();
             }
-            s.rules_dirty.store(true, Ordering::SeqCst);
         }
+        // Set outside the config lock so a failed lock cannot skip UI refresh.
+        s.rules_dirty.store(true, Ordering::SeqCst);
     });
 
     let s = state.clone();
     ui.on_remove_custom_rule(move |rule| {
         let rule_str = rule.to_string();
-        if let Err(e) = s.blocker.remove_custom_domain(&rule_str) {
+        // Normalize (trim/lowercase) so " Example.COM " matches stored form.
+        let normalized = crate::modules::dns::DnsBlocker::validate_domain(&rule_str)
+            .unwrap_or_else(|_| rule_str.trim().trim_end_matches('.').to_lowercase());
+        if normalized.is_empty() {
+            return;
+        }
+        if let Err(e) = s.blocker.remove_custom_domain(&normalized) {
             tracing::error!("Failed to remove custom rule: {}", e);
         }
         if let Ok(mut cfg_guard) = s.config.write() {
-            cfg_guard.custom_blocked_domains.retain(|d| d != &rule_str);
+            cfg_guard
+                .custom_blocked_domains
+                .retain(|d| d != &normalized);
             let _ = cfg_guard.save();
         }
         s.rules_dirty.store(true, Ordering::SeqCst);
@@ -314,18 +449,26 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 cfg_guard.custom_allowed_domains.push(normalized);
                 let _ = cfg_guard.save();
             }
-            s.rules_dirty.store(true, Ordering::SeqCst);
         }
+        // Set outside the config lock so a failed lock cannot skip UI refresh.
+        s.rules_dirty.store(true, Ordering::SeqCst);
     });
 
     let s = state.clone();
     ui.on_remove_allowed_rule(move |rule| {
         let rule_str = rule.to_string();
-        if let Err(e) = s.blocker.remove_allowed_domain(&rule_str) {
+        let normalized = crate::modules::dns::DnsBlocker::validate_domain(&rule_str)
+            .unwrap_or_else(|_| rule_str.trim().trim_end_matches('.').to_lowercase());
+        if normalized.is_empty() {
+            return;
+        }
+        if let Err(e) = s.blocker.remove_allowed_domain(&normalized) {
             tracing::error!("Failed to remove whitelist rule: {}", e);
         }
         if let Ok(mut cfg_guard) = s.config.write() {
-            cfg_guard.custom_allowed_domains.retain(|d| d != &rule_str);
+            cfg_guard
+                .custom_allowed_domains
+                .retain(|d| d != &normalized);
             let _ = cfg_guard.save();
         }
         s.rules_dirty.store(true, Ordering::SeqCst);
@@ -378,6 +521,8 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         s.monitor.apply_filter("", &ip_str, None);
         if let Some(ui_inst) = ui_weak_ip.upgrade() {
             ui_inst.set_monitor_subview_mode(1);
+            // Keep the filter textbox in sync so Filter/Clear round-trips.
+            ui_inst.set_filter_ip_text(ip_str.into());
         }
     });
 
@@ -441,20 +586,22 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                     &domain_str,
                 )
                 .await;
-            if let Some(ui_inst) = ui_weak.upgrade() {
-                ui_inst.set_is_running_benchmark(false);
-                let items: Vec<crate::DnsBenchmarkItem> = results
-                    .into_iter()
-                    .map(|r| crate::DnsBenchmarkItem {
-                        provider_name: r.provider_name.into(),
-                        ip: r.ip.into(),
-                        response_ms: r.latency_ms,
-                        status: r.status.into(),
-                        is_fastest: r.is_fastest,
-                    })
-                    .collect();
-                ui_inst.set_dns_benchmarks(slint::ModelRc::new(slint::VecModel::from(items)));
-            }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = ui_weak.upgrade() {
+                    ui_inst.set_is_running_benchmark(false);
+                    let items: Vec<crate::DnsBenchmarkItem> = results
+                        .into_iter()
+                        .map(|r| crate::DnsBenchmarkItem {
+                            provider_name: r.provider_name.into(),
+                            ip: r.ip.into(),
+                            response_ms: r.latency_ms,
+                            status: r.status.into(),
+                            is_fastest: r.is_fastest,
+                        })
+                        .collect();
+                    ui_inst.set_dns_benchmarks(slint::ModelRc::new(slint::VecModel::from(items)));
+                }
+            });
         });
     });
 
@@ -611,9 +758,12 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         };
         let ui_weak = ui_weak.clone();
         s.runtime.spawn(async move {
-            if let Some(ui_inst) = ui_weak.upgrade() {
-                ui_inst.set_ram_is_busy(true);
-            }
+            let busy_weak = ui_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = busy_weak.upgrade() {
+                    ui_inst.set_ram_is_busy(true);
+                }
+            });
             let result = tokio::task::spawn_blocking(move || crate::modules::rammap::empty(op))
                 .await
                 .unwrap_or_else(|e| Err(format!("join error: {e}")));
@@ -626,10 +776,12 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 ),
                 Err(e) => format!("✗ {e}"),
             };
-            if let Some(ui_inst) = ui_weak.upgrade() {
-                ui_inst.set_ram_is_busy(false);
-                ui_inst.set_ram_last_action(msg.into());
-            }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = ui_weak.upgrade() {
+                    ui_inst.set_ram_is_busy(false);
+                    ui_inst.set_ram_last_action(msg.into());
+                }
+            });
         });
     });
 
@@ -639,9 +791,12 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         let ui_weak = ui_weak.clone();
         let s2 = s.clone();
         s.runtime.spawn(async move {
-            if let Some(ui_inst) = ui_weak.upgrade() {
-                ui_inst.set_ram_is_busy(true);
-            }
+            let busy_weak = ui_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = busy_weak.upgrade() {
+                    ui_inst.set_ram_is_busy(true);
+                }
+            });
             let found = tokio::task::spawn_blocking(|| {
                 crate::modules::rammap::scan_suspicious_processes(40, 4.0)
             })
@@ -700,11 +855,13 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                     )
                 )
             };
-            if let Some(ui_inst) = ui_weak.upgrade() {
-                ui_inst.set_ram_is_busy(false);
-                ui_inst.set_ram_threat_count(n as i32);
-                ui_inst.set_ram_last_action(msg.into());
-            }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = ui_weak.upgrade() {
+                    ui_inst.set_ram_is_busy(false);
+                    ui_inst.set_ram_threat_count(sat_i32_usize(n));
+                    ui_inst.set_ram_last_action(msg.into());
+                }
+            });
         });
     });
 
@@ -722,5 +879,169 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             "RAM Map auto-clean {}",
             if on { "enabled" } else { "disabled" }
         );
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_ram_set_auto_clean_threshold(move |th| {
+        // Slint passes `custom-threshold-text.to-float()` coerced to int; a
+        // non-numeric string becomes 0 and NaN/negative must not clamp to 64
+        // (which would silently enable aggressive purging). Reject <= 0.
+        if th <= 0 {
+            if let Some(ui_inst) = ui_weak.upgrade() {
+                ui_inst.set_ram_last_action(
+                    crate::modules::i18n::tr(
+                        "✗ Ngưỡng không hợp lệ (phải > 0 MB)",
+                        "✗ Invalid threshold (must be > 0 MB)",
+                        "✗ 无效阈值（必须 > 0 MB）",
+                    )
+                    .into(),
+                );
+            }
+            return;
+        }
+        let Ok(raw) = u64::try_from(th) else { return };
+        let valid_th = raw.clamp(64, 65536);
+        if let Ok(mut cfg_guard) = s.config.write() {
+            cfg_guard.rammap_auto_clean_threshold_mb = valid_th;
+            let _ = cfg_guard.save();
+        }
+        if let Some(ui_inst) = ui_weak.upgrade() {
+            ui_inst.set_ram_auto_clean_threshold_mb(sat_i32_u64(valid_th));
+        }
+        tracing::info!("RAM Map auto-clean threshold set to {} MB", valid_th);
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_ram_terminate_process(move |pid| {
+        // Guard: `pid as u32` would wrap negatives to huge PIDs.
+        if pid <= 0 {
+            return;
+        }
+        let pid_u32 = pid as u32;
+        let ui_weak_inner = ui_weak.clone();
+        s.runtime.spawn(async move {
+            let res = tokio::task::spawn_blocking(move || {
+                crate::modules::rammap::terminate_process_by_pid(pid_u32)
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("task error: {e}")));
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = ui_weak_inner.upgrade() {
+                    let msg = match res {
+                        Ok(()) => crate::modules::i18n::tr4(
+                            "✓ Đã dừng tiến trình thành công",
+                            "✓ Process terminated successfully",
+                            "✓ 已成功结束进程",
+                            "✓ Процесс успешно завершён",
+                        )
+                        .to_string(),
+                        Err(e) => format!("✗ {e}"),
+                    };
+                    ui_inst.set_ram_last_action(msg.into());
+                }
+            });
+        });
+    });
+
+    ui.on_ram_open_process_folder(move |path| {
+        let _ = crate::modules::rammap::open_process_folder(path.as_str());
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_pick_file_and_scan(move || {
+        let s = s.clone();
+        let ui_weak = ui_weak.clone();
+        // The dialog must run on the event-loop thread with the main window
+        // as owner: previously it ran on a spawn_blocking thread with a null
+        // owner and could open behind the app. GetOpenFileNameW pumps its own
+        // modal message loop, so the UI stays responsive while it is open.
+        let owner = main_window_hwnd(&ui_weak);
+        let picked = crate::modules::security::pick_file_dialog(owner);
+        if let Some(path_str) = picked {
+            s.runtime.spawn(async move {
+                let busy_weak = ui_weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui_inst) = busy_weak.upgrade() {
+                        ui_inst.set_file_scan_is_busy(true);
+                        ui_inst.set_file_scan_status(
+                            crate::modules::i18n::tr4(
+                                "👋 Xin chào! Bắt đầu phân tích an toàn tệp...",
+                                "👋 Hello! Commencing safe static file analysis...",
+                                "👋 您好！正在启动安全静态文件分析...",
+                                "👋 Здравствуйте! Запуск безопасного анализа файла...",
+                            )
+                            .into(),
+                        );
+                    }
+                });
+                let path_to_scan = path_str.clone();
+                let report_res = tokio::task::spawn_blocking(move || {
+                    crate::modules::security::scan_file(&path_to_scan)
+                })
+                .await
+                .unwrap_or_else(|e| Err(format!("Task failure: {e}")));
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui_inst) = ui_weak.upgrade() {
+                        match report_res {
+                            Ok(report) => fa_render_result(&ui_inst, report),
+                            Err(err_msg) => fa_render_error(&ui_inst, &err_msg, true),
+                        }
+                        ui_inst.set_file_scan_is_busy(false);
+                    }
+                });
+            });
+        }
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_rescan_current_file(move || {
+        let s = s.clone();
+        let ui_weak = ui_weak.clone();
+        let cur_path = ui_weak
+            .upgrade()
+            .map(|u| u.get_file_scan_result().file_path.to_string())
+            .unwrap_or_default();
+        if cur_path.is_empty() {
+            return;
+        }
+        s.runtime.spawn(async move {
+            let busy_weak = ui_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = busy_weak.upgrade() {
+                    ui_inst.set_file_scan_is_busy(true);
+                    ui_inst.set_file_scan_status(
+                        crate::modules::i18n::tr4(
+                            "👋 Xin chào! Bắt đầu quét lại tệp...",
+                            "👋 Hello! Rescanning file...",
+                            "👋 您好！正在重新分析文件...",
+                            "👋 Здравствуйте! Повторный анализ файла...",
+                        )
+                        .into(),
+                    );
+                }
+            });
+            let path_clone = cur_path.clone();
+            let report_res = tokio::task::spawn_blocking(move || {
+                crate::modules::security::scan_file(&path_clone)
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("Task failure: {e}")));
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = ui_weak.upgrade() {
+                    match report_res {
+                        Ok(report) => fa_render_result(&ui_inst, report),
+                        Err(err_msg) => fa_render_error(&ui_inst, &err_msg, false),
+                    }
+                    ui_inst.set_file_scan_is_busy(false);
+                }
+            });
+        });
     });
 }

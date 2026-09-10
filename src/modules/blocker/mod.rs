@@ -86,11 +86,17 @@ impl WfpBlocker {
         self.clear_filters()?;
         let ips = self.get_blocked_ips();
         let ports = self.get_blocked_ports();
-        info!(
-            "WFP blocker active: {} custom IP rules, {} port rules",
-            ips.len(),
-            ports.len()
-        );
+        // Honest status: filter installation is not implemented yet, so the
+        // engine is open but no WFP filters are added. Do not claim enforcement.
+        if ips.is_empty() && ports.is_empty() {
+            info!(
+                "WFP engine ready (no custom IP/port rules configured — DNS blocker is the active enforcement path)"
+            );
+        } else {
+            // Custom rules requested but FwpmFilterAdd0 is not implemented:
+            // fail instead of silently claiming enforcement.
+            return Err("WFP filter installation not implemented".into());
+        }
         self.enabled.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -141,16 +147,33 @@ impl WfpBlocker {
 
     #[cfg(windows)]
     pub fn shutdown(&self) {
-        let _ = self.disable();
+        // Hold the engine lock across disable+close to avoid a race where
+        // another thread re-opens or clears filters concurrently. Do the
+        // filter cleanup inline (not via disable(), which would re-lock).
         let mut handle = match self.engine_handle.lock() {
             Ok(h) => h,
             Err(_) => return,
         };
-        if let Some(h) = handle.take() {
-            unsafe {
-                let _ = FwpmEngineClose0(h);
+        if let Some(engine) = *handle {
+            if let Ok(mut fids) = self.filter_ids.lock() {
+                for id in fids.drain(..) {
+                    unsafe {
+                        let _ = FwpmFilterDeleteById0(engine, id);
+                    }
+                }
+            }
+            if let Some(h) = handle.take() {
+                unsafe {
+                    let _ = FwpmEngineClose0(h);
+                }
+            }
+        } else {
+            // No engine open; still drain any stale filter ids.
+            if let Ok(mut fids) = self.filter_ids.lock() {
+                fids.clear();
             }
         }
+        self.enabled.store(false, Ordering::SeqCst);
     }
 
     #[cfg(not(windows))]

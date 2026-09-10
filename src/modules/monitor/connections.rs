@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, RwLock};
 use sysinfo::System;
 use tracing::warn;
@@ -25,6 +25,36 @@ struct MibUdpRowOwnerPid {
     dw_local_port: u32,
     dw_owning_pid: u32,
 }
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MibTcp6RowOwnerPid {
+    uc_local_addr: [u8; 16],
+    dw_local_scope_id: u32,
+    dw_local_port: u32,
+    uc_remote_addr: [u8; 16],
+    dw_remote_scope_id: u32,
+    dw_remote_port: u32,
+    dw_state: u32,
+    dw_owning_pid: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MibUdp6RowOwnerPid {
+    uc_local_addr: [u8; 16],
+    dw_local_scope_id: u32,
+    dw_local_port: u32,
+    dw_owning_pid: u32,
+}
+
+const AF_INET: u32 = 2;
+const AF_INET6: u32 = 23;
+const TCP_TABLE_OWNER_PID_ALL: u32 = 5;
+const UDP_TABLE_OWNER_PID: u32 = 1;
+const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 
 #[cfg(windows)]
 #[link(name = "iphlpapi")]
@@ -205,30 +235,122 @@ impl ConnectionTracker {
     }
 
     #[cfg(windows)]
+    fn query_raw_table(is_tcp: bool, af: u32, table_class: u32) -> Option<Vec<u8>> {
+        // Retry on ERROR_INSUFFICIENT_BUFFER: the table can grow between the
+        // size probe and the data fetch, so realloc up to 3 times.
+        let mut size = 0u32;
+        unsafe {
+            if is_tcp {
+                let _ = GetExtendedTcpTable(std::ptr::null_mut(), &mut size, 0, af, table_class, 0);
+            } else {
+                let _ = GetExtendedUdpTable(std::ptr::null_mut(), &mut size, 0, af, table_class, 0);
+            }
+        }
+        if size < 4 {
+            return None;
+        }
+        for _ in 0..3 {
+            let mut buf: Vec<u8> = vec![0; size as usize];
+            let mut cur_size = size;
+            let ret = unsafe {
+                if is_tcp {
+                    GetExtendedTcpTable(
+                        buf.as_mut_ptr() as *mut _,
+                        &mut cur_size,
+                        0,
+                        af,
+                        table_class,
+                        0,
+                    )
+                } else {
+                    GetExtendedUdpTable(
+                        buf.as_mut_ptr() as *mut _,
+                        &mut cur_size,
+                        0,
+                        af,
+                        table_class,
+                        0,
+                    )
+                }
+            };
+            if ret == 0 {
+                return Some(buf);
+            }
+            if ret != ERROR_INSUFFICIENT_BUFFER || cur_size <= size {
+                // Grow exponentially as a last resort before giving up.
+                size = size.saturating_mul(2).max(cur_size);
+            } else {
+                size = cur_size;
+            }
+        }
+        None
+    }
+
+    #[cfg(windows)]
+    fn tcp_state_str(state: u32) -> &'static str {
+        match state {
+            2 => "LISTENING",
+            3 => "SYN_SENT",
+            4 => "SYN_RCVD",
+            5 => "ESTABLISHED",
+            6 => "FIN_WAIT1",
+            7 => "FIN_WAIT2",
+            8 => "CLOSE_WAIT",
+            9 => "CLOSING",
+            10 => "LAST_ACK",
+            11 => "TIME_WAIT",
+            12 => "DELETE_TCB",
+            _ => "ACTIVE",
+        }
+    }
+
+    #[cfg(windows)]
+    fn proc_name_for(&self, proc_map: &HashMap<u32, String>, pid: u32) -> String {
+        proc_map.get(&pid).cloned().unwrap_or_else(|| {
+            if pid == 0 {
+                "System Idle".into()
+            } else if pid == 4 {
+                "System Core".into()
+            } else {
+                format!("PID: {}", pid)
+            }
+        })
+    }
+
+    /// Sort key for truncation: ESTABLISHED / SYN_RCVD first, then unsafe
+    /// ports / unsafe processes, then everything else.
+    fn prioritize_for_truncate(list: &mut [ActiveConnection]) {
+        list.sort_by_key(|c| {
+            let state_rank = match c.state.as_str() {
+                "ESTABLISHED" => 0,
+                "SYN_RCVD" => 1,
+                _ => 2,
+            };
+            let unsafe_rank = if c.is_safe { 1 } else { 0 };
+            (state_rank, unsafe_rank)
+        });
+    }
+
+    #[cfg(windows)]
     fn get_native_connections(
         &self,
         proc_map: &HashMap<u32, String>,
     ) -> Result<Vec<ActiveConnection>, String> {
         let mut list = Vec::with_capacity(128);
 
-        let mut size = 0u32;
-        unsafe {
-            let _ = GetExtendedTcpTable(std::ptr::null_mut(), &mut size, 0, 2, 5, 0);
-        }
-
-        if size >= 4 {
-            let mut buf: Vec<u8> = vec![0; size as usize];
-            let ret =
-                unsafe { GetExtendedTcpTable(buf.as_mut_ptr() as *mut _, &mut size, 0, 2, 5, 0) };
-
-            if ret == 0 && buf.len() >= 4 {
-                let num_entries = unsafe { *(buf.as_ptr() as *const u32) } as usize;
+        // ---- IPv4 TCP ----
+        if let Some(buf) = Self::query_raw_table(true, AF_INET, TCP_TABLE_OWNER_PID_ALL) {
+            if buf.len() >= 4 {
+                let num_entries =
+                    u32::from_ne_bytes(buf[0..4].try_into().map_err(|_| "short tcp header")?)
+                        as usize;
                 let max_entries = (buf.len() - 4) / std::mem::size_of::<MibTcpRowOwnerPid>();
                 let safe_entries = num_entries.min(max_entries);
                 let rows_ptr = unsafe { buf.as_ptr().add(4) as *const MibTcpRowOwnerPid };
 
                 for i in 0..safe_entries {
-                    let row = unsafe { *rows_ptr.add(i) };
+                    // read_unaligned: buf is a byte vec with no alignment guarantee.
+                    let row = unsafe { rows_ptr.add(i).read_unaligned() };
                     let pid = row.dw_owning_pid;
                     let local_ip = Ipv4Addr::from(row.dw_local_addr.to_ne_bytes());
                     let local_port = u16::from_be(row.dw_local_port as u16);
@@ -240,36 +362,14 @@ impl ConnectionTracker {
                         continue;
                     }
 
-                    let state_str = match row.dw_state {
-                        2 => "LISTENING",
-                        3 => "SYN_SENT",
-                        4 => "SYN_RCVD",
-                        5 => "ESTABLISHED",
-                        6 => "FIN_WAIT1",
-                        7 => "FIN_WAIT2",
-                        8 => "CLOSE_WAIT",
-                        9 => "CLOSING",
-                        10 => "LAST_ACK",
-                        11 => "TIME_WAIT",
-                        12 => "DELETE_TCB",
-                        _ => "ACTIVE",
-                    };
+                    let state_str = Self::tcp_state_str(row.dw_state);
 
                     if row.dw_state == 4 {
                         self.security_engine
                             .record_inbound_port_probe(&remote_ip.to_string(), local_port);
                     }
 
-                    let proc_name = proc_map.get(&pid).cloned().unwrap_or_else(|| {
-                        if pid == 0 {
-                            "System Idle".into()
-                        } else if pid == 4 {
-                            "System Core".into()
-                        } else {
-                            format!("PID: {}", pid)
-                        }
-                    });
-
+                    let proc_name = self.proc_name_for(proc_map, pid);
                     let is_safe = evaluate_connection_safety(&proc_name, remote_port);
 
                     list.push(ActiveConnection {
@@ -285,36 +385,23 @@ impl ConnectionTracker {
             }
         }
 
-        let mut udp_size = 0u32;
-        unsafe {
-            let _ = GetExtendedUdpTable(std::ptr::null_mut(), &mut udp_size, 0, 2, 1, 0);
-        }
-
-        if udp_size >= 4 {
-            let mut buf: Vec<u8> = vec![0; udp_size as usize];
-            let ret = unsafe {
-                GetExtendedUdpTable(buf.as_mut_ptr() as *mut _, &mut udp_size, 0, 2, 1, 0)
-            };
-
-            if ret == 0 && buf.len() >= 4 {
-                let num_entries = unsafe { *(buf.as_ptr() as *const u32) } as usize;
+        // ---- IPv4 UDP ----
+        if let Some(buf) = Self::query_raw_table(false, AF_INET, UDP_TABLE_OWNER_PID) {
+            if buf.len() >= 4 {
+                let num_entries =
+                    u32::from_ne_bytes(buf[0..4].try_into().map_err(|_| "short udp header")?)
+                        as usize;
                 let max_entries = (buf.len() - 4) / std::mem::size_of::<MibUdpRowOwnerPid>();
                 let safe_entries = num_entries.min(max_entries);
                 let rows_ptr = unsafe { buf.as_ptr().add(4) as *const MibUdpRowOwnerPid };
 
                 for i in 0..safe_entries {
-                    let row = unsafe { *rows_ptr.add(i) };
+                    let row = unsafe { rows_ptr.add(i).read_unaligned() };
                     let pid = row.dw_owning_pid;
                     let local_ip = Ipv4Addr::from(row.dw_local_addr.to_ne_bytes());
                     let local_port = u16::from_be(row.dw_local_port as u16);
 
-                    let proc_name = proc_map.get(&pid).cloned().unwrap_or_else(|| {
-                        if pid == 4 {
-                            "System Core".into()
-                        } else {
-                            format!("PID: {}", pid)
-                        }
-                    });
+                    let proc_name = self.proc_name_for(proc_map, pid);
 
                     list.push(ActiveConnection {
                         process_name: proc_name,
@@ -322,6 +409,67 @@ impl ConnectionTracker {
                         local_addr: format!("{}:{}", local_ip, local_port),
                         remote_addr: "*:*".to_string(),
                         protocol: "UDP".to_string(),
+                        state: "ACTIVE".to_string(),
+                        is_safe: true,
+                    });
+                }
+            }
+        }
+
+        // ---- IPv6 TCP/UDP (AF_INET6 = 23) ----
+        // Attempt IPv6 tables and merge; if the OS has no IPv6 stack or the
+        // call fails, fall back gracefully to the IPv4-only list above.
+        if let Some(buf) = Self::query_raw_table(true, AF_INET6, TCP_TABLE_OWNER_PID_ALL) {
+            if buf.len() >= 4 {
+                let num_entries =
+                    u32::from_ne_bytes(buf[0..4].try_into().unwrap_or([0; 4])) as usize;
+                let max_entries = (buf.len() - 4) / std::mem::size_of::<MibTcp6RowOwnerPid>();
+                let safe_entries = num_entries.min(max_entries);
+                let rows_ptr = unsafe { buf.as_ptr().add(4) as *const MibTcp6RowOwnerPid };
+                for i in 0..safe_entries {
+                    let row = unsafe { rows_ptr.add(i).read_unaligned() };
+                    let pid = row.dw_owning_pid;
+                    let local_ip = Ipv6Addr::from(row.uc_local_addr);
+                    let local_port = u16::from_be(row.dw_local_port as u16);
+                    let remote_ip = Ipv6Addr::from(row.uc_remote_addr);
+                    let remote_port = u16::from_be(row.dw_remote_port as u16);
+                    if remote_ip.is_unspecified() && remote_port == 0 {
+                        continue;
+                    }
+                    let state_str = Self::tcp_state_str(row.dw_state);
+                    let proc_name = self.proc_name_for(proc_map, pid);
+                    let is_safe = evaluate_connection_safety(&proc_name, remote_port);
+                    list.push(ActiveConnection {
+                        process_name: proc_name,
+                        pid,
+                        local_addr: format!("[{}]:{}", local_ip, local_port),
+                        remote_addr: format!("[{}]:{}", remote_ip, remote_port),
+                        protocol: "TCP6".to_string(),
+                        state: state_str.to_string(),
+                        is_safe,
+                    });
+                }
+            }
+        }
+        if let Some(buf) = Self::query_raw_table(false, AF_INET6, UDP_TABLE_OWNER_PID) {
+            if buf.len() >= 4 {
+                let num_entries =
+                    u32::from_ne_bytes(buf[0..4].try_into().unwrap_or([0; 4])) as usize;
+                let max_entries = (buf.len() - 4) / std::mem::size_of::<MibUdp6RowOwnerPid>();
+                let safe_entries = num_entries.min(max_entries);
+                let rows_ptr = unsafe { buf.as_ptr().add(4) as *const MibUdp6RowOwnerPid };
+                for i in 0..safe_entries {
+                    let row = unsafe { rows_ptr.add(i).read_unaligned() };
+                    let pid = row.dw_owning_pid;
+                    let local_ip = Ipv6Addr::from(row.uc_local_addr);
+                    let local_port = u16::from_be(row.dw_local_port as u16);
+                    let proc_name = self.proc_name_for(proc_map, pid);
+                    list.push(ActiveConnection {
+                        process_name: proc_name,
+                        pid,
+                        local_addr: format!("[{}]:{}", local_ip, local_port),
+                        remote_addr: "*:*".to_string(),
+                        protocol: "UDP6".to_string(),
                         state: "ACTIVE".to_string(),
                         is_safe: true,
                     });
@@ -366,6 +514,10 @@ impl ConnectionTracker {
         {
             if let Ok(mut list) = self.get_native_connections(&proc_map) {
                 if list.len() > 150 {
+                    // Prioritize security-relevant rows before truncating so
+                    // ESTABLISHED / SYN_RCVD and unsafe ports are never dropped
+                    // in favour of idle LISTENING sockets.
+                    Self::prioritize_for_truncate(&mut list);
                     list.truncate(150);
                 }
                 if let Ok(mut conns) = self.connections.write() {
@@ -409,10 +561,16 @@ impl ConnectionTracker {
                 }
 
                 if state == "SYN_RCVD" {
-                    if let Some((rip, rport)) = remote.rsplit_once(':') {
-                        if let Ok(port) = rport.parse::<u16>() {
-                            self.security_engine.record_inbound_port_probe(rip, port);
-                        }
+                    // Probe attribution must use the LOCAL listening port, not
+                    // the remote ephemeral source port (matches the native path).
+                    let (rip, _) = remote.rsplit_once(':').unwrap_or_default();
+                    let local_port = local
+                        .rsplit_once(':')
+                        .and_then(|(_, p)| p.parse::<u16>().ok())
+                        .unwrap_or(0);
+                    if !rip.is_empty() && local_port != 0 {
+                        self.security_engine
+                            .record_inbound_port_probe(rip, local_port);
                     }
                 }
 
@@ -447,9 +605,8 @@ impl ConnectionTracker {
                 let pid_str = parts[3];
                 let pid: u32 = pid_str.parse().unwrap_or(0);
 
-                if remote == "*:*" {
-                    continue;
-                }
+                // Do not skip `*:*` for UDP — netstat almost always shows that
+                // for UDP listeners, and skipping them emptied the UDP list.
 
                 let proc_name = proc_map.get(&pid).cloned().unwrap_or_else(|| {
                     if pid == 4 {
@@ -472,6 +629,7 @@ impl ConnectionTracker {
         }
 
         if list.len() > 150 {
+            Self::prioritize_for_truncate(&mut list);
             list.truncate(150);
         }
 

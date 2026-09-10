@@ -4,16 +4,17 @@ import {
     DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem,
     AttackHistoryItem, CameraItem, BehaviorProfileItem, DnsBenchmarkItem,
     PingResultItem, NetworkHealthReport,
-    RamProcessItem,
+    RamProcessItem, FileScanFindingItem, FileScanResult,
 } from "common.slint";
 import { TabButton, StatCard } from "widgets.slint";
 import { RamMapTab } from "rammap.slint";
+import { FileAnalyzerTab } from "file_analyzer.slint";
 
 export { I18n }
 export { NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry }
 export { DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem }
 export { AttackHistoryItem, CameraItem, BehaviorProfileItem, DnsBenchmarkItem }
-export { PingResultItem, NetworkHealthReport, RamProcessItem }
+export { PingResultItem, NetworkHealthReport, RamProcessItem, FileScanFindingItem, FileScanResult }
 
 component LanDeviceRow inherits Rectangle {
     in property <NetworkDevice> device;
@@ -151,7 +152,7 @@ component DnsBenchmarkRow inherits Rectangle {
                 padding-left: 8px;
                 padding-right: 8px;
                 alignment: center;
-                Text { text: I18n.t("⚡ NHANH NHẤT", "⚡ FASTEST", "⚡ 最快"); font-size: 10px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
+                Text { text: I18n.t4("⚡ NHANH NHẤT", "⚡ FASTEST", "⚡ 最快", "⚡ САМЫЙ БЫСТРЫЙ"); font-size: 10px; font-weight: 800; color: #ffffff; vertical-alignment: center; }
             }
         }
 
@@ -349,9 +350,20 @@ export component AppWindow inherits Window {
     in-out property <bool> ram-is-busy: false;
     in-out property <bool> ram-auto-clean: false;
     in-out property <int> ram-threat-count: 0;
+    in-out property <int> ram-auto-clean-threshold-mb: 512;
     callback ram-empty(int);
     callback ram-scan-memory();
     callback ram-toggle-auto-clean(bool);
+    callback ram-set-auto-clean-threshold(int);
+    callback ram-terminate-process(int);
+    callback ram-open-process-folder(string);
+
+    in-out property <FileScanResult> file-scan-result;
+    in-out property <[FileScanFindingItem]> file-scan-findings;
+    in-out property <bool> file-scan-is-busy: false;
+    in-out property <string> file-scan-status: "";
+    callback pick-file-and-scan();
+    callback rescan-current-file();
 
     in-out property <bool> attack-modal-open: false;
     in-out property <int> attack-modal-tab: 2;
@@ -685,56 +697,63 @@ export component AppWindow inherits Window {
             height: 38px;
 
             TabButton {
-                text: I18n.t("📊 Tổng quan", "📊 Overview", "📊 总览");
+                text: I18n.t4("📊 Tổng quan", "📊 Overview", "📊 总览", "📊 Обзор");
                 active: root.active-tab == 0;
                 active-color: #38bdf8;
                 clicked => { root.active-tab = 0; }
             }
 
             TabButton {
-                text: I18n.t("🛡 An ninh", "🛡 Security", "🛡 安全");
+                text: I18n.t4("🛡 An ninh", "🛡 Security", "🛡 安全", "🛡 Безопасность");
                 active: root.active-tab == 1;
                 active-color: #34d399;
                 clicked => { root.active-tab = 1; }
             }
 
             TabButton {
-                text: I18n.t("🚀 Giám sát", "🚀 Monitor & Logs", "🚀 监控与日志");
+                text: I18n.t4("🚀 Giám sát", "🚀 Monitor & Logs", "🚀 监控与日志", "🚀 Мониторинг");
                 active: root.active-tab == 2;
                 active-color: #a78bfa;
                 clicked => { root.active-tab = 2; }
             }
 
             TabButton {
-                text: I18n.t("🚫 Bộ lọc", "🚫 Filter Rules", "🚫 过滤规则");
+                text: I18n.t4("🚫 Bộ lọc", "🚫 Filter Rules", "🚫 过滤规则", "🚫 Фильтры");
                 active: root.active-tab == 3;
                 active-color: #f87171;
                 clicked => { root.active-tab = 3; }
             }
 
             TabButton {
-                text: I18n.t("⚙ Cài đặt", "⚙ Settings", "⚙ 设置");
+                text: I18n.t4("⚙ Cài đặt", "⚙ Settings", "⚙ 设置", "⚙ Настройки");
                 active: root.active-tab == 4;
                 active-color: #38bdf8;
                 clicked => { root.active-tab = 4; }
             }
 
             TabButton {
-                text: I18n.t("🩺 Chẩn đoán", "🩺 Diagnostics", "🩺 网络诊断");
+                text: I18n.t4("🩺 Chẩn đoán", "🩺 Diagnostics", "🩺 网络诊断", "🩺 Диагностика");
                 active: root.active-tab == 6;
                 active-color: #38bdf8;
                 clicked => { root.active-tab = 6; }
             }
 
             TabButton {
-                text: I18n.t("🧠 RAM Map", "🧠 RAM Map", "🧠 内存图谱");
+                text: I18n.t4("🧠 RAM Map", "🧠 RAM Map", "🧠 内存图谱", "🧠 Карта RAM");
                 active: root.active-tab == 7;
                 active-color: #f472b6;
                 clicked => { root.active-tab = 7; }
             }
 
+            TabButton {
+                text: I18n.t4("🔬 Soi Tệp (Beta)", "🔬 File Scan (Beta)", "🔬 文件分析 (Beta)", "🔬 Анализ файлов (Beta)");
+                active: root.active-tab == 8;
+                active-color: #fb923c;
+                clicked => { root.active-tab = 8; }
+            }
+
             if root.is-admin-edition : TabButton {
-                text: I18n.t("👑 Quản trị Admin", "👑 Admin Suite", "👑 管理员套件");
+                text: I18n.t4("👑 Quản trị Admin", "👑 Admin Suite", "👑 管理员套件", "👑 Панель Admin");
                 active: root.active-tab == 5;
                 active-color: #c084fc;
                 clicked => { root.active-tab = 5; }
@@ -1596,8 +1615,8 @@ export component AppWindow inherits Window {
                                 }
                                 Button {
                                     horizontal-stretch: 1;
-                                    text: I18n.lang == 0 ? "🌐 Tiếng Việt ➜ English" : (I18n.lang == 1 ? "🌐 English ➜ 中文" : "🌐 中文 ➜ Tiếng Việt");
-                                    clicked => { root.change-language(I18n.lang == 0 ? "en" : (I18n.lang == 1 ? "zh" : "vi")); }
+                                    text: I18n.lang == 0 ? "🌐 Tiếng Việt ➜ English" : (I18n.lang == 1 ? "🌐 English ➜ 中文" : (I18n.lang == 2 ? "🌐 中文 ➜ Русский" : "🌐 Русский ➜ Tiếng Việt"));
+                                    clicked => { root.change-language(I18n.lang == 0 ? "en" : (I18n.lang == 1 ? "zh" : (I18n.lang == 2 ? "ru" : "vi"))); }
                                 }
                             }
 
@@ -2055,20 +2074,20 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: 10px;
                         Button {
-                            text: root.active-diag-view == 0 ? (I18n.t("● ⚡ Đo Tốc Độ DNS", "● ⚡ DNS Benchmark", "● ⚡ DNS 测速")) : (I18n.t("⚡ Đo Tốc Độ DNS", "⚡ DNS Benchmark", "⚡ DNS 测速"));
+                            text: root.active-diag-view == 0 ? (I18n.t4("● ⚡ Đo Tốc Độ DNS", "● ⚡ DNS Benchmark", "● ⚡ DNS 测速", "● ⚡ Тест DNS")) : (I18n.t4("⚡ Đo Tốc Độ DNS", "⚡ DNS Benchmark", "⚡ DNS 测速", "⚡ Тест DNS"));
                             clicked => { root.active-diag-view = 0; }
                         }
                         Button {
-                            text: root.active-diag-view == 1 ? (I18n.t("● 🚀 Test Tốc Độ", "● 🚀 Speed Test", "● 🚀 测速")) : (I18n.t("🚀 Test Tốc Độ", "🚀 Speed Test", "🚀 测速"));
+                            text: root.active-diag-view == 1 ? (I18n.t4("● 🚀 Test Tốc Độ", "● 🚀 Speed Test", "● 🚀 测速", "● 🚀 Тест скорости")) : (I18n.t4("🚀 Test Tốc Độ", "🚀 Speed Test", "🚀 测速", "🚀 Тест скорости"));
                             clicked => { root.active-diag-view = 1; }
                         }
                         Button {
-                            text: root.active-diag-view == 2 ? (I18n.t("● 🩺 Đo Ping & Sức Khỏe Mạng", "● 🩺 Ping & Health", "● 🩺 Ping 与健康")) : (I18n.t("🩺 Đo Ping & Sức Khỏe Mạng", "🩺 Ping & Health", "🩺 Ping 与健康"));
+                            text: root.active-diag-view == 2 ? (I18n.t4("● 🩺 Đo Ping & Sức Khỏe Mạng", "● 🩺 Ping & Health", "● 🩺 Ping 与健康", "● 🩺 Ping и здоровье сети")) : (I18n.t4("🩺 Đo Ping & Sức Khỏe Mạng", "🩺 Ping & Health", "🩺 Ping 与健康", "🩺 Ping и здоровье сети"));
                             clicked => { root.active-diag-view = 2; }
                         }
                         Rectangle { horizontal-stretch: 1; }
                         Text {
-                            text: root.active-diag-view == 0 ? (I18n.t("So sánh tốc độ phân giải DNS với các máy chủ công cộng lớn nhất thế giới:", "Benchmark DNS resolution speeds against major global upstream servers:", "与全球顶级上游公共 DNS 服务器对比解析速度:")) : (root.active-diag-view == 1 ? (I18n.t("Đo tốc độ tải xuống / tải lên Internet qua kết nối đang dùng (Cloudflare):", "Measure Internet download / upload speed on the active connection (Cloudflare):", "测量当前连接的互联网下载 / 上传速度（Cloudflare）:")) : (I18n.t("Đo độ trễ Ping, Jitter, Packet Loss và kiểm tra sức khỏe mạng toàn diện:", "Test Ping latency, Jitter, Packet Loss, and full network connectivity health:", "测试 Ping 延迟、抖动、丢包率及全方位网络连接健康:")));
+                            text: root.active-diag-view == 0 ? (I18n.t4("So sánh tốc độ phân giải DNS với các máy chủ công cộng lớn nhất thế giới:", "Benchmark DNS resolution speeds against major global upstream servers:", "与全球顶级上游公共 DNS 服务器对比解析速度:", "Сравнить скорость разрешения DNS с ведущими мировыми серверами:")) : (root.active-diag-view == 1 ? (I18n.t4("Đo tốc độ tải xuống / tải lên Internet qua kết nối đang dùng (Cloudflare):", "Measure Internet download / upload speed on the active connection (Cloudflare):", "测量当前连接的互联网下载 / 上传速度（Cloudflare）:", "Измерение скорости загрузки и отдачи интернета (Cloudflare):")) : (I18n.t4("Đo độ trễ Ping, Jitter, Packet Loss và kiểm tra sức khỏe mạng toàn diện:", "Test Ping latency, Jitter, Packet Loss, and full network connectivity health:", "测试 Ping 延迟、抖动、丢包率及全方位网络连接健康:", "Проверка задержки Ping, джиттера, потерь и здоровья сети:")));
                             font-size: 12px;
                             font-weight: 600;
                             color: #94a3b8;
@@ -2100,7 +2119,7 @@ export component AppWindow inherits Window {
                             spacing: 10px;
                             height: 38px;
                             Text {
-                                text: I18n.t("Tên miền kiểm tra:", "Benchmark Domain:", "测试域名:");
+                                text: I18n.t4("Tên miền kiểm tra:", "Benchmark Domain:", "测试域名:", "Тестовый домен:");
                                 font-size: 13px;
                                 font-weight: 700;
                                 color: #cbd5e1;
@@ -2112,7 +2131,7 @@ export component AppWindow inherits Window {
                                 horizontal-stretch: 1;
                             }
                             Button {
-                                text: root.is-running-benchmark ? (I18n.t("⏳ Đang kiểm tra…", "⏳ Testing…", "⏳ 正在测试…")) : (I18n.t("🚀 Bắt đầu Benchmark", "🚀 Run Benchmark", "🚀 开始测速"));
+                                text: root.is-running-benchmark ? (I18n.t4("⏳ Đang kiểm tra…", "⏳ Testing…", "⏳ 正在测试…", "⏳ Проверка…")) : (I18n.t4("🚀 Bắt đầu Benchmark", "🚀 Run Benchmark", "🚀 开始测速", "🚀 Начать тест"));
                                 clicked => {
                                     if !root.is-running-benchmark {
                                         root.is-running-benchmark = true;
@@ -2123,7 +2142,7 @@ export component AppWindow inherits Window {
                         }
 
                         if root.dns-benchmarks.length == 0 : Text {
-                            text: I18n.t("Bấm '🚀 Bắt đầu Benchmark' để đo độ trễ các máy chủ DNS phổ biến.", "Click '🚀 Run Benchmark' to test response times of popular DNS servers.", "点击'🚀 开始测速'测试常用 DNS 服务器的响应时间。");
+                            text: I18n.t4("Bấm '🚀 Bắt đầu Benchmark' để đo độ trễ các máy chủ DNS phổ biến.", "Click '🚀 Run Benchmark' to test response times of popular DNS servers.", "点击'🚀 开始测速'测试常用 DNS 服务器的响应时间。", "Нажмите '🚀 Начать тест' для замера отклика популярных DNS-серверов.");
                             font-size: 12px;
                             color: #64748b;
                             horizontal-alignment: center;
@@ -2146,7 +2165,7 @@ export component AppWindow inherits Window {
                             height: 38px;
                             Rectangle { horizontal-stretch: 1; }
                             Button {
-                                text: root.is-running-speed ? (I18n.t("⏳ Đang đo…", "⏳ Testing…", "⏳ 正在测速…")) : (I18n.t("🚀 Bắt Đầu Test Tốc Độ", "🚀 Run Speed Test", "🚀 开始测速"));
+                                text: root.is-running-speed ? (I18n.t4("⏳ Đang đo…", "⏳ Testing…", "⏳ 正在测速…", "⏳ Замер…")) : (I18n.t4("🚀 Bắt Đầu Test Tốc Độ", "🚀 Run Speed Test", "🚀 开始测速", "🚀 Тест скорости"));
                                 clicked => {
                                     if !root.is-running-speed {
                                         root.is-running-speed = true;
@@ -2169,7 +2188,7 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     padding: 10px;
                                     alignment: center;
-                                    Text { text: I18n.t("TẢI XUỐNG (DOWNLOAD)", "DOWNLOAD", "下载"); font-size: 10px; font-weight: 700; color: #34d399; }
+                                    Text { text: I18n.t4("TẢI XUỐNG (DOWNLOAD)", "DOWNLOAD", "下载", "СКАЧИВАНИЕ"); font-size: 10px; font-weight: 700; color: #34d399; }
                                     Text { text: root.speed-download >= 0 ? (root.speed-download + " Mbps") : "—"; font-size: 24px; font-weight: 800; color: #34d399; }
                                 }
                             }
@@ -2183,7 +2202,7 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     padding: 10px;
                                     alignment: center;
-                                    Text { text: I18n.t("TẢI LÊN (UPLOAD)", "UPLOAD", "上传"); font-size: 10px; font-weight: 700; color: #38bdf8; }
+                                    Text { text: I18n.t4("TẢI LÊN (UPLOAD)", "UPLOAD", "上传", "ОТДАЧА"); font-size: 10px; font-weight: 700; color: #38bdf8; }
                                     Text { text: root.speed-upload >= 0 ? (root.speed-upload + " Mbps") : "—"; font-size: 24px; font-weight: 800; color: #38bdf8; }
                                 }
                             }
@@ -2197,7 +2216,7 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     padding: 10px;
                                     alignment: center;
-                                    Text { text: I18n.t("ĐỘ TRỄ (PING)", "PING LATENCY", "延迟"); font-size: 10px; font-weight: 700; color: #a78bfa; }
+                                    Text { text: I18n.t4("ĐỘ TRỄ (PING)", "PING LATENCY", "延迟", "ЗАДЕРЖКА"); font-size: 10px; font-weight: 700; color: #a78bfa; }
                                     Text { text: root.speed-ping-ms >= 0 ? (root.speed-ping-ms + " ms") : "—"; font-size: 24px; font-weight: 800; color: #c084fc; }
                                 }
                             }
@@ -2213,7 +2232,7 @@ export component AppWindow inherits Window {
                                 padding: 10px;
                                 spacing: 6px;
                                 Text {
-                                    text: root.speed-detail != "" ? root.speed-detail : I18n.t("Bấm '🚀 Bắt Đầu Test Tốc Độ' để đo. Kết quả chi tiết sẽ hiển thị tại đây.", "Press '🚀 Run Speed Test' to measure. Detailed progress will appear here.", "点击'🚀 开始测速'进行测量。详细进度将在此处显示。");
+                                    text: root.speed-detail != "" ? root.speed-detail : I18n.t4("Bấm '🚀 Bắt Đầu Test Tốc Độ' để đo. Kết quả chi tiết sẽ hiển thị tại đây.", "Press '🚀 Run Speed Test' to measure. Detailed progress will appear here.", "点击'🚀 开始测速'进行测量。详细进度将在此处显示。", "Нажмите '🚀 Тест скорости' для измерения. Подробности будут здесь.");
                                     font-size: 11px;
                                     color: #94a3b8;
                                     wrap: word-wrap;
@@ -2230,7 +2249,7 @@ export component AppWindow inherits Window {
                             spacing: 10px;
                             height: 38px;
                             Text {
-                                text: I18n.t("Mục tiêu:", "Target:", "目标:");
+                                text: I18n.t4("Mục tiêu:", "Target:", "目标:", "Цель:");
                                 font-size: 13px;
                                 font-weight: 700;
                                 color: #cbd5e1;
@@ -2250,7 +2269,7 @@ export component AppWindow inherits Window {
                                 clicked => { root.ping-target-input = "8.8.8.8"; }
                             }
                             Button {
-                                text: root.is-running-ping ? (I18n.t("⏳ Đang Ping…", "⏳ Pinging…", "⏳ 正在 Ping…")) : (I18n.t("🚀 Đo Ping", "🚀 Run Ping", "🚀 开始 Ping"));
+                                text: root.is-running-ping ? (I18n.t4("⏳ Đang Ping…", "⏳ Pinging…", "⏳ 正在 Ping…", "⏳ Ping…")) : (I18n.t4("🚀 Đo Ping", "🚀 Run Ping", "🚀 开始 Ping", "🚀 Измерить Ping"));
                                 clicked => {
                                     if !root.is-running-ping {
                                         root.is-running-ping = true;
@@ -2259,7 +2278,7 @@ export component AppWindow inherits Window {
                                 }
                             }
                             Button {
-                                text: root.is-running-health ? (I18n.t("⏳ Đang kiểm tra…", "⏳ Checking…", "⏳ 正在检查…")) : (I18n.t("🩺 Kiểm Tra Sức Khỏe Mạng", "🩺 Check Health", "🩺 检查健康"));
+                                text: root.is-running-health ? (I18n.t4("⏳ Đang kiểm tra…", "⏳ Checking…", "⏳ 正在检查…", "⏳ Проверка…")) : (I18n.t4("🩺 Kiểm Tra Sức Khỏe Mạng", "🩺 Check Health", "🩺 检查健康", "🩺 Здоровье сети"));
                                 clicked => {
                                     if !root.is-running-health {
                                         root.is-running-health = true;
@@ -2282,7 +2301,7 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     padding: 8px;
                                     alignment: center;
-                                    Text { text: I18n.t("MIN PING", "MIN PING", "最小延迟"); font-size: 10px; font-weight: 700; color: #34d399; }
+                                    Text { text: I18n.t4("MIN PING", "MIN PING", "最小延迟", "МИН PING"); font-size: 10px; font-weight: 700; color: #34d399; }
                                     Text { text: root.ping-result.min-ms >= 0 ? (root.ping-result.min-ms + " ms") : "—"; font-size: 20px; font-weight: 800; color: #34d399; }
                                 }
                             }
@@ -2296,7 +2315,7 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     padding: 8px;
                                     alignment: center;
-                                    Text { text: I18n.t("AVG PING", "AVG PING", "平均延迟"); font-size: 10px; font-weight: 700; color: #38bdf8; }
+                                    Text { text: I18n.t4("AVG PING", "AVG PING", "平均延迟", "СРЕДН PING"); font-size: 10px; font-weight: 700; color: #38bdf8; }
                                     Text { text: root.ping-result.avg-ms >= 0 ? (root.ping-result.avg-ms + " ms") : "—"; font-size: 20px; font-weight: 800; color: #38bdf8; }
                                 }
                             }
@@ -2310,7 +2329,7 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     padding: 8px;
                                     alignment: center;
-                                    Text { text: I18n.t("MAX PING", "MAX PING", "最大延迟"); font-size: 10px; font-weight: 700; color: #fbbf24; }
+                                    Text { text: I18n.t4("MAX PING", "MAX PING", "最大延迟", "МАКС PING"); font-size: 10px; font-weight: 700; color: #fbbf24; }
                                     Text { text: root.ping-result.max-ms >= 0 ? (root.ping-result.max-ms + " ms") : "—"; font-size: 20px; font-weight: 800; color: #fbbf24; }
                                 }
                             }
@@ -2324,7 +2343,7 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     padding: 8px;
                                     alignment: center;
-                                    Text { text: I18n.t("JITTER (ĐỘ LỆCH)", "JITTER", "抖动"); font-size: 10px; font-weight: 700; color: #c084fc; }
+                                    Text { text: I18n.t4("JITTER (ĐỘ LỆCH)", "JITTER", "抖动", "ДЖИТТЕР"); font-size: 10px; font-weight: 700; color: #c084fc; }
                                     Text { text: root.ping-result.min-ms >= 0 ? (root.ping-result.jitter-ms + " ms") : "—"; font-size: 20px; font-weight: 800; color: #c084fc; }
                                 }
                             }
@@ -2338,7 +2357,7 @@ export component AppWindow inherits Window {
                                 VerticalLayout {
                                     padding: 8px;
                                     alignment: center;
-                                    Text { text: I18n.t("RỚT GÓI (LOSS)", "PACKET LOSS", "丢包率"); font-size: 10px; font-weight: 700; color: root.ping-result.loss-pct > 0 ? #ef4444 : #34d399; }
+                                    Text { text: I18n.t4("RỚT GÓI (LOSS)", "PACKET LOSS", "丢包率", "ПОТЕРИ ПАКЕТОВ"); font-size: 10px; font-weight: 700; color: root.ping-result.loss-pct > 0 ? #ef4444 : #34d399; }
                                     Text { text: root.ping-result.min-ms >= 0 ? (root.ping-result.loss-pct + "%") : "—"; font-size: 20px; font-weight: 800; color: root.ping-result.loss-pct > 0 ? #ef4444 : #34d399; }
                                 }
                             }
@@ -2372,7 +2391,7 @@ export component AppWindow inherits Window {
                                 spacing: 10px;
 
                                 Text {
-                                    text: I18n.t("🩺 BÁO CÁO SỨC KHỎE MẠNG TOÀN DIỆN (4 LỚP KIỂM TRA)", "🩺 FULL NETWORK HEALTH REPORT (4-STAGE DIAGNOSTICS)", "🩺 全方位网络健康报告 (4层检查)");
+                                    text: I18n.t4("🩺 BÁO CÁO SỨC KHỎE MẠNG TOÀN DIỆN (4 LỚP KIỂM TRA)", "🩺 FULL NETWORK HEALTH REPORT (4-STAGE DIAGNOSTICS)", "🩺 全方位网络健康报告 (4层检查)", "🩺 ОТЧЕТ О ЗДОРОВЬЕ СЕТИ (4 УРОВНЯ ПРОВЕРКИ)");
                                     font-size: 12px;
                                     font-weight: 800;
                                     color: #38bdf8;
@@ -2391,7 +2410,7 @@ export component AppWindow inherits Window {
                                         VerticalLayout {
                                             padding: 8px;
                                             alignment: center;
-                                            Text { text: I18n.t("1. ROUTER GATEWAY", "1. ROUTER GATEWAY", "1. 局域网网关"); font-size: 10px; font-weight: 700; color: #94a3b8; }
+                                            Text { text: I18n.t4("1. ROUTER GATEWAY", "1. ROUTER GATEWAY", "1. 局域网网关", "1. ШЛЮЗ РОУТЕРА"); font-size: 10px; font-weight: 700; color: #94a3b8; }
                                             Text { text: root.health-report.gateway-status; font-size: 13px; font-weight: 800; color: #34d399; }
                                         }
                                     }
@@ -2405,7 +2424,7 @@ export component AppWindow inherits Window {
                                         VerticalLayout {
                                             padding: 8px;
                                             alignment: center;
-                                            Text { text: I18n.t("2. PHÂN GIẢI DNS", "2. DNS RESOLUTION", "2. DNS 解析"); font-size: 10px; font-weight: 700; color: #94a3b8; }
+                                            Text { text: I18n.t4("2. PHÂN GIẢI DNS", "2. DNS RESOLUTION", "2. DNS 解析", "2. РАЗРЕШЕНИЕ DNS"); font-size: 10px; font-weight: 700; color: #94a3b8; }
                                             Text { text: root.health-report.dns-status; font-size: 13px; font-weight: 800; color: #38bdf8; }
                                         }
                                     }
@@ -2419,7 +2438,7 @@ export component AppWindow inherits Window {
                                         VerticalLayout {
                                             padding: 8px;
                                             alignment: center;
-                                            Text { text: I18n.t("3. KẾT NỐI INTERNET", "3. GLOBAL INTERNET", "3. 全球互联网"); font-size: 10px; font-weight: 700; color: #94a3b8; }
+                                            Text { text: I18n.t4("3. KẾT NỐI INTERNET", "3. GLOBAL INTERNET", "3. 全球互联网", "3. ВЫХОД В ИНТЕРНЕТ"); font-size: 10px; font-weight: 700; color: #94a3b8; }
                                             Text { text: root.health-report.internet-status; font-size: 13px; font-weight: 800; color: #a78bfa; }
                                         }
                                     }
@@ -2433,7 +2452,7 @@ export component AppWindow inherits Window {
                                         VerticalLayout {
                                             padding: 8px;
                                             alignment: center;
-                                            Text { text: I18n.t("4. ĐỘ ỔN ĐỊNH", "4. STABILITY & JITTER", "4. 稳定性与抖动"); font-size: 10px; font-weight: 700; color: #94a3b8; }
+                                            Text { text: I18n.t4("4. ĐỘ ỔN ĐỊNH", "4. STABILITY & JITTER", "4. 稳定性与抖动", "4. СТАБИЛЬНОСТЬ И ДЖИТТЕР"); font-size: 10px; font-weight: 700; color: #94a3b8; }
                                             Text { text: root.health-report.stability-status; font-size: 13px; font-weight: 800; color: #fbbf24; }
                                         }
                                     }
@@ -2447,14 +2466,14 @@ export component AppWindow inherits Window {
                                         VerticalLayout {
                                             padding: 6px;
                                             alignment: center;
-                                            Text { text: I18n.t("ĐIỂM MẠNG", "SCORE", "评分"); font-size: 9px; font-weight: 800; color: #e2e8f0; horizontal-alignment: center; }
+                                            Text { text: I18n.t4("ĐIỂM MẠNG", "SCORE", "评分", "БАЛЛ"); font-size: 9px; font-weight: 800; color: #e2e8f0; horizontal-alignment: center; }
                                             Text { text: root.health-report.summary-score + "/100"; font-size: 18px; font-weight: 800; color: #ffffff; horizontal-alignment: center; }
                                         }
                                     }
                                 }
 
                                 Text {
-                                    text: root.health-report.overall-text != "" ? root.health-report.overall-text : I18n.t("Bấm '🩺 Kiểm Tra Sức Khỏe Mạng' để quét tự động 4 chặng kết nối.", "Click '🩺 Check Network Health' to automatically verify 4 network stages.", "点击'🩺 检查网络健康'自动检测 4 个网络阶段。");
+                                    text: root.health-report.overall-text != "" ? root.health-report.overall-text : I18n.t4("Bấm '🩺 Kiểm Tra Sức Khỏe Mạng' để quét tự động 4 chặng kết nối.", "Click '🩺 Check Network Health' to automatically verify 4 network stages.", "点击'🩺 检查网络健康'自动检测 4 个网络阶段。", "Нажмите '🩺 Здоровье сети' для автоматической 4-этапной диагностики.");
                                     font-size: 12px;
                                     color: #94a3b8;
                                     wrap: word-wrap;
@@ -2492,10 +2511,30 @@ export component AppWindow inherits Window {
                     threat-count: root.ram-threat-count;
                     empty-op(idx) => {
                         root.ram-empty(idx);
-                        return true;
                     }
                     scan-memory => { root.ram-scan-memory(); }
                     toggle-auto-clean(on) => { root.ram-toggle-auto-clean(on); }
+                    auto-clean-threshold-mb: root.ram-auto-clean-threshold-mb;
+                    set-auto-clean-threshold(th) => { root.ram-set-auto-clean-threshold(th); }
+                    terminate-process(pid) => { root.ram-terminate-process(pid); }
+                    open-process-folder(path) => { root.ram-open-process-folder(path); }
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.active-tab == 8;
+
+                FileAnalyzerTab {
+                    result: root.file-scan-result;
+                    findings: root.file-scan-findings;
+                    is-scanning: root.file-scan-is-busy;
+                    scan-status: root.file-scan-status;
+                    pick-file-and-scan => { root.pick-file-and-scan(); }
+                    rescan-current-file => { root.rescan-current-file(); }
                 }
             }
         }

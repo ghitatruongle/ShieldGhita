@@ -8,6 +8,7 @@ use std::sync::RwLock;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StatsFile {
     day: String,
+    /// ISO week combined with year so year-boundary rollover is unambiguous.
     week: u32,
     day_count: u64,
     week_count: u64,
@@ -23,6 +24,7 @@ pub struct BlockStats {
     week_count: AtomicU64,
     dirty: AtomicBool,
     path: PathBuf,
+    last_period_check: RwLock<std::time::Instant>,
 }
 
 impl BlockStats {
@@ -31,7 +33,10 @@ impl BlockStats {
     }
 
     fn week_key() -> u32 {
-        Local::now().iso_week().week()
+        // Pack year and ISO week so week 1 of 2026 != week 1 of 2025.
+        let now = Local::now();
+        let iso = now.iso_week();
+        (iso.year() as u32) * 100 + iso.week()
     }
 
     fn default_path() -> PathBuf {
@@ -69,12 +74,34 @@ impl BlockStats {
             week_count: AtomicU64::new(week_count),
             dirty: AtomicBool::new(false),
             path: path.to_path_buf(),
+            // Start in the past so the first roll check always runs.
+            last_period_check: RwLock::new(
+                std::time::Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(2))
+                    .unwrap_or_else(std::time::Instant::now),
+            ),
         }
     }
 
     /// Roll both counters over when the calendar day / ISO week changed.
-    /// Cheap enough to run on every block hit and on every UI read.
+    /// Cached day/week strings are re-checked at most once per second so
+    /// hot paths (every block hit / UI read) stay cheap.
     fn roll_if_new_period(&self) {
+        // Throttle: Local::now() + format is ~µs each; at thousands of
+        // blocks/sec that adds up. 1s staleness on midnight rollover is fine.
+        if let Ok(last) = self.last_period_check.read() {
+            if last.elapsed() < std::time::Duration::from_secs(1) {
+                return;
+            }
+        }
+        if let Ok(mut last) = self.last_period_check.write() {
+            if last.elapsed() < std::time::Duration::from_secs(1) {
+                return;
+            }
+            *last = std::time::Instant::now();
+        } else {
+            return;
+        }
         let today = Self::today_key();
         let week = Self::week_key();
 
@@ -131,7 +158,16 @@ impl BlockStats {
         }
         match serde_json::to_string(&snapshot) {
             Ok(json) => {
-                let _ = std::fs::write(&self.path, json);
+                // Atomic write: tmp + rename so a crash cannot leave a
+                // truncated block_stats.json.
+                let tmp = self.path.with_extension("json.tmp");
+                if std::fs::write(&tmp, json).is_ok() {
+                    if std::fs::rename(&tmp, &self.path).is_err() {
+                        self.dirty.store(true, Ordering::Relaxed);
+                    }
+                } else {
+                    self.dirty.store(true, Ordering::Relaxed);
+                }
             }
             Err(_) => {
                 self.dirty.store(true, Ordering::Relaxed);
@@ -194,6 +230,9 @@ mod tests {
 
         // Simulate midnight passing while staying inside the same ISO week.
         *stats.current_day.write().unwrap() = "2000-01-01".to_string();
+        // Bypass the 1s roll throttle so the simulated midnight is observed.
+        *stats.last_period_check.write().unwrap() =
+            std::time::Instant::now() - std::time::Duration::from_secs(2);
         assert_eq!(stats.day_count(), 0, "day counter must reset on new day");
         assert!(
             stats.week_count() >= 2,
@@ -207,6 +246,8 @@ mod tests {
         // Simulate a new ISO week as well.
         let real_week = BlockStats::week_key();
         *stats.current_week.write().unwrap() = real_week.wrapping_add(53);
+        *stats.last_period_check.write().unwrap() =
+            std::time::Instant::now() - std::time::Duration::from_secs(2);
         assert_eq!(stats.week_count(), 0, "week counter must reset on new week");
 
         let _ = std::fs::remove_dir_all(&dir);

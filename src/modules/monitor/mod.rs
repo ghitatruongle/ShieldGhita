@@ -91,11 +91,25 @@ impl NetworkMonitor {
 
     fn load_logs_from_disk(&self) {
         if self.log_file_path.exists() {
+            // Size cap: never read a multi-GB corrupt log into memory.
+            const MAX_LOG_FILE_BYTES: u64 = 8 * 1024 * 1024;
+            if let Ok(meta) = fs::metadata(&self.log_file_path) {
+                if meta.len() > MAX_LOG_FILE_BYTES {
+                    warn!(
+                        "dns_log.json is {} bytes (>8MB); skipping load to protect memory",
+                        meta.len()
+                    );
+                    return;
+                }
+            }
             match fs::read_to_string(&self.log_file_path) {
                 Ok(content) => {
                     if let Ok(entries) = serde_json::from_str::<Vec<LogEntry>>(&content) {
                         if let Ok(mut logs) = self.logs.write() {
-                            *logs = entries.into();
+                            // Cap restored logs so a huge/corrupt file cannot
+                            // bloat startup memory beyond max_logs.
+                            let start = entries.len().saturating_sub(self.max_logs);
+                            *logs = entries.into_iter().skip(start).collect();
                             info!("Loaded {} log entries from disk", logs.len());
                         }
                     }
@@ -110,7 +124,12 @@ impl NetworkMonitor {
             let snapshot: Vec<LogEntry> = logs.iter().cloned().collect();
             match serde_json::to_string(&snapshot) {
                 Ok(json) => {
-                    let _ = fs::write(&self.log_file_path, json);
+                    // Atomic write: temp + rename so a crash mid-write cannot
+                    // leave a truncated dns_log.json.
+                    let tmp = self.log_file_path.with_extension("json.tmp");
+                    if fs::write(&tmp, &json).is_ok() {
+                        let _ = fs::rename(&tmp, &self.log_file_path);
+                    }
                 }
                 Err(e) => warn!("Failed to serialize logs: {}", e),
             }
@@ -133,6 +152,11 @@ impl NetworkMonitor {
             while logs.len() > self.max_logs {
                 logs.pop_back();
             }
+        }
+        // Invalidate the filtered snapshot so get_logs() does not serve a
+        // stale list that omits this new entry until the filter is reapplied.
+        if let Ok(mut fc) = self.filtered_cache.write() {
+            *fc = None;
         }
         let _ = self.logs_version.fetch_add(1, Ordering::Relaxed);
     }
@@ -200,13 +224,37 @@ impl NetworkMonitor {
         self.save_logs_to_disk();
     }
 
+    fn csv_escape(field: &str) -> String {
+        // RFC4180 + Excel formula-injection guard (=, +, -, @, tab, CR).
+        let risky = field
+            .chars()
+            .next()
+            .map(|c| matches!(c, '=' | '+' | '-' | '@' | '\t' | '\r'))
+            .unwrap_or(false);
+        let mut s = field.replace('"', "\"\"");
+        if risky {
+            s = format!("'{}", s);
+        }
+        format!("\"{}\"", s)
+    }
+
     pub fn export_logs_csv(&self) -> Result<String, String> {
-        let logs = self.logs.read().map_err(|e| e.to_string())?;
+        // Clone under the lock, then release before doing file I/O so the
+        // RwLock is never held across a blocking write.
+        let snapshot: Vec<LogEntry> = self
+            .logs
+            .read()
+            .map(|logs| logs.iter().cloned().collect())
+            .map_err(|e| e.to_string())?;
+        let count = snapshot.len();
         let mut csv = String::from("timestamp,domain,source_ip,is_blocked\n");
-        for l in logs.iter() {
+        for l in snapshot.iter() {
             csv.push_str(&format!(
                 "{},{},{},{}\n",
-                l.timestamp, l.domain, l.source_ip, l.is_blocked
+                Self::csv_escape(&l.timestamp),
+                Self::csv_escape(&l.domain),
+                Self::csv_escape(&l.source_ip),
+                l.is_blocked
             ));
         }
         let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
@@ -215,7 +263,7 @@ impl NetworkMonitor {
             Local::now().format("%Y%m%d_%H%M%S")
         ));
         fs::write(&export_path, &csv).map_err(|e| e.to_string())?;
-        info!("Exported {} log entries to {:?}", logs.len(), export_path);
+        info!("Exported {} log entries to {:?}", count, export_path);
         Ok(export_path.to_string_lossy().to_string())
     }
 
@@ -347,7 +395,13 @@ impl NetworkMonitor {
             }
 
             if cycle > 0 && cycle % 20 == 0 {
-                self.save_logs_to_disk();
+                // save_logs_to_disk does blocking file I/O — offload to the
+                // blocking pool so the async monitor loop never stalls.
+                let saver = Arc::clone(&self);
+                let _ = tokio::task::spawn_blocking(move || {
+                    saver.save_logs_to_disk();
+                })
+                .await;
                 self.block_stats.flush_if_dirty();
             }
 

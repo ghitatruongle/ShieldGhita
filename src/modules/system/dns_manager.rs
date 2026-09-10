@@ -14,6 +14,8 @@ pub enum AdapterDnsState {
 }
 
 static ORIGINAL_DNS_SETTINGS: RwLock<Option<HashMap<String, AdapterDnsState>>> = RwLock::new(None);
+static ORIGINAL_IPV6_DNS_SETTINGS: RwLock<Option<HashMap<String, AdapterDnsState>>> =
+    RwLock::new(None);
 static CLEANUP_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(windows)]
@@ -52,7 +54,8 @@ pub fn is_elevated() -> bool {
             }
         }
     }
-    true
+    // Fail closed: do not claim elevation when the token query fails.
+    false
 }
 
 #[cfg(not(windows))]
@@ -98,7 +101,12 @@ pub fn get_active_adapters() -> Vec<String> {
     }
 
     if adapters.is_empty() {
-        adapters = vec!["Wi-Fi".into(), "Ethernet".into()];
+        // Do not guess adapter names — configuring a non-existent "Wi-Fi" /
+        // "Ethernet" via netsh fails or touches the wrong NIC. Return empty
+        // and let callers (set_system_dns) surface a proper error.
+        tracing::warn!(
+            "DNS manager: no active physical adapters detected (netsh + Get-NetAdapter empty)"
+        );
     }
 
     adapters.dedup();
@@ -119,13 +127,17 @@ fn is_valid_physical_adapter(name: &str) -> bool {
 }
 
 pub fn get_current_adapter_dns(adapter: &str) -> AdapterDnsState {
+    get_current_adapter_dns_inner(adapter, false)
+}
+
+fn get_current_adapter_dns_inner(adapter: &str, include_loopback: bool) -> AdapterDnsState {
     let output = match silent_command("netsh")
         .args([
             "interface",
             "ip",
             "show",
             "dns",
-            &format!("name={}", adapter),
+            &format!("name=\"{}\"", adapter),
         ])
         .output()
     {
@@ -147,16 +159,21 @@ pub fn get_current_adapter_dns(adapter: &str) -> AdapterDnsState {
             is_static_section = true;
             if let Some(pos) = trimmed.find(':') {
                 let ip = trimmed[pos + 1..].trim();
-                if !ip.is_empty() && ip != "None" && ip != "127.0.0.1" && ip != "127.0.0.2" {
-                    static_servers.push(ip.to_string());
+                if !ip.is_empty()
+                    && ip != "None"
+                    && (include_loopback || (ip != "127.0.0.1" && ip != "127.0.0.2"))
+                {
+                    // Only accept parseable IPs in the header line too.
+                    if include_loopback || ip.parse::<std::net::IpAddr>().is_ok() {
+                        static_servers.push(ip.to_string());
+                    }
                 }
             }
         } else if is_static_section {
             let ip = trimmed;
             if !ip.is_empty()
                 && ip != "None"
-                && ip != "127.0.0.1"
-                && ip != "127.0.0.2"
+                && (include_loopback || (ip != "127.0.0.1" && ip != "127.0.0.2"))
                 && ip.parse::<std::net::IpAddr>().is_ok()
             {
                 static_servers.push(ip.to_string());
@@ -171,6 +188,44 @@ pub fn get_current_adapter_dns(adapter: &str) -> AdapterDnsState {
     }
 }
 
+fn get_current_adapter_ipv6_dns(adapter: &str) -> AdapterDnsState {
+    let output = match silent_command("netsh")
+        .args([
+            "interface",
+            "ipv6",
+            "show",
+            "dnsservers",
+            &format!("name=\"{}\"", adapter),
+        ])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return AdapterDnsState::Dhcp,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut servers = Vec::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.to_lowercase().contains("dns") || trimmed.contains("---") {
+            continue;
+        }
+        // netsh ipv6 show dnsservers prints one address per line (may include zone id %).
+        let candidate = trimmed.split_whitespace().next().unwrap_or("").trim();
+        if candidate.is_empty() || candidate.eq_ignore_ascii_case("None") {
+            continue;
+        }
+        let bare = candidate.split('%').next().unwrap_or(candidate);
+        if bare.parse::<std::net::IpAddr>().is_ok() {
+            servers.push(candidate.to_string());
+        }
+    }
+    if !servers.is_empty() {
+        AdapterDnsState::Static(servers)
+    } else {
+        AdapterDnsState::Dhcp
+    }
+}
+
 pub fn flush_dns_cache() {
     let _ = silent_command("ipconfig").arg("/flushdns").output();
 }
@@ -178,20 +233,43 @@ pub fn flush_dns_cache() {
 pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
     let _guard = CLEANUP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let adapters = get_active_adapters();
+    if adapters.is_empty() {
+        return Err("No active network adapters detected; refusing to guess".to_string());
+    }
     let mut success_count = 0;
     let mut last_err = String::new();
+    let mut failed_adapters: Vec<String> = Vec::new();
 
     {
+        // Backup on every call for adapters missing from the map (new NICs,
+        // VPNs, docks appearing after the first override).
         let mut orig_guard = ORIGINAL_DNS_SETTINGS
             .write()
             .unwrap_or_else(|e| e.into_inner());
         if orig_guard.is_none() {
-            let mut backup_map = HashMap::new();
+            *orig_guard = Some(HashMap::new());
+        }
+        if let Some(map) = orig_guard.as_mut() {
             for adapter in &adapters {
-                let state = get_current_adapter_dns(adapter);
-                backup_map.insert(adapter.clone(), state);
+                if !map.contains_key(adapter) {
+                    let state = get_current_adapter_dns(adapter);
+                    map.insert(adapter.clone(), state);
+                }
             }
-            *orig_guard = Some(backup_map);
+        }
+        let mut orig6_guard = ORIGINAL_IPV6_DNS_SETTINGS
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        if orig6_guard.is_none() {
+            *orig6_guard = Some(HashMap::new());
+        }
+        if let Some(map6) = orig6_guard.as_mut() {
+            for adapter in &adapters {
+                if !map6.contains_key(adapter) {
+                    let state6 = get_current_adapter_ipv6_dns(adapter);
+                    map6.insert(adapter.clone(), state6);
+                }
+            }
         }
     }
 
@@ -204,7 +282,7 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
                 "ip",
                 "set",
                 "dns",
-                &format!("name={}", adapter),
+                &format!("name=\"{}\"", adapter),
                 "static",
                 dns_server,
                 "primary",
@@ -246,12 +324,19 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
                         dns_server, adapter
                     );
                     adapter_ok = true;
+                } else {
+                    let stderr = String::from_utf8_lossy(&ps_out.stderr);
+                    if !stderr.trim().is_empty() {
+                        last_err = stderr.to_string();
+                    }
                 }
             }
         }
 
         if adapter_ok {
             success_count += 1;
+        } else {
+            failed_adapters.push(adapter.clone());
         }
 
         let _ = silent_command("netsh")
@@ -260,7 +345,7 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
                 "ipv6",
                 "set",
                 "dns",
-                &format!("name={}", adapter),
+                &format!("name=\"{}\"", adapter),
                 "dhcp",
             ])
             .output();
@@ -268,8 +353,26 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
 
     flush_dns_cache();
 
+    if !failed_adapters.is_empty() {
+        tracing::warn!(
+            "Master DNS Controller: partial failure setting DNS to {} — failed on: {} (succeeded on {}/{})",
+            dns_server,
+            failed_adapters.join(", "),
+            success_count,
+            adapters.len()
+        );
+    }
+
     if success_count > 0 {
         DNS_OVERRIDDEN.store(true, Ordering::SeqCst);
+        if !failed_adapters.is_empty() {
+            return Err(format!(
+                "Partial failure setting DNS to {}: failed on [{}]; last error: {}",
+                dns_server,
+                failed_adapters.join(", "),
+                last_err.trim()
+            ));
+        }
         Ok(())
     } else {
         Err(format!("Failed to set DNS: {}", last_err.trim()))
@@ -277,7 +380,17 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
 }
 
 pub fn restore_system_dns() -> Result<(), String> {
-    let _guard = CLEANUP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    restore_system_dns_inner(true)
+}
+
+/// Restore without taking `CLEANUP_LOCK` when called from a panic hook that
+/// may already hold it on this thread (would deadlock).
+fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
+    let _guard = if take_lock {
+        Some(CLEANUP_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+    } else {
+        None
+    };
     let adapters = get_active_adapters();
     let backup_map = {
         let mut orig_guard = ORIGINAL_DNS_SETTINGS
@@ -286,11 +399,24 @@ pub fn restore_system_dns() -> Result<(), String> {
         orig_guard.take()
     };
 
+    // Only touch adapters we actually overrode. Forcing DHCP on unknown
+    // adapters (VPN, dock NICs that appeared later) wipes intentional static DNS.
+    let Some(backup_map) = backup_map else {
+        DNS_OVERRIDDEN.store(false, Ordering::SeqCst);
+        return Ok(());
+    };
+
+    let backup_map6 = {
+        let mut orig6_guard = ORIGINAL_IPV6_DNS_SETTINGS
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        orig6_guard.take()
+    };
+
     for adapter in &adapters {
-        let original_state = backup_map
-            .as_ref()
-            .and_then(|m| m.get(adapter).cloned())
-            .unwrap_or(AdapterDnsState::Dhcp);
+        let Some(original_state) = backup_map.get(adapter).cloned() else {
+            continue;
+        };
 
         let clean_adapter = adapter.replace('\'', "''");
 
@@ -302,7 +428,7 @@ pub fn restore_system_dns() -> Result<(), String> {
                         "ip",
                         "set",
                         "dns",
-                        &format!("name={}", adapter),
+                        &format!("name=\"{}\"", adapter),
                         "dhcp",
                     ])
                     .output();
@@ -321,7 +447,7 @@ pub fn restore_system_dns() -> Result<(), String> {
                             "ip",
                             "set",
                             "dns",
-                            &format!("name={}", adapter),
+                            &format!("name=\"{}\"", adapter),
                             "static",
                             first_ip,
                             "primary",
@@ -335,7 +461,7 @@ pub fn restore_system_dns() -> Result<(), String> {
                                 "ip",
                                 "add",
                                 "dns",
-                                &format!("name={}", adapter),
+                                &format!("name=\"{}\"", adapter),
                                 next_ip,
                                 &format!("index={}", idx + 2),
                             ])
@@ -348,7 +474,7 @@ pub fn restore_system_dns() -> Result<(), String> {
                             "ip",
                             "set",
                             "dns",
-                            &format!("name={}", adapter),
+                            &format!("name=\"{}\"", adapter),
                             "dhcp",
                         ])
                         .output();
@@ -356,16 +482,65 @@ pub fn restore_system_dns() -> Result<(), String> {
             }
         }
 
-        let _ = silent_command("netsh")
-            .args([
-                "interface",
-                "ipv6",
-                "set",
-                "dns",
-                &format!("name={}", adapter),
-                "dhcp",
-            ])
-            .output();
+        // IPv6: restore backed-up state instead of forcing DHCP.
+        if let Some(map6) = backup_map6.as_ref() {
+            if let Some(state6) = map6.get(adapter) {
+                match state6 {
+                    AdapterDnsState::Dhcp => {
+                        let _ = silent_command("netsh")
+                            .args([
+                                "interface",
+                                "ipv6",
+                                "set",
+                                "dns",
+                                &format!("name=\"{}\"", adapter),
+                                "dhcp",
+                            ])
+                            .output();
+                    }
+                    AdapterDnsState::Static(ips6) => {
+                        if let Some(first6) = ips6.first() {
+                            let _ = silent_command("netsh")
+                                .args([
+                                    "interface",
+                                    "ipv6",
+                                    "set",
+                                    "dns",
+                                    &format!("name=\"{}\"", adapter),
+                                    "static",
+                                    first6,
+                                    "primary",
+                                ])
+                                .output();
+                            for (idx, next6) in ips6.iter().skip(1).enumerate() {
+                                let _ = silent_command("netsh")
+                                    .args([
+                                        "interface",
+                                        "ipv6",
+                                        "add",
+                                        "dns",
+                                        &format!("name=\"{}\"", adapter),
+                                        next6,
+                                        &format!("index={}", idx + 2),
+                                    ])
+                                    .output();
+                            }
+                        } else {
+                            let _ = silent_command("netsh")
+                                .args([
+                                    "interface",
+                                    "ipv6",
+                                    "set",
+                                    "dns",
+                                    &format!("name=\"{}\"", adapter),
+                                    "dhcp",
+                                ])
+                                .output();
+                        }
+                    }
+                }
+            }
+        }
     }
 
     flush_dns_cache();
@@ -375,15 +550,24 @@ pub fn restore_system_dns() -> Result<(), String> {
 }
 
 pub fn set_master_internet_lock(locked: bool) -> Result<(), String> {
-    MASTER_INTERNET_LOCKED.store(locked, Ordering::SeqCst);
-    if locked {
-        info!("MASTER INTERNET LOCK ACTIVATED: All external DNS blackholed");
-        set_system_dns("127.0.0.2")?;
-    } else {
-        info!("MASTER INTERNET LOCK DEACTIVATED: Normal protection resumed");
-        set_system_dns("127.0.0.1")?;
+    let prev = MASTER_INTERNET_LOCKED.load(Ordering::SeqCst);
+    let target = if locked { "127.0.0.2" } else { "127.0.0.1" };
+    match set_system_dns(target) {
+        Ok(()) => {
+            MASTER_INTERNET_LOCKED.store(locked, Ordering::SeqCst);
+            if locked {
+                info!("MASTER INTERNET LOCK ACTIVATED: All external DNS blackholed");
+            } else {
+                info!("MASTER INTERNET LOCK DEACTIVATED: Normal protection resumed");
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Rollback flag on failure — only set after Ok.
+            MASTER_INTERNET_LOCKED.store(prev, Ordering::SeqCst);
+            Err(e)
+        }
     }
-    Ok(())
 }
 
 pub fn is_master_internet_locked() -> bool {
@@ -401,7 +585,10 @@ fn system_dns_matches(target: &str) -> bool {
         return false;
     }
     for adapter in &adapters {
-        match get_current_adapter_dns(adapter) {
+        // Must include loopback (127.0.0.1/127.0.0.2) — the guard enforces our
+        // own listener as system DNS, so filtering loopback would never match
+        // and cause a constant fight loop.
+        match get_current_adapter_dns_inner(adapter, true) {
             AdapterDnsState::Static(ips) => {
                 if !ips.iter().any(|ip| ip == target) {
                     return false;
@@ -443,7 +630,12 @@ pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, liste
             interval_secs = 8;
             continue;
         }
-        if let Err(e) = set_system_dns(&listen_addr) {
+        // netsh/PowerShell are blocking; keep them off the async worker threads.
+        let enforcement_addr = listen_addr.clone();
+        let result = tokio::task::spawn_blocking(move || set_system_dns(&enforcement_addr))
+            .await
+            .unwrap_or_else(|e| Err(format!("dns guard task join: {}", e)));
+        if let Err(e) = result {
             tracing::warn!("DNS guard: enforcement attempt failed: {}", e);
         }
         fight_streak += 1;
@@ -478,6 +670,7 @@ pub fn configure_lan_dns_firewall(enable: bool) {
                 "action=allow",
                 "protocol=UDP",
                 "localport=53",
+                "remoteip=LocalSubnet",
             ])
             .output();
 
@@ -492,6 +685,7 @@ pub fn configure_lan_dns_firewall(enable: bool) {
                 "action=allow",
                 "protocol=TCP",
                 "localport=53",
+                "remoteip=LocalSubnet",
             ])
             .output();
         info!("Windows Firewall rule configured: Port 53 UDP/TCP opened for LAN Network Adblock");
@@ -524,7 +718,9 @@ pub fn register_safety_cleanup() {
     std::panic::set_hook(Box::new(move |panic_info| {
         if DNS_OVERRIDDEN.load(Ordering::SeqCst) {
             eprintln!("[SHIELD GHITA EMERGENCY] Panic detected, restoring system DNS...");
-            let _ = restore_system_dns();
+            // Avoid re-entering CLEANUP_LOCK if the panic happened while a guard
+            // was held on this thread — that would deadlock the emergency path.
+            let _ = restore_system_dns_inner(false);
         }
         default_hook(panic_info);
     }));
@@ -534,9 +730,13 @@ pub fn register_safety_cleanup() {
         use windows::Win32::System::Console::SetConsoleCtrlHandler;
         unsafe extern "system" fn ctrl_handler(_: u32) -> windows::Win32::Foundation::BOOL {
             if DNS_OVERRIDDEN.load(Ordering::SeqCst) {
-                let _ = restore_system_dns();
+                // Ctrl handlers run under severe restrictions; try a lock-free
+                // restore and still report handled so Windows gives us a moment.
+                let _ = restore_system_dns_inner(false);
             }
-            windows::Win32::Foundation::BOOL(0)
+            // Return TRUE so the default handler (immediate terminate) is delayed
+            // long enough for the restore attempt to finish.
+            windows::Win32::Foundation::BOOL(1)
         }
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
     }

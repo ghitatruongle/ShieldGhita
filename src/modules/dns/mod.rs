@@ -124,6 +124,7 @@ pub struct DnsBlocker {
     pub blocked_events_tx: tokio::sync::broadcast::Sender<(String, String)>,
     response_policy: Arc<RwLock<Option<ResponsePolicyFn>>>,
     pub rules_count: Arc<AtomicUsize>,
+    rebind_incident_cooldown: Arc<Mutex<HashMap<(String, String), Instant>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,6 +306,7 @@ impl DnsBlocker {
             blocked_events_tx,
             response_policy: Arc::new(RwLock::new(None)),
             rules_count: Arc::new(AtomicUsize::new(initial_count)),
+            rebind_incident_cooldown: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -392,9 +394,32 @@ impl DnsBlocker {
         Ok(())
     }
 
+    /// Lightweight structural check for remote blocklist entries. Rejects
+    /// single-label names (e.g. `com`) and public suffixes so hierarchy
+    /// matching cannot block entire TLDs. Cheaper than `validate_domain`.
+    fn is_safe_blocklist_domain(d: &str) -> bool {
+        if d.is_empty() || d.len() > 253 || !d.contains('.') {
+            return false;
+        }
+        if BLOCKED_PUBLIC_SUFFIXES.contains(&d) {
+            return false;
+        }
+        d.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
+    }
+
     pub fn parse_line(line: &str) -> Option<String> {
         let l = line.trim();
         if l.is_empty() || l.starts_with('#') || l.starts_with('!') || l.starts_with('[') {
+            return None;
+        }
+        // Reject a bare IP line (e.g. "1.2.3.4", "::1") — not a domain.
+        if l.parse::<std::net::IpAddr>().is_ok() {
             return None;
         }
         if l.starts_with("||") {
@@ -416,7 +441,12 @@ impl DnsBlocker {
         }
         if let Some(pos) = l.find(|c: char| c.is_whitespace()) {
             let ip = &l[..pos];
-            if ip == "0.0.0.0" || ip == "127.0.0.1" {
+            if ip == "0.0.0.0"
+                || ip == "127.0.0.1"
+                || ip == "::"
+                || ip == "::1"
+                || ip == "0:0:0:0:0:0:0:0"
+            {
                 let d = l[pos..]
                     .trim()
                     .split('#')
@@ -464,12 +494,33 @@ impl DnsBlocker {
                             return Ok((url, None, None));
                         }
                         if resp.status().is_success() {
+                            const MAX_BLOCKLIST_BYTES: usize = 64 * 1024 * 1024;
+                            if let Some(cl) = resp.content_length() {
+                                if cl as usize > MAX_BLOCKLIST_BYTES {
+                                    return Err(format!(
+                                        "{}: blocklist too large ({} bytes, max {})",
+                                        url, cl, MAX_BLOCKLIST_BYTES
+                                    ));
+                                }
+                            }
                             let etag = resp
                                 .headers()
                                 .get("ETag")
                                 .and_then(|v| v.to_str().ok())
                                 .map(|s| s.to_string());
-                            let text = resp.text().await.map_err(|e| format!("{}: {}", url, e))?;
+                            let bytes =
+                                resp.bytes().await.map_err(|e| format!("{}: {}", url, e))?;
+                            if bytes.len() > MAX_BLOCKLIST_BYTES {
+                                return Err(format!(
+                                    "{}: blocklist body exceeded cap ({} bytes)",
+                                    url,
+                                    bytes.len()
+                                ));
+                            }
+                            let text = String::from_utf8_lossy(&bytes).into_owned();
+                            // Free the raw bytes before moving the text out so
+                            // peak memory is not held twice longer than needed.
+                            drop(bytes);
                             Ok((url, Some(text), etag))
                         } else {
                             Err(format!("{}: HTTP {}", url, resp.status()))
@@ -488,6 +539,8 @@ impl DnsBlocker {
         let mut any_success = false;
         let mut unchanged = 0usize;
         let mut fetched = 0usize;
+        let mut failed = 0usize;
+        let mut failed_urls: Vec<String> = Vec::new();
         let mut new_etags: HashMap<String, String> = self
             .etag_cache
             .lock()
@@ -504,16 +557,33 @@ impl DnsBlocker {
                     any_success = true;
                     fetched += 1;
                     if let Some(tag) = etag {
-                        new_etags.insert(url, tag);
+                        new_etags.insert(url.clone(), tag);
+                    } else {
+                        // 200 without ETag: drop any stale tag for this URL.
+                        new_etags.remove(&url);
                     }
                     for line in text.lines() {
                         if let Some(d) = Self::parse_line(line) {
-                            domains.insert(d);
+                            if Self::is_safe_blocklist_domain(&d) {
+                                domains.insert(d);
+                            }
                         }
                     }
+                    // `text` (potentially tens of MB) is dropped here per-iteration.
                 }
-                Ok(Err(e)) => warn!("Failed to fetch blocklist: {}", e),
-                Err(e) => warn!("Blocklist fetch task failed: {}", e),
+                Ok(Err(e)) => {
+                    failed += 1;
+                    // Recover the failed URL from the "url: reason" envelope so
+                    // only its ETag is invalidated, keeping fetched tags.
+                    if let Some(matched) = urls.iter().find(|u| e.starts_with(u.as_str())) {
+                        failed_urls.push(matched.clone());
+                    }
+                    warn!("Failed to fetch blocklist: {}", e);
+                }
+                Err(e) => {
+                    failed += 1;
+                    warn!("Blocklist fetch task failed: {}", e);
+                }
             }
         }
 
@@ -539,6 +609,28 @@ impl DnsBlocker {
             }
         }
 
+        // Rebuilding the disk store from only the bodies we just fetched would
+        // wipe domains belonging to 304 / failed sources. Only rebuild when
+        // every source produced a fresh body. On partial success, keep the
+        // existing disk and invalidate only the failed URLs' ETags so the
+        // next refresh re-fetches just those.
+        let incomplete = unchanged > 0 || failed > 0;
+        if incomplete {
+            if any_success {
+                warn!(
+                    "Skipping blocklist rebuild: {} unchanged, {} failed, {} fetched. Keeping existing on-disk rules; clearing ETags only for failed sources.",
+                    unchanged, failed, fetched
+                );
+                for fu in &failed_urls {
+                    new_etags.remove(fu);
+                }
+                *self.etag_cache.lock().unwrap_or_else(|e| e.into_inner()) = new_etags.clone();
+                Self::write_etag_map_to(&Self::etag_store_path(), &new_etags);
+            }
+            let count = self.get_rules_count();
+            return Ok(count);
+        }
+
         let count = domains.len();
         if count > 0 && any_success {
             let bin_path = Self::disk_store_path();
@@ -555,8 +647,12 @@ impl DnsBlocker {
                         built_count,
                         fetch_start.elapsed().as_millis()
                     );
+                    return Ok(built_count);
                 }
-                Err(e) => warn!("Failed to build disk blocklist: {}", e),
+                Err(e) => {
+                    warn!("Failed to build disk blocklist: {}", e);
+                    return Err(e);
+                }
             }
         }
         Ok(count)
@@ -760,8 +856,9 @@ impl DnsBlocker {
                 break;
             }
             if len & 0xC0 == 0xC0 {
-                pos += 2;
-                break;
+                // Compressed QNAME in a query: reject outright instead of
+                // skipping, so spoofed pointers cannot desync parsing.
+                return None;
             }
             pos += 1;
             if pos + len > pkt.len() {
@@ -795,7 +892,7 @@ impl DnsBlocker {
         }
         match (Self::parse_query_info(query), Self::parse_query_info(resp)) {
             (Some((q_name, q_type)), Some((r_name, r_type))) => {
-                r_name == q_name && r_type == q_type
+                r_name.eq_ignore_ascii_case(&q_name) && r_type == q_type
             }
             _ => false,
         }
@@ -847,6 +944,15 @@ impl DnsBlocker {
                         return None;
                     }
                     let l = resp[pos];
+                    // Mid-name compression pointer (e.g. `3www` + `0xC00C`).
+                    // Treating 0xC0 as a label length of 192 desyncs the parser.
+                    if l & 0xC0 == 0xC0 {
+                        pos += 2;
+                        break;
+                    }
+                    if l & 0xC0 != 0 {
+                        return None;
+                    }
                     if l == 0 {
                         pos += 1;
                         break;
@@ -877,7 +983,8 @@ impl DnsBlocker {
 
     pub fn cached_response_for(&self, name: &str, qtype: u16, pkt: &[u8]) -> Option<Vec<u8>> {
         let cache = self.dns_cache.read().unwrap_or_else(|e| e.into_inner());
-        let (cached_resp, inserted, ttl) = cache.get(&(name.to_string(), qtype))?;
+        let key = (name.to_lowercase(), qtype);
+        let (cached_resp, inserted, ttl) = cache.get(&key)?;
         if inserted.elapsed() < Duration::from_secs(*ttl as u64) && cached_resp.len() >= 12 {
             let mut resp = cached_resp.clone();
             resp[0] = pkt[0];
@@ -895,21 +1002,25 @@ impl DnsBlocker {
                 cache.retain(|_, (_, inserted, ttl)| {
                     now.duration_since(*inserted) < Duration::from_secs((*ttl as u64).max(1))
                 });
-                if cache.len() > 5000 {
-                    let mut entries: Vec<((String, u16), Instant)> = cache
-                        .iter()
-                        .map(|(k, (_, inserted, _))| (k.clone(), *inserted))
-                        .collect();
-                    entries.sort_by_key(|(_, inserted)| *inserted);
-                    let excess = cache.len().saturating_sub(4000);
-                    for (key, _) in entries.into_iter().take(excess) {
+                if cache.len() > 5500 {
+                    // Evict oldest 500 by smallest timestamp without a full
+                    // sort of the whole map each insert.
+                    let mut oldest: Vec<((String, u16), Instant)> = Vec::new();
+                    for (k, (_, inserted, _)) in cache.iter() {
+                        oldest.push((k.clone(), *inserted));
+                    }
+                    // Partial selection: only sort when over threshold and
+                    // drain down to 5000.
+                    oldest.sort_by_key(|(_, inserted)| *inserted);
+                    let excess = cache.len().saturating_sub(5000);
+                    for (key, _) in oldest.into_iter().take(excess) {
                         cache.remove(&key);
                     }
                 }
             }
             let ttl = Self::cache_ttl_seconds(resp) as u32;
             cache.insert(
-                (name.to_string(), qtype),
+                (name.to_lowercase(), qtype),
                 (resp.to_vec(), Instant::now(), ttl),
             );
         }
@@ -934,7 +1045,8 @@ impl DnsBlocker {
         r.extend_from_slice(&q[0..2]);
         r.push(0x81);
         r.push(0x80);
-        r.extend_from_slice(&q[4..6]);
+        // Force QDCOUNT=1; never copy potentially-spoofed q[4..6].
+        r.extend_from_slice(&[0x00, 0x01]);
         r.extend_from_slice(&[0x00, 0x01]);
         r.extend_from_slice(&[0x00, 0x00]);
         r.extend_from_slice(&[0x00, 0x00]);
@@ -984,7 +1096,8 @@ impl DnsBlocker {
         r.extend_from_slice(&q[0..2]);
         r.push(0x81);
         r.push(0x80);
-        r.extend_from_slice(&q[4..6]);
+        // Force QDCOUNT=1; never copy potentially-spoofed q[4..6].
+        r.extend_from_slice(&[0x00, 0x01]);
         r.extend_from_slice(&[0x00, 0x01]);
         r.extend_from_slice(&[0x00, 0x00]);
         r.extend_from_slice(&[0x00, 0x00]);
@@ -1110,18 +1223,16 @@ impl DnsBlocker {
 
             if rtype == 1 && rdlength == 4 {
                 let ip = &resp[pos..pos + 4];
-                if ip[0] == 127
-                    || ip[0] == 10
-                    || (ip[0] == 172 && (ip[1] >= 16 && ip[1] <= 31))
-                    || (ip[0] == 192 && ip[1] == 168)
-                    || (ip[0] == 169 && ip[1] == 254)
-                    || ip[0] == 0
-                {
+                if Self::is_private_ipv4(ip[0], ip[1], ip[2], ip[3]) {
                     return true;
                 }
             } else if rtype == 28 && rdlength == 16 {
                 let ip6 = &resp[pos..pos + 16];
-                if (ip6[..15].iter().all(|&b| b == 0) && ip6[15] == 1)
+                if ip6[0..10].iter().all(|&b| b == 0) && ip6[10] == 0xff && ip6[11] == 0xff {
+                    if Self::is_private_ipv4(ip6[12], ip6[13], ip6[14], ip6[15]) {
+                        return true;
+                    }
+                } else if (ip6[..15].iter().all(|&b| b == 0) && ip6[15] == 1)
                     || (ip6[0] == 0xfe && (ip6[1] & 0xc0) == 0x80)
                     || ((ip6[0] & 0xfe) == 0xfc)
                 {
@@ -1132,6 +1243,20 @@ impl DnsBlocker {
         }
 
         false
+    }
+
+    fn is_private_ipv4(a: u8, b: u8, c: u8, d: u8) -> bool {
+        // RFC1918, loopback, link-local, 0/8, CGNAT 100.64/10, benchmarking 198.18/15
+        a == 0
+            || a == 10
+            || a == 127
+            || (a == 100 && (b & 0xc0) == 64)
+            || (a == 169 && b == 254)
+            || (a == 172 && (16..=31).contains(&b))
+            || (a == 192 && b == 168)
+            || (a == 198 && (b == 18 || b == 19))
+            || (a == 192 && b == 0 && c == 0)
+            || (a == 255 && b == 255 && c == 255 && d == 255)
     }
 
     pub async fn run_dns_server(
@@ -1162,6 +1287,9 @@ impl DnsBlocker {
         };
 
         let mut buf = [0u8; 4096];
+        // Bound concurrent handlers so a LAN flood (network-wide mode binds
+        // 0.0.0.0) cannot exhaust memory by spawning one task per datagram.
+        let handler_sem = Arc::new(tokio::sync::Semaphore::new(256));
 
         loop {
             let (len, src) = match socket.recv_from(&mut buf).await {
@@ -1172,6 +1300,11 @@ impl DnsBlocker {
                 }
             };
 
+            let Ok(permit) = handler_sem.clone().try_acquire_owned() else {
+                // Pool saturated — drop the packet rather than queue unbounded work.
+                continue;
+            };
+
             let packet = buf[..len].to_vec();
             let blocker = self.clone();
             let sock = socket.clone();
@@ -1179,6 +1312,7 @@ impl DnsBlocker {
             let monitor = mon.clone();
 
             tokio::spawn(async move {
+                let _permit = permit;
                 blocker
                     .handle_dns_packet(packet, src, sock, doh, monitor)
                     .await;
@@ -1228,6 +1362,24 @@ impl DnsBlocker {
             return;
         }
 
+        self.total_queries.fetch_add(1, Ordering::Relaxed);
+
+        // Darknet pseudo-TLDs (.onion/.bit/.bazar): ALWAYS NXDOMAIN, even when
+        // auto_block is off (and even when IDS detection is off) — these names
+        // can never resolve via standard DNS, so fail-closed dropping is safe.
+        // Policy documented on SecurityEngine::is_darknet_pseudo_tld.
+        if crate::modules::security::SecurityEngine::must_nxdomain_darknet(&query_name) {
+            let _ = mon.security_engine.inspect_dns_query(&src_ip, &query_name);
+            mon.lan_scanner
+                .record_activity(&src_ip, &query_name, true, true);
+            self.blocked_count.fetch_add(1, Ordering::Relaxed);
+            mon.add_log(&query_name, &src_ip, true);
+            if let Some(r) = Self::build_nxdomain(&pkt) {
+                let _ = sock.send_to(&r, src).await;
+            }
+            return;
+        }
+
         if let Some(_incident) = mon.security_engine.inspect_dns_query(&src_ip, &query_name) {
             mon.lan_scanner
                 .record_activity(&src_ip, &query_name, true, true);
@@ -1241,15 +1393,15 @@ impl DnsBlocker {
             }
         }
 
-        self.total_queries.fetch_add(1, Ordering::Relaxed);
-
         if let Some(over) = self.apply_response_policy(&src_ip, &query_name, qtype) {
-            let resp = if qtype == 28 {
+            let resp = if qtype == 1 {
+                Self::build_sinkhole_a_record(&pkt, over.ipv4)
+                    .or_else(|| Self::build_nxdomain(&pkt))
+            } else if qtype == 28 {
                 Self::build_sinkhole_aaaa_record(&pkt, over.ipv6)
                     .or_else(|| Self::build_nxdomain(&pkt))
             } else {
-                Self::build_sinkhole_a_record(&pkt, over.ipv4)
-                    .or_else(|| Self::build_nxdomain(&pkt))
+                Self::build_nxdomain(&pkt)
             };
             if let Some(r) = resp {
                 let _ = sock.send_to(&r, src).await;
@@ -1300,7 +1452,29 @@ impl DnsBlocker {
                     "DNS Rebinding Attack detected: domain '{}' resolved to internal private IP space for client {}",
                     query_name, src_ip
                 );
-                mon.security_engine.record_incident(
+                // Rate-limit rebinding incidents per (IP,domain) to 1 per 60s.
+                let should_record = {
+                    match self.rebind_incident_cooldown.lock() {
+                        Ok(mut cd) => {
+                            let key = (src_ip.clone(), query_name.clone());
+                            let now = Instant::now();
+                            match cd.get(&key) {
+                                Some(last)
+                                    if now.duration_since(*last) < Duration::from_secs(60) =>
+                                {
+                                    false
+                                }
+                                _ => {
+                                    cd.insert(key, now);
+                                    true
+                                }
+                            }
+                        }
+                        Err(_) => true,
+                    }
+                };
+                if should_record {
+                    mon.security_engine.record_incident(
                     crate::modules::i18n::tr(
                         "Tấn công DNS Rebinding (Private IP Leak)",
                         "DNS Rebinding Attack (Private IP Leak)",
@@ -1324,6 +1498,7 @@ impl DnsBlocker {
                         "已拦截伪造内网 IP 解析 (返回 NXDOMAIN)",
                     ),
                 );
+                }
                 if let Some(nx) = Self::build_nxdomain(&pkt) {
                     resp = nx;
                 }
@@ -1343,7 +1518,7 @@ impl DnsBlocker {
     ) -> Option<Vec<u8>> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
 
-        for url in doh_urls.iter().take(2) {
+        for url in doh_urls.iter() {
             let client = self.http_client.clone();
             let url = url.clone();
             let pkt = query_packet.to_vec();
@@ -1363,35 +1538,16 @@ impl DnsBlocker {
 
                 if let Ok(Ok(resp)) = res {
                     if resp.status().is_success() {
-                        if let Ok(bytes) = resp.bytes().await {
-                            if Self::response_matches_query(&bytes, &pkt) {
+                        // Cap DoH body and keep the read under the same budget.
+                        const MAX_DOH_BYTES: usize = 64 * 1024;
+                        let read =
+                            tokio::time::timeout(Duration::from_millis(800), resp.bytes()).await;
+                        if let Ok(Ok(bytes)) = read {
+                            if bytes.len() <= MAX_DOH_BYTES
+                                && Self::response_matches_query(&bytes, &pkt)
+                            {
                                 let _ = tx_clone.send(bytes.to_vec()).await;
                             }
-                        }
-                    }
-                }
-            });
-        }
-
-        {
-            let pkt = query_packet.to_vec();
-            let tx_clone = tx.clone();
-
-            tokio::spawn(async move {
-                let sock = match UdpSocket::bind("0.0.0.0:0").await {
-                    Ok(s) => s,
-                    Err(_) => return,
-                };
-                if sock.connect("1.1.1.1:53").await.is_err() {
-                    return;
-                }
-                if sock.send(&pkt).await.is_ok() {
-                    let mut buf = [0u8; 4096];
-                    if let Ok(Ok(len)) =
-                        tokio::time::timeout(Duration::from_millis(800), sock.recv(&mut buf)).await
-                    {
-                        if Self::response_matches_query(&buf[..len], &pkt) {
-                            let _ = tx_clone.send(buf[..len].to_vec()).await;
                         }
                     }
                 }
@@ -1460,6 +1616,19 @@ mod tests {
         assert_eq!(DnsBlocker::parse_line("# this is a comment"), None);
         assert_eq!(DnsBlocker::parse_line("! ABP comment"), None);
         assert_eq!(DnsBlocker::parse_line("127.0.0.1 localhost"), None);
+    }
+
+    #[test]
+    fn test_is_safe_blocklist_domain() {
+        assert!(DnsBlocker::is_safe_blocklist_domain("ads.example.com"));
+        assert!(DnsBlocker::is_safe_blocklist_domain("tracker.io"));
+        // Single-label / public suffixes must never enter the remote store.
+        assert!(!DnsBlocker::is_safe_blocklist_domain("com"));
+        assert!(!DnsBlocker::is_safe_blocklist_domain("com.vn"));
+        assert!(!DnsBlocker::is_safe_blocklist_domain("netlify.app"));
+        assert!(!DnsBlocker::is_safe_blocklist_domain(""));
+        assert!(!DnsBlocker::is_safe_blocklist_domain("a..b.com"));
+        assert!(!DnsBlocker::is_safe_blocklist_domain(&"x".repeat(300)));
     }
 
     #[test]

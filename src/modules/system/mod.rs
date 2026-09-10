@@ -12,6 +12,12 @@ pub use single_instance::*;
 /// user's own browser opens it.
 #[cfg(windows)]
 pub fn open_url_in_default_browser(url: &str) -> Result<(), String> {
+    // Validate scheme: ShellExecuteW with an untrusted string could launch
+    // file://, ms-msdt:, or other dangerous handlers (URL-handler injection).
+    let lower = url.trim().to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+        return Err("Refusing to open non-http(s) URL".to_string());
+    }
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;

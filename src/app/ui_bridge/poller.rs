@@ -1,5 +1,4 @@
 use crate::app::AppState;
-use crate::modules::system::dns_manager;
 use slint::ComponentHandle;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -36,13 +35,22 @@ fn sample_window_geom(ui: &crate::AppWindow) -> WindowGeom {
 }
 
 fn persist_window_geom(state: &AppState, geom: &WindowGeom) {
-    if let Ok(mut cfg_guard) = state.config.write() {
+    // Update in-memory synchronously (cheap), offload the fs::write so the
+    // 1Hz Slint timer never blocks on disk I/O.
+    let snapshot = if let Ok(mut cfg_guard) = state.config.write() {
         cfg_guard.window_width = geom.w;
         cfg_guard.window_height = geom.h;
         cfg_guard.window_x = geom.x;
         cfg_guard.window_y = geom.y;
         cfg_guard.window_maximized = geom.maximized;
-        let _ = cfg_guard.save();
+        Some(cfg_guard.clone())
+    } else {
+        None
+    };
+    if let Some(cfg) = snapshot {
+        std::thread::spawn(move || {
+            let _ = cfg.save();
+        });
     }
 }
 
@@ -62,7 +70,16 @@ pub fn save_window_state_now(ui: &crate::AppWindow, state: &AppState) {
         geom.x = prev.2;
         geom.y = prev.3;
     }
-    persist_window_geom(state, &geom);
+    // Synchronous save: this runs on quit/close where the process exits
+    // immediately after — an async spawn could be killed before flush.
+    if let Ok(mut cfg_guard) = state.config.write() {
+        cfg_guard.window_width = geom.w;
+        cfg_guard.window_height = geom.h;
+        cfg_guard.window_x = geom.x;
+        cfg_guard.window_y = geom.y;
+        cfg_guard.window_maximized = geom.maximized;
+        let _ = cfg_guard.save();
+    }
 }
 
 #[cfg(windows)]
@@ -134,6 +151,12 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
     let mut ram_tick: u32 = 0;
     let mut trim_tick: u32 = 0;
     let mut last_auto_clean = Instant::now();
+    // Per-interface previous counters + timestamp so we report the max
+    // per-interface *rate* (delta), not the interface with max total bytes.
+    // Using max-total flaps between Wi-Fi/Ethernet and yields bogus spikes.
+    let mut prev_net: std::collections::HashMap<String, (u64, u64)> =
+        std::collections::HashMap::new();
+    let mut prev_net_t: Option<Instant> = None;
 
     let timer = slint::Timer::default();
     timer.start(
@@ -165,22 +188,49 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
             }
 
             networks.refresh();
-            let mut best_rx: u64 = 0;
-            let mut best_tx: u64 = 0;
+            // Per-interface delta: pick the interface with the largest
+            // byte-delta this tick, not the largest cumulative total.
+            let now = Instant::now();
+            let is_first_tick = prev_net_t.is_none();
+            let dt = prev_net_t
+                .map(|t0| now.duration_since(t0).as_secs_f64().max(0.001))
+                .unwrap_or(1.0);
+            let mut best_down: f64 = 0.0;
+            let mut best_up: f64 = 0.0;
             let mut best_name = String::new();
             for (if_name, data) in &networks {
                 if if_name.to_lowercase().contains("loopback") {
                     continue;
                 }
                 let (rx, tx) = (data.received(), data.transmitted());
-                if rx + tx > best_rx + best_tx {
-                    best_rx = rx;
-                    best_tx = tx;
+                let (prx, ptx) = prev_net.get(if_name).copied().unwrap_or((rx, tx));
+                let drx = rx.saturating_sub(prx) as f64;
+                let dtx = tx.saturating_sub(ptx) as f64;
+                let down = drx * 8.0 / dt / 1_000_000.0;
+                let up = dtx * 8.0 / dt / 1_000_000.0;
+                if down + up > best_down + best_up {
+                    best_down = down;
+                    best_up = up;
                     best_name = if_name.clone();
                 }
             }
-            ui_win.set_net_down_mbps((best_rx as f64 * 8.0 / 1_000_000.0) as f32);
-            ui_win.set_net_up_mbps((best_tx as f64 * 8.0 / 1_000_000.0) as f32);
+            // Refresh snapshot for next tick (prune vanished interfaces).
+            {
+                let mut next: std::collections::HashMap<String, (u64, u64)> =
+                    std::collections::HashMap::new();
+                for (if_name, data) in &networks {
+                    next.insert(if_name.clone(), (data.received(), data.transmitted()));
+                }
+                prev_net = next;
+                prev_net_t = Some(now);
+            }
+            let (down_mbps, up_mbps) = if is_first_tick {
+                (0.0, 0.0)
+            } else {
+                (best_down, best_up)
+            };
+            ui_win.set_net_down_mbps(down_mbps as f32);
+            ui_win.set_net_up_mbps(up_mbps as f32);
             ui_win.set_net_if_name(best_name.into());
 
             ram_tick = ram_tick.wrapping_add(1);
@@ -201,20 +251,21 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
                 if ram_tick.is_multiple_of(3) && !RAM_PROCS_BUSY.swap(true, Ordering::SeqCst) {
                     let ui_weak_bg = ui_weak.clone();
                     state.runtime.spawn(async move {
-                        let procs = tokio::task::spawn_blocking(|| {
-                            crate::modules::rammap::top_processes(25)
-                        })
-                        .await
-                        .unwrap_or_default();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            RAM_PROCS_BUSY.store(false, Ordering::SeqCst);
+                        let procs =
+                            tokio::task::spawn_blocking(crate::modules::rammap::all_processes)
+                                .await
+                                .unwrap_or_default();
+                        let applied = slint::invoke_from_event_loop(move || {
                             if let Some(u) = ui_weak_bg.upgrade() {
                                 let models: Vec<crate::RamProcessItem> = procs
                                     .into_iter()
                                     .map(|p| crate::RamProcessItem {
-                                        pid: p.pid as i32,
+                                        pid: i32::try_from(p.pid).unwrap_or(i32::MAX),
                                         name: p.name.into(),
                                         working_set_mb: p.working_set_mb as f32,
+                                        percent_ram: p.percent_ram as f32,
+                                        exe_path: p.exe_path.into(),
+                                        is_critical: p.is_critical,
                                     })
                                     .collect();
                                 u.set_ram_processes(slint::ModelRc::new(slint::VecModel::from(
@@ -222,6 +273,10 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
                                 )));
                             }
                         });
+                        // Always release the busy flag so a failed invoke cannot
+                        // freeze the process list forever.
+                        let _ = applied;
+                        RAM_PROCS_BUSY.store(false, Ordering::SeqCst);
                     });
                 }
             }
@@ -236,6 +291,9 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
                     )
                 })
                 .unwrap_or((false, 512));
+            // Re-clamp on READ: a hand-edited config_toml can carry any u64;
+            // an absurd threshold would make the purge fire every 60s forever.
+            let threshold_mb = threshold_mb.clamp(64, 65536);
             if auto_clean_on
                 && crate::modules::rammap::get_available_ram_mb() < threshold_mb
                 && last_auto_clean.elapsed() >= Duration::from_secs(60)
@@ -256,7 +314,7 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
             }
 
             trim_tick = trim_tick.wrapping_add(1);
-            if trim_tick.is_multiple_of(30) || !WINDOW_VISIBLE.load(Ordering::SeqCst) {
+            if trim_tick.is_multiple_of(30) {
                 crate::modules::system::trim_process_working_set();
                 state.security_engine.inspect_hosts_file();
             }
@@ -272,37 +330,42 @@ fn handle_menu_events(
     toggle_id: &tray_icon::menu::MenuId,
     quit_id: &tray_icon::menu::MenuId,
 ) {
+    // NOTE: tray menus are polled at 1Hz from the Slint timer (this fn) rather
+    // than a dedicated blocking thread. A dedicated thread with blocking recv
+    // + invoke_from_event_loop would be more immediate, but 1Hz keeps all UI
+    // mutations on the event-loop thread and avoids cross-thread show/hide
+    // races; toggle latency <=1s is acceptable for a tray menu.
     while let Ok(event) = MenuEvent::receiver().try_recv() {
         if event.id == *show_id {
             ui_win.window().set_minimized(false);
             let _ = ui_win.show();
             WINDOW_VISIBLE.store(true, Ordering::SeqCst);
         } else if event.id == *toggle_id {
-            let current = s
-                .config
-                .read()
-                .map(|c| c.protection_enabled)
-                .unwrap_or(true);
-            let new_state = !current;
-            s.protection_atomic.store(new_state, Ordering::SeqCst);
-            if let Ok(mut cfg_guard) = s.config.write() {
-                cfg_guard.protection_enabled = new_state;
-                let _ = cfg_guard.save();
-            }
-            if new_state {
-                let _ = dns_manager::set_system_dns("127.0.0.1");
-            } else {
-                let _ = dns_manager::restore_system_dns();
-            }
+            // Atomic invert avoids TOCTOU between load and apply when UI and
+            // tray fire near-simultaneously (same pattern as hotkey).
+            let new_state = !s.protection_atomic.fetch_xor(true, Ordering::SeqCst);
+            // Offload blocking DNS/WFP work so the 1Hz UI timer stays smooth.
+            let s2 = s.clone();
+            std::thread::spawn(move || {
+                crate::app::ui_bridge::handlers::apply_protection(&s2, new_state);
+            });
         } else if event.id == *quit_id {
             save_window_state_now(ui_win, s);
-            let _ = dns_manager::restore_system_dns();
-            std::process::exit(0);
+            // Tear down WFP / self-defense before restoring DNS and exiting.
+            let s2 = s.clone();
+            // Quit path needs synchronous teardown before exit; run on this
+            // thread (timer tick) then quit the event loop so main() can run
+            // its graceful cleanup. Fall back to hard exit if loop already gone.
+            crate::app::ui_bridge::handlers::apply_protection(&s2, false);
+            slint::quit_event_loop().unwrap_or_else(|_| std::process::exit(0));
         }
     }
 }
 
 fn handle_tray_icon_events(ui_win: &crate::AppWindow) {
+    // Same 1Hz polling rationale as handle_menu_events: keeps UI mutations on
+    // the event-loop thread; a dedicated blocking-recv thread is possible but
+    // unnecessary for click/show latency.
     while let Ok(event) = TrayIconEvent::receiver().try_recv() {
         match event {
             TrayIconEvent::Click {

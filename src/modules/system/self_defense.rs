@@ -19,7 +19,12 @@ impl SelfDefense {
         };
         unsafe {
             let handle = GetCurrentProcess();
-            let _ = SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS);
+            // Check the BOOL return: claiming "defense enabled" when the call
+            // failed would be a false sense of protection.
+            if SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS).is_err() {
+                let err = std::io::Error::last_os_error();
+                return Err(format!("SetPriorityClass(ABOVE_NORMAL) failed: {err}"));
+            }
         }
         info!("Self-defense enabled: process priority elevated to ABOVE_NORMAL");
         self.enabled = true;
@@ -42,7 +47,10 @@ impl SelfDefense {
         };
         unsafe {
             let handle = GetCurrentProcess();
-            let _ = SetPriorityClass(handle, NORMAL_PRIORITY_CLASS);
+            if SetPriorityClass(handle, NORMAL_PRIORITY_CLASS).is_err() {
+                let err = std::io::Error::last_os_error();
+                return Err(format!("SetPriorityClass(NORMAL) failed: {err}"));
+            }
         }
         info!("Self-defense disabled: process priority restored to NORMAL");
         self.enabled = false;

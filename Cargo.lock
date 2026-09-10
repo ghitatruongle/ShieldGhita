@@ -5217,13 +5217,14 @@ dependencies = [
 
 [[package]]
 name = "shield_ghita"
-version = "0.1.0-beta3"
+version = "0.1.0"
 dependencies = [
  "base64",
  "chrono",
  "getrandom 0.3.4",
  "image",
  "md-5",
+ "raw-window-handle",
  "rcgen",
  "reqwest",
  "serde",
@@ -5383,6 +5384,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "pin-weak",
+ "raw-window-handle",
  "slint-macros",
  "unicode-segmentation",
  "vtable",

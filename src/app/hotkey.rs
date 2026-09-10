@@ -17,17 +17,32 @@ pub fn spawn_protection_hotkey(state: Arc<AppState>) -> std::thread::JoinHandle<
         info!("Global hotkey registered: Ctrl+Alt+S toggles protection");
 
         let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        loop {
+            // GetMessageW returns >0 for a message, 0 for WM_QUIT, -1 on error.
+            // as_bool() would treat -1 as "true" and spin; handle explicitly.
+            let ret = GetMessageW(&mut msg, None, 0, 0);
+            if ret.0 == 0 {
+                break; // WM_QUIT
+            }
+            if ret.0 == -1 {
+                tracing::warn!("Global hotkey message loop error; retrying");
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
             if msg.message == WM_HOTKEY && msg.wParam.0 == HOTKEY_ID as usize {
                 let st = state.clone();
                 std::thread::spawn(move || {
+                    // Atomic invert avoids TOCTOU between load and apply when
+                    // UI and hotkey fire near-simultaneously.
                     let new_state = !st
                         .protection_atomic
-                        .load(std::sync::atomic::Ordering::SeqCst);
+                        .fetch_xor(true, std::sync::atomic::Ordering::SeqCst);
                     info!(
                         "Hotkey Ctrl+Alt+S: protection -> {}",
                         if new_state { "ON" } else { "OFF" }
                     );
+                    // apply_protection stores the flag again (idempotent) and
+                    // performs DNS/WFP/self-defense side effects.
                     apply_protection(&st, new_state);
                 });
             }

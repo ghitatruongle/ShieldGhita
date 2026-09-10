@@ -1,13 +1,16 @@
 export global I18n {
     in-out property <int> lang: 0;
     public pure function t(vi: string, en: string, zh: string) -> string {
-        return lang == 1 ? en : (lang == 2 ? zh : vi);
+        return lang == 1 ? en : (lang == 2 ? zh : (lang == 3 ? en : vi));
+    }
+    public pure function t4(vi: string, en: string, zh: string, ru: string) -> string {
+        return lang == 1 ? en : (lang == 2 ? zh : (lang == 3 ? ru : vi));
     }
     public pure function sev(v: string) -> string {
-        return v == "CRITICAL" ? t("NGHIÊM TRỌNG", "CRITICAL", "严重")
-             : v == "HIGH" ? t("CAO", "HIGH", "高")
-             : v == "MEDIUM" ? t("TRUNG BÌNH", "MEDIUM", "中")
-             : v == "LOW" ? t("THẤP", "LOW", "低")
+        return v == "CRITICAL" ? t4("NGHIÊM TRỌNG", "CRITICAL", "严重", "КРИТИЧЕСКИЙ")
+             : v == "HIGH" ? t4("CAO", "HIGH", "高", "ВЫСОКИЙ")
+             : v == "MEDIUM" ? t4("TRUNG BÌNH", "MEDIUM", "中", "СРЕДНИЙ")
+             : v == "LOW" ? t4("THẤP", "LOW", "低", "НИЗКИЙ")
              : v;
     }
 }
@@ -170,4 +173,31 @@ export struct RamProcessItem {
     pid: int,
     name: string,
     working-set-mb: float,
+    percent-ram: float,
+    exe-path: string,
+    is-critical: bool,
 }
+
+export struct FileScanFindingItem {
+    severity: string,
+    category: string,
+    description: string,
+    snippet: string,
+}
+
+export struct FileScanResult {
+    file-path: string,
+    file-name: string,
+    file-size-bytes: float,
+    md5: string,
+    sha1: string,
+    sha256: string,
+    entropy: float,
+    risk-score: int,
+    risk-level: string,
+    is-pe: bool,
+    is-packed: bool,
+    findings-count: int,
+    summary-text: string,
+}
+

@@ -470,49 +470,59 @@ pub async fn scan_open_ports(ip: IpAddr) -> Vec<OpenPort> {
 }
 
 pub async fn scan_ports_by_numbers(ip: IpAddr, ports: &[u16]) -> Vec<OpenPort> {
+    // Bound concurrency with a semaphore (32) and process ports in chunks so
+    // a large custom port list cannot spawn an unbounded JoinSet.
     let semaphore = Arc::new(Semaphore::new(32));
-    let mut join_set = tokio::task::JoinSet::new();
-
-    for &port in ports {
-        let addr = SocketAddr::new(ip, port);
-        let sem = semaphore.clone();
-        join_set.spawn(async move {
-            let _permit = sem.acquire_owned().await;
-            let open = tokio::time::timeout(Duration::from_millis(60), TcpStream::connect(addr))
-                .await
-                .is_ok_and(|r| r.is_ok());
-            if open {
-                let (label, risk, advice) = match port_entry(port) {
-                    Some((_, l, r, a)) => {
-                        ((*l).to_string(), *r, i18n::tr(a.vi, a.en, a.zh).to_string())
-                    }
-                    None => (
-                        format!("svc-{}", port),
-                        PortRisk::Medium,
-                        i18n::tr(
-                            "Cổng mở bất thường — kiểm tra dịch vụ đang lắng nghe.",
-                            "Unusual open port — check the listening service.",
-                            "异常开放端口 — 请检查监听中的服务。",
-                        )
-                        .to_string(),
-                    ),
-                };
-                Some(OpenPort {
-                    port,
-                    label,
-                    risk,
-                    advice,
-                })
-            } else {
-                None
-            }
-        });
-    }
-
     let mut open_ports = Vec::new();
-    while let Some(res) = join_set.join_next().await {
-        if let Ok(Some(p)) = res {
-            open_ports.push(p);
+    for chunk in ports.chunks(32) {
+        let mut join_set = tokio::task::JoinSet::new();
+        for &port in chunk {
+            let addr = SocketAddr::new(ip, port);
+            let sem = semaphore.clone();
+            join_set.spawn(async move {
+                // If the semaphore is closed, fail closed (no result) instead
+                // of scanning unthrottled.
+                let Ok(_permit) = sem.acquire_owned().await else {
+                    return None;
+                };
+                // 200-300 ms is the LAN sweet spot: 60 ms missed slow IoT /
+                // camera stacks, while seconds would stall full-subnet scans.
+                let open =
+                    tokio::time::timeout(Duration::from_millis(250), TcpStream::connect(addr))
+                        .await
+                        .is_ok_and(|r| r.is_ok());
+                if open {
+                    let (label, risk, advice) = match port_entry(port) {
+                        Some((_, l, r, a)) => {
+                            ((*l).to_string(), *r, i18n::tr(a.vi, a.en, a.zh).to_string())
+                        }
+                        None => (
+                            format!("svc-{}", port),
+                            PortRisk::Medium,
+                            i18n::tr(
+                                "Cổng mở bất thường — kiểm tra dịch vụ đang lắng nghe.",
+                                "Unusual open port — check the listening service.",
+                                "异常开放端口 — 请检查监听中的服务。",
+                            )
+                            .to_string(),
+                        ),
+                    };
+                    Some(OpenPort {
+                        port,
+                        label,
+                        risk,
+                        advice,
+                    })
+                } else {
+                    None
+                }
+            });
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            if let Ok(Some(p)) = res {
+                open_ports.push(p);
+            }
         }
     }
     open_ports.sort_by_key(|p| p.port);

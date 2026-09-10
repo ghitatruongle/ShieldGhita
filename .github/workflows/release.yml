@@ -81,8 +81,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ShieldGhita ${{ github.ref_name }}
+          # Release message mirrors the tag/commit message (e.g. "v0.1.0").
+          body: ${{ github.ref_name }}
           files: installer_output/ShieldGhita_Setup_*.exe
-          generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
 

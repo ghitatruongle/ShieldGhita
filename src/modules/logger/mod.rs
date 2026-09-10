@@ -1,5 +1,6 @@
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::{Arc, RwLock};
 use tracing::Subscriber;
 use tracing_subscriber::layer::Context;
@@ -21,14 +22,23 @@ pub fn cleanup_old_logs(dir: &std::path::Path, keep_days: i64) {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        if !name.starts_with("shield_ghita.log") {
+        // Only dated rotations (shield_ghita.log.YYYYMMDD); the contains
+        // check would also match unrelated "shield_ghita.logistics" files.
+        if !name.starts_with("shield_ghita.log.") {
             continue;
         }
-        let modified = entry
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        // Never delete the active (unrotated) file — only dated rotations.
+        if name == "shield_ghita.log" {
+            continue;
+        }
+        // Skip unreadable metadata instead of deleting: an unknown mtime
+        // must fail closed (keep), not default to UNIX_EPOCH (delete).
+        let Ok(md) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = md.modified() else {
+            continue;
+        };
         if modified < cutoff && std::fs::remove_file(&path).is_ok() {
             removed += 1;
         }
@@ -49,16 +59,22 @@ pub struct AppConsoleLog {
 }
 
 pub struct AppLogBuffer {
-    logs: Arc<RwLock<Vec<AppConsoleLog>>>,
+    logs: Arc<RwLock<VecDeque<AppConsoleLog>>>,
     max_entries: usize,
+    version: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl AppLogBuffer {
     pub fn new(max_entries: usize) -> Self {
         Self {
-            logs: Arc::new(RwLock::new(Vec::new())),
+            logs: Arc::new(RwLock::new(VecDeque::new())),
             max_entries,
+            version: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         }
+    }
+
+    pub fn version(&self) -> u64 {
+        self.version.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn push(&self, level: &str, message: &str) {
@@ -69,21 +85,32 @@ impl AppLogBuffer {
         };
 
         if let Ok(mut list) = self.logs.write() {
-            list.insert(0, entry);
-            if list.len() > self.max_entries {
-                list.truncate(self.max_entries);
+            // Newest-first via push_front/pop_back (O(1)); insert(0) on a Vec
+            // is O(n) and janked the UI at high log rates.
+            list.push_front(entry);
+            while list.len() > self.max_entries {
+                list.pop_back();
             }
         }
+        let _ = self
+            .version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn get_logs(&self) -> Vec<AppConsoleLog> {
-        self.logs.read().map(|l| l.clone()).unwrap_or_default()
+        self.logs
+            .read()
+            .map(|l| l.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     pub fn clear(&self) {
         if let Ok(mut list) = self.logs.write() {
             list.clear();
         }
+        let _ = self
+            .version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

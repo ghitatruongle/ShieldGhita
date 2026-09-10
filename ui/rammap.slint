@@ -1,4 +1,4 @@
-import { Button, ListView, CheckBox } from "std-widgets.slint";
+import { Button, ListView, CheckBox, LineEdit } from "std-widgets.slint";
 import { I18n, RamProcessItem } from "common.slint";
 
 component RamStatRow inherits Rectangle {
@@ -66,10 +66,18 @@ export component RamMapTab inherits Rectangle {
     in property <bool> is-busy: false;
     in property <bool> auto-clean: false;
     in property <int> threat-count: 0;
+    in property <int> auto-clean-threshold-mb: 512;
+    in-out property <string> custom-threshold-text: "";
+    in-out property <int> selected-pid: -1;
+    in-out property <string> selected-name: "";
+    in-out property <bool> selected-is-critical: false;
 
     callback empty-op(int);
     callback scan-memory();
     callback toggle-auto-clean(bool);
+    callback set-auto-clean-threshold(int);
+    callback terminate-process(int);
+    callback open-process-folder(string);
 
     in property <string> used-pct-text: root.total-mb > 0
         ? Math.round(100 * (root.total-mb - root.available-mb) / root.total-mb) + "%"
@@ -90,12 +98,14 @@ export component RamMapTab inherits Rectangle {
                 border-width: 1px;
                 border-color: #1f2937;
                 VerticalLayout {
-                    padding: 10px;
+                    padding: 8px;
                     alignment: center;
-                    Text { text: I18n.t("TỔNG RAM", "TOTAL RAM", "总内存"); font-size: 10px; font-weight: 700; color: #64748b; }
-                    Text { text: Math.round(root.total-mb) + " MB"; font-size: 17px; font-weight: 800; color: #38bdf8; }
+                    Text { text: I18n.t4("TỔNG RAM", "TOTAL RAM", "总内存", "ВСЕГО RAM"); font-size: 10px; font-weight: 700; color: #94a3b8; }
+                    Text { text: Math.round(root.total-mb) + " MB"; font-size: 16px; font-weight: 800; color: #f8fafc; }
+                    Text { text: Math.round(root.total-mb / 1024 * 10) / 10 + " GB"; font-size: 10px; color: #64748b; }
                 }
             }
+
             Rectangle {
                 horizontal-stretch: 1;
                 background: #111827;
@@ -103,12 +113,14 @@ export component RamMapTab inherits Rectangle {
                 border-width: 1px;
                 border-color: #1f2937;
                 VerticalLayout {
-                    padding: 10px;
+                    padding: 8px;
                     alignment: center;
-                    Text { text: I18n.t("CÒN TRỐNG", "AVAILABLE", "可用"); font-size: 10px; font-weight: 700; color: #64748b; }
-                    Text { text: Math.round(root.available-mb) + " MB"; font-size: 17px; font-weight: 800; color: #34d399; }
+                    Text { text: I18n.t4("ĐANG DÙNG", "IN USE", "使用中", "ИСПОЛЬЗУЕТСЯ"); font-size: 10px; font-weight: 700; color: #94a3b8; }
+                    Text { text: Math.round(root.active-mb) + " MB"; font-size: 16px; font-weight: 800; color: #f43f5e; }
+                    Text { text: root.used-pct-text; font-size: 10px; color: #f43f5e; font-weight: 700; }
                 }
             }
+
             Rectangle {
                 horizontal-stretch: 1;
                 background: #111827;
@@ -116,12 +128,14 @@ export component RamMapTab inherits Rectangle {
                 border-width: 1px;
                 border-color: #1f2937;
                 VerticalLayout {
-                    padding: 10px;
+                    padding: 8px;
                     alignment: center;
-                    Text { text: I18n.t("ĐANG DÙNG", "IN USE", "使用中"); font-size: 10px; font-weight: 700; color: #64748b; }
-                    Text { text: root.used-pct-text; font-size: 17px; font-weight: 800; color: #f472b6; }
+                    Text { text: I18n.t4("KHẢ DỤNG", "AVAILABLE", "可用内存", "ДОСТУПНО"); font-size: 10px; font-weight: 700; color: #94a3b8; }
+                    Text { text: Math.round(root.available-mb) + " MB"; font-size: 16px; font-weight: 800; color: #34d399; }
+                    Text { text: Math.round(root.available-mb / 1024 * 10) / 10 + " GB"; font-size: 10px; color: #64748b; }
                 }
             }
+
             Rectangle {
                 horizontal-stretch: 1;
                 background: #111827;
@@ -129,95 +143,162 @@ export component RamMapTab inherits Rectangle {
                 border-width: 1px;
                 border-color: #1f2937;
                 VerticalLayout {
-                    padding: 10px;
+                    padding: 8px;
                     alignment: center;
-                    Text { text: I18n.t("COMMIT", "COMMIT", "提交"); font-size: 10px; font-weight: 700; color: #64748b; }
-                    Text { text: Math.round(root.commit-mb) + " / " + Math.round(root.commit-limit-mb) + " MB"; font-size: 17px; font-weight: 800; color: #f59e0b; }
+                    Text { text: I18n.t4("DỰ TRỮ (STANDBY)", "STANDBY", "待机缓存", "ОЖИДАНИЕ"); font-size: 10px; font-weight: 700; color: #94a3b8; }
+                    Text { text: Math.round(root.standby-mb) + " MB"; font-size: 16px; font-weight: 800; color: #38bdf8; }
+                    Text { text: I18n.t4("Bộ nhớ đệm", "Cached", "高速缓存", "Кэшировано"); font-size: 10px; color: #64748b; }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #111827;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #1f2937;
+                VerticalLayout {
+                    padding: 8px;
+                    alignment: center;
+                    Text { text: I18n.t4("HOÀN TOÀN TRỐNG", "FREE", "完全空闲", "СВОБОДНО"); font-size: 10px; font-weight: 700; color: #94a3b8; }
+                    Text { text: Math.round(root.free-mb) + " MB"; font-size: 16px; font-weight: 800; color: #a78bfa; }
+                    Text { text: I18n.t4("Chưa cấp phát", "Unallocated", "未分配", "Не выделено"); font-size: 10px; color: #64748b; }
                 }
             }
         }
 
-        Text {
-            text: I18n.t("📊 PHÂN BỔ BỘ NHỚ VẬT LÝ", "📊 PHYSICAL MEMORY USE COUNTS", "📊 物理内存分配");
-            font-size: 12px;
-            font-weight: 800;
-            color: #38bdf8;
-        }
         Rectangle {
-            background: #111827;
+            background: #0b0f19;
             border-radius: 8px;
             border-width: 1px;
             border-color: #1f2937;
-            height: root.lists-available ? 186px : 62px;
+
             VerticalLayout {
-                padding: 4px;
-                spacing: 2px;
-                RamStatRow { label: I18n.t("Active (đang dùng)", "Active (in use)", "活动（使用中）"); value-mb: root.active-mb; total-mb: root.total-mb; bar-color: #38bdf8; }
-                if root.lists-available : RamStatRow { label: I18n.t("Standby (chờ thu)", "Standby (cached)", "待机（可回收）"); value-mb: root.standby-mb; total-mb: root.total-mb; bar-color: #a78bfa; }
-                if root.lists-available : RamStatRow { label: I18n.t("Modified (chờ ghi)", "Modified (dirty)", "已修改（待写回）"); value-mb: root.modified-mb; total-mb: root.total-mb; bar-color: #fbbf24; }
-                if root.lists-available : RamStatRow { label: I18n.t("Free (trống)", "Free", "空闲"); value-mb: root.free-mb; total-mb: root.total-mb; bar-color: #34d399; }
-                if root.lists-available : RamStatRow { label: I18n.t("Zero (đã xoá sạch)", "Zero (zeroed)", "零页"); value-mb: root.zero-mb; total-mb: root.total-mb; bar-color: #64748b; }
-                RamStatRow { label: I18n.t("Page Cache + Kernel", "Page Cache + Kernel", "系统缓存 + 内核"); value-mb: root.page-cache-mb + root.kernel-mb; total-mb: root.total-mb; bar-color: #f97316; }
+                padding: 10px;
+                spacing: 4px;
+                RamStatRow { label: I18n.t4("Đang dùng (Active)", "Active", "正在使用", "Активно"); value-mb: root.active-mb; total-mb: root.total-mb; bar-color: #f43f5e; }
+                RamStatRow { label: I18n.t4("Dự trữ (Standby)", "Standby", "待机内存", "Ожидание"); value-mb: root.standby-mb; total-mb: root.total-mb; bar-color: #38bdf8; }
+                RamStatRow { label: I18n.t4("Đã sửa đổi (Modified)", "Modified", "已修改", "Изменено"); value-mb: root.modified-mb; total-mb: root.total-mb; bar-color: #fbbf24; }
+                RamStatRow { label: I18n.t4("Trống sạch (Free/Zero)", "Free / Zeroed", "空闲/清零", "Свободно/Ноль"); value-mb: root.free-mb + root.zero-mb; total-mb: root.total-mb; bar-color: #34d399; }
+                RamStatRow { label: I18n.t4("System File Cache", "System File Cache", "系统文件缓存", "Системный кэш файлов"); value-mb: root.page-cache-mb; total-mb: root.total-mb; bar-color: #a78bfa; }
+                RamStatRow { label: I18n.t4("Kernel Memory", "Kernel Memory", "内核内存", "Память ядра"); value-mb: root.kernel-mb; total-mb: root.total-mb; bar-color: #94a3b8; }
             }
         }
+
         if !root.lists-available : Text {
-            text: I18n.t("⚠ Windows không cung cấp chi tiết trang nhớ — chỉ hiện số tổng.", "⚠ Page-list details unavailable from Windows — totals only.", "⚠ 无法获取页面明细 — 仅显示总量。");
+            text: I18n.t4("⚠ Windows không cung cấp chi tiết trang nhớ — các dòng Standby/Modified/Free chỉ là số 0, chưa đáng tin.", "⚠ Page-list details unavailable from Windows — Standby/Modified/Free rows show 0 and are not reliable.", "⚠ 无法获取页面明细 — 待机/修改/空闲行显示为 0，不可靠。", "⚠ Windows не предоставляет детали страниц — строки Standby/Modified/Free недостоверны.");
             font-size: 10px;
-            color: #64748b;
+            color: #fbbf24;
         }
 
-        Text {
-            text: I18n.t("🧹 GIẢI PHÓNG RAM (RAMMap Empty)", "🧹 FREE RAM (RAMMap Empty)", "🧹 释放内存（RAMMap Empty）");
-            font-size: 12px;
-            font-weight: 800;
-            color: #34d399;
-        }
         HorizontalLayout {
             spacing: 8px;
+            Text {
+                text: I18n.t4("Giải phóng RAM:", "Free Memory:", "释放内存:", "Очистить RAM:");
+                font-size: 11px;
+                font-weight: 700;
+                color: #94a3b8;
+                vertical-alignment: center;
+            }
             Button {
-                text: I18n.t("🗜 Working Sets", "🗜 Working Sets", "🗜 工作集");
+                text: I18n.t4("🧹 Working Sets", "🧹 Working Sets", "🧹 工作集", "🧹 Рабочие наборы");
                 enabled: !root.is-busy;
                 clicked => { root.empty-op(0); }
             }
             Button {
-                text: I18n.t("⚙ System WS", "⚙ System WS", "⚙ 系统工作集");
+                text: I18n.t4("⚙ System WS", "⚙ System WS", "⚙ 系统工作集", "⚙ Системный WS");
                 enabled: !root.is-busy;
                 clicked => { root.empty-op(1); }
             }
             Button {
-                text: I18n.t("📝 Modified List", "📝 Modified List", "📝 修改页表");
+                text: I18n.t4("📝 Modified List", "📝 Modified List", "📝 修改页表", "📝 Измененные страницы");
                 enabled: !root.is-busy;
                 clicked => { root.empty-op(2); }
             }
             Button {
-                text: I18n.t("🧹 Standby List", "🧹 Standby List", "🧹 Dự trữ");
+                text: I18n.t4("🧹 Standby List", "🧹 Standby List", "🧹 待机列表", "🧹 Список ожидания");
                 enabled: !root.is-busy;
                 clicked => { root.empty-op(3); }
             }
             Button {
-                text: I18n.t("🎯 P0 Standby", "🎯 P0 Standby", "🎯 Dự trữ P0");
+                text: I18n.t4("🎯 P0 Standby", "🎯 P0 Standby", "🎯 P0 待机", "🎯 P0 Ожидание");
                 enabled: !root.is-busy;
                 clicked => { root.empty-op(4); }
             }
             Rectangle { horizontal-stretch: 1; }
         }
+
         HorizontalLayout {
-            spacing: 10px;
+            spacing: 8px;
+            alignment: center;
+
             CheckBox {
                 checked: root.auto-clean;
-                text: I18n.t("Tự dọn khi RAM trống < 512MB", "Auto-clean when free RAM < 512MB", "空闲内存低于 512MB 时自动清理");
+                text: I18n.t4("Tự động dọn RAM khi trống <", "Auto-clean when free <", "空闲内存低于时自动清理 <", "Автоочистка RAM если свободно <");
                 toggled => { root.toggle-auto-clean(!root.auto-clean); }
             }
+
             Button {
-                text: root.is-busy ? I18n.t("⏳ Đang quét…", "⏳ Scanning…", "⏳ 正在扫描…")
+                text: "512 MB";
+                enabled: root.auto-clean;
+                clicked => { root.set-auto-clean-threshold(512); }
+            }
+
+            Button {
+                text: "1 GB (1024 MB)";
+                enabled: root.auto-clean;
+                clicked => { root.set-auto-clean-threshold(1024); }
+            }
+
+            Button {
+                text: "2 GB (2048 MB)";
+                enabled: root.auto-clean;
+                clicked => { root.set-auto-clean-threshold(2048); }
+            }
+
+            Text {
+                text: I18n.t4("Tùy chỉnh (MB):", "Custom (MB):", "自定义 (MB):", "Свой порог (MB):");
+                font-size: 11px;
+                color: #94a3b8;
+                vertical-alignment: center;
+            }
+
+            LineEdit {
+                width: 90px;
+                text <=> root.custom-threshold-text;
+                placeholder-text: root.auto-clean-threshold-mb + " MB";
+                enabled: root.auto-clean;
+            }
+
+            Button {
+                text: I18n.t4("Lưu", "Set", "应用", "ОК");
+                enabled: root.auto-clean && root.custom-threshold-text != "";
+                clicked => {
+                    root.set-auto-clean-threshold(root.custom-threshold-text.to-float());
+                    root.custom-threshold-text = "";
+                }
+            }
+
+            Button {
+                text: root.is-busy ? I18n.t4("⏳ Đang quét…", "⏳ Scanning…", "⏳ 正在扫描…", "⏳ Сканирование…")
                                    : (root.threat-count > 0
-                                      ? I18n.t("🛡 Soi bộ nhớ (" + root.threat-count + " nghi vấn)", "🛡 Scan Memory (" + root.threat-count + " suspect)", "🛡 内存扫描（" + root.threat-count + " 可疑）")
-                                      : I18n.t("🛡 Soi bộ nhớ lạ", "🛡 Scan Memory", "🛡 内存扫描"));
+                                      ? I18n.t4("🛡 Soi bộ nhớ (" + root.threat-count + " nghi vấn)", "🛡 Scan Memory (" + root.threat-count + " suspect)", "🛡 内存扫描（" + root.threat-count + " 可疑）", "🛡 Проверка памяти (" + root.threat-count + ")")
+                                      : I18n.t4("🛡 Soi bộ nhớ lạ", "🛡 Scan Memory", "🛡 内存扫描", "🛡 Проверка памяти"));
                 enabled: !root.is-busy;
                 clicked => { root.scan-memory(); }
             }
+
             Rectangle { horizontal-stretch: 1; }
+
+            Text {
+                text: (I18n.t4("Ngưỡng hiện tại: ", "Current threshold: ", "当前设定: ", "Текущий порог: ")) + root.auto-clean-threshold-mb + " MB";
+                font-size: 11px;
+                font-weight: 700;
+                color: #38bdf8;
+                vertical-alignment: center;
+            }
         }
+
         if root.last-action != "" : Text {
             text: root.last-action;
             font-size: 11px;
@@ -225,12 +306,34 @@ export component RamMapTab inherits Rectangle {
             wrap: word-wrap;
         }
 
-        Text {
-            text: I18n.t("📋 TIẾN TRÌNH DÙNG NHIỀU RAM NHẤT", "📋 TOP PROCESSES BY WORKING SET", "📋 按工作集排序的进程");
-            font-size: 12px;
-            font-weight: 800;
-            color: #a78bfa;
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: center;
+            Text {
+                text: I18n.t4("📋 DANH SÁCH TIẾN TRÌNH & DỌN NHANH (TASK MANAGER)", "📋 PROCESSES & 1-CLICK TASK TERMINATION", "📋 运行进程管理与快捷结束任务", "📋 ДИСПЕТЧЕР ПРОЦЕССОВ И БЫСТРОЕ ЗАВЕРШЕНИЕ");
+                font-size: 12px;
+                font-weight: 800;
+                color: #a78bfa;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if root.selected-pid > 0 : Button {
+                text: "🛑 " + I18n.t4("Dừng tác vụ: ", "End Task: ", "结束任务: ", "Завершить: ") + root.selected-name + " (PID " + root.selected-pid + ")";
+                enabled: !root.selected-is-critical;
+                clicked => {
+                    root.terminate-process(root.selected-pid);
+                    root.selected-pid = -1;
+                    root.selected-name = "";
+                }
+            }
+            Text {
+                text: (I18n.t4("Tổng số tiến trình: ", "Total processes: ", "当前总计: ", "Всего процессов: ")) + root.processes.length;
+                font-size: 11px;
+                color: #64748b;
+                vertical-alignment: center;
+            }
         }
+
         Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
@@ -239,16 +342,99 @@ export component RamMapTab inherits Rectangle {
             border-width: 1px;
             border-color: #1f2937;
             clip: true;
+
             ListView {
                 for p in root.processes : Rectangle {
-                    height: 26px;
+                    height: 40px;
+                    border-width: root.selected-pid == p.pid ? 2px : 1px;
+                    border-color: root.selected-pid == p.pid ? #38bdf8 : #1e293b;
+                    border-radius: 6px;
+                    background: root.selected-pid == p.pid ? #1e3a8a : #0f172a;
+
+                    TouchArea {
+                        clicked => {
+                            root.selected-pid = p.pid;
+                            root.selected-name = p.name;
+                            root.selected-is-critical = p.is-critical;
+                        }
+                    }
+
                     HorizontalLayout {
                         spacing: 10px;
-                        padding-left: 6px;
-                        padding-right: 6px;
-                        Text { text: p.name; color: #e2e8f0; font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                        Text { text: "PID " + p.pid; color: #64748b; font-size: 10px; vertical-alignment: center; width: 80px; }
-                        Text { text: Math.round(p.working-set-mb) + " MB"; color: #a78bfa; font-size: 11px; font-weight: 700; vertical-alignment: center; width: 90px; horizontal-alignment: right; }
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        alignment: center;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 1px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: p.name;
+                                    color: #f1f5f9;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: "PID " + p.pid;
+                                    color: #64748b;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            if p.exe-path != "" : Text {
+                                text: p.exe-path;
+                                color: #475569;
+                                font-size: 9px;
+                                overflow: elide;
+                            }
+                        }
+
+                        Text {
+                            text: Math.round(p.working-set-mb) + " MB (" + Math.round(p.percent-ram) + "%)";
+                            color: #a78bfa;
+                            font-size: 11px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            width: 100px;
+                            horizontal-alignment: right;
+                        }
+
+                        if p.exe-path != "" : Button {
+                            text: "📁";
+                            width: 32px;
+                            height: 26px;
+                            clicked => { root.open-process-folder(p.exe-path); }
+                        }
+
+                        if !p.is-critical : Button {
+                            text: "🛑 " + I18n.t4("Dừng", "End", "结束", "Стоп");
+                            height: 26px;
+                            clicked => { root.terminate-process(p.pid); }
+                        }
+
+                        if p.is-critical : Rectangle {
+                            height: 24px;
+                            border-radius: 4px;
+                            background: #334155;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                alignment: center;
+                                Text {
+                                    text: "🔒 " + I18n.t4("Hệ thống", "System", "系统", "Система");
+                                    color: #94a3b8;
+                                    font-size: 10px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
                     }
                 }
             }
