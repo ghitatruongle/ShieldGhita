@@ -30,13 +30,13 @@ jobs:
         run: cargo fmt --check
 
       - name: Cargo Check
-        run: cargo check --verbose
+        run: cargo check --locked --all-targets --verbose
 
       - name: Run Test Suite
-        run: cargo test --verbose
+        run: cargo test --locked --verbose
 
       - name: Clippy Linter
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
   dependency-audit:
     name: Dependency Vulnerability Audit
@@ -50,8 +50,10 @@ jobs:
         with:
           tool: cargo-audit
 
-      # Informational while findings are being triaged; switch to
-      # `cargo audit --deny warnings` (without continue-on-error) to enforce.
+      # v0.1.1-alpha decision: stay informational until findings are triaged.
+      # Flip to enforce after a clean audit run:
+      #   run: cargo audit --deny warnings
+      # and remove continue-on-error.
       - name: Run dependency audit
         continue-on-error: true
         run: cargo audit

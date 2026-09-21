@@ -54,6 +54,8 @@ impl AppState {
         if let Err(e) = wfp_blocker.initialize() {
             tracing::warn!("WFP initialization non-critical notice: {}", e);
         }
+        wfp_blocker.set_blocked_ips(cfg.wfp_blocked_ips.clone());
+        wfp_blocker.set_blocked_ports(cfg.wfp_blocked_ports.clone());
         tracing::info!("Startup sub [wfp-init]: {} ms", t1.elapsed().as_millis());
 
         let mut self_def = SelfDefense::new();

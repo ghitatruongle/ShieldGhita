@@ -8,6 +8,28 @@ use tracing::info;
 
 static APPLY_PROTECTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+fn register_quarantine_callback(
+    ui: &crate::AppWindow,
+    engine: Arc<crate::modules::security::SecurityEngine>,
+    refresh: impl Fn() + 'static,
+) {
+    let weak = ui.as_weak();
+    ui.on_toggle_device_quarantine(move |ip, quarantine| {
+        let result = if quarantine {
+            engine.quarantine_ip(ip.as_str())
+        } else {
+            engine.unquarantine_ip(ip.as_str());
+            Ok(())
+        };
+        refresh();
+        if let Err(reason) = result {
+            if let Some(window) = weak.upgrade() {
+                window.set_status_text(reason.message().into());
+            }
+        }
+    });
+}
+
 /// Saturating usize/u64 -> i32 for Slint properties (avoids `as i32` wrap).
 fn sat_i32_usize(v: usize) -> i32 {
     i32::try_from(v).unwrap_or(i32::MAX)
@@ -41,6 +63,15 @@ pub fn apply_protection(s: &Arc<AppState>, enabled: bool) {
         cfg_guard.protection_enabled = enabled;
         let _ = cfg_guard.save();
     }
+    // Refresh WFP rule lists from config before enable/disable so custom
+    // IP/port rules always match the last saved config.toml.
+    let (wfp_ips, wfp_ports) = s
+        .config
+        .read()
+        .map(|c| (c.wfp_blocked_ips.clone(), c.wfp_blocked_ports.clone()))
+        .unwrap_or_default();
+    s.wfp_blocker.set_blocked_ips(wfp_ips);
+    s.wfp_blocker.set_blocked_ports(wfp_ports);
     if enabled {
         if let Err(e) = dns_manager::set_system_dns("127.0.0.1") {
             tracing::error!("Failed to enable master DNS: {}", e);
@@ -659,13 +690,7 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s = state.clone();
     let ui_weak = ui.as_weak();
-    ui.on_toggle_device_quarantine(move |ip, quarantine| {
-        let ip_str = ip.to_string();
-        if quarantine {
-            s.security_engine.quarantine_ip(&ip_str);
-        } else {
-            s.security_engine.unquarantine_ip(&ip_str);
-        }
+    register_quarantine_callback(ui, s.security_engine.clone(), move || {
         if let Some(ui_inst) = ui_weak.upgrade() {
             super::refresh::refresh_ui_state(&ui_inst, &s);
         }
@@ -797,13 +822,18 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                     ui_inst.set_ram_is_busy(true);
                 }
             });
-            let found = tokio::task::spawn_blocking(|| {
-                crate::modules::rammap::scan_suspicious_processes(40, 4.0)
+            let scan_res = tokio::task::spawn_blocking(|| {
+                crate::modules::rammap::scan_suspicious_processes_report(40, 4.0)
             })
             .await
-            .unwrap_or_default();
-            let n = found.len();
-            for sp in &found {
+            .unwrap_or_else(|e| {
+                crate::modules::rammap::MemoryScanReport {
+                    error: Some(format!("task error: {e}")),
+                    ..Default::default()
+                }
+            });
+            let n = scan_res.findings.len();
+            for sp in &scan_res.findings {
                 let severity = if sp.rwx_regions > 0 { "HIGH" } else { "MEDIUM" };
                 s2.security_engine.record_incident(
                     "Memory Injection Suspect",
@@ -836,14 +866,18 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                     ),
                 );
             }
-            let msg = if n == 0 {
-                crate::modules::i18n::tr(
-                    "✓ Không phát hiện vùng nhớ đáng ngờ (An toàn)",
-                    "✓ No suspicious memory regions detected (Safe)",
-                    "✓ 未发现可疑内存区域（安全）",
-                )
-                .to_string()
-            } else {
+            // Coverage-aware status: "no findings" may only be claimed when at
+            // least one process was actually CHECKED and NOTHING was skipped,
+            // denied, errored, or left partial. Otherwise the message must
+            // disclose the unfinished coverage instead of claiming safety.
+            let checked = scan_res.count(crate::modules::rammap::ScanStatus::Checked);
+            let denied = scan_res.count(crate::modules::rammap::ScanStatus::AccessDenied);
+            let partial = scan_res.count(crate::modules::rammap::ScanStatus::Partial);
+            let errored = scan_res.count(crate::modules::rammap::ScanStatus::Error);
+            let skipped = scan_res.count(crate::modules::rammap::ScanStatus::Skipped);
+            let msg = if let Some(err) = &scan_res.error {
+                format!("✗ {err}")
+            } else if n > 0 {
                 format!(
                     "{} {} {}",
                     crate::modules::i18n::tr("⚠ Phát hiện", "⚠ Detected", "⚠ 发现"),
@@ -854,7 +888,75 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                         "个存在可疑内存的进程 — 请查看安全选项卡",
                     )
                 )
+            } else if denied + partial + errored > 0 {
+                // Even with some coverage, access failures block a "Safe" claim.
+                crate::modules::i18n::tr4(
+                    "⚠ Quét chưa đầy đủ — một số tiến trình không truy cập được, không thể kết luận an toàn",
+                    "⚠ Scan incomplete: some processes were inaccessible; no safety conclusion",
+                    "⚠ 扫描未完成：部分进程无法访问，无法判定安全",
+                    "⚠ Скан неполный: часть процессов недоступна; вывод о безопасности невозможен",
+                )
+                .to_string()
+            } else if checked > 0 {
+                format!(
+                    "{} ({} {})",
+                    crate::modules::i18n::tr(
+                        "Không có phát hiện trong phần đã kiểm tra; không chứng minh an toàn",
+                        "No findings in checked scope; not proof of safety",
+                        "已检查范围内无发现；不代表安全",
+                    ),
+                    checked,
+                    crate::modules::i18n::tr(
+                        "tiến trình đã kiểm tra đầy đủ",
+                        "process(es) fully checked",
+                        "个进程已完整检查",
+                    ),
+                )
+            } else {
+                crate::modules::i18n::tr(
+                    "⚠ Không có tiến trình nào được kiểm tra — thử lại",
+                    "⚠ No process could be checked — retry",
+                    "⚠ 无法检查任何进程 — 请重试",
+                )
+                .to_string()
             };
+            let suffix = {
+                let mut parts: Vec<String> = Vec::new();
+                let fmt = |cnt: usize, vi: &'static str, en: &'static str, zh: &'static str| -> Option<String> {
+                    (cnt > 0).then(|| {
+                        format!("{cnt} {}", crate::modules::i18n::tr(vi, en, zh))
+                    })
+                };
+                if let Some(s) = fmt(denied, "bị từ chối truy cập", "access denied", "个拒绝访问") {
+                    parts.push(s);
+                }
+                if let Some(s) = fmt(partial, "quét một phần", "partial", "个部分扫描") {
+                    parts.push(s);
+                }
+                if let Some(s) = fmt(errored, "lỗi", "error", "个出错") {
+                    parts.push(s);
+                }
+                if let Some(s) = fmt(skipped, "bỏ qua (hệ thống)", "skipped (system)", "个跳过（系统）") {
+                    parts.push(s);
+                }
+                if scan_res.not_selected > 0 {
+                    parts.push(format!(
+                        "{} {}",
+                        scan_res.not_selected,
+                        crate::modules::i18n::tr(
+                            "ngoài top tiến trình RAM",
+                            "outside top-RAM sample",
+                            "个未在RAM前列样本内",
+                        )
+                    ));
+                }
+                if parts.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", parts.join(", "))
+                }
+            };
+            let msg = format!("{msg}{suffix}");
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui_inst) = ui_weak.upgrade() {
                     ui_inst.set_ram_is_busy(false);
@@ -1044,4 +1146,39 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             });
         });
     });
+}
+
+#[cfg(test)]
+mod quarantine_tests {
+    use super::*;
+
+    #[test]
+    fn callback_action_updates_device_quarantine_state() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        let engine = Arc::new(crate::modules::security::SecurityEngine::new());
+        engine.update_quarantine_inventory(
+            &[("192.0.2.24".into(), "02:00:00:00:00:24".into())],
+            &["192.0.2.10".into()],
+            &["192.0.2.1".into()],
+        );
+        let weak = ui.as_weak();
+        let state = engine.clone();
+        register_quarantine_callback(&ui, engine.clone(), move || {
+            let row = crate::NetworkDevice {
+                ip: "192.0.2.24".into(),
+                is_quarantined: state.is_quarantined("192.0.2.24"),
+                ..Default::default()
+            };
+            weak.unwrap()
+                .set_devices(slint::ModelRc::new(slint::VecModel::from(vec![row])));
+        });
+        ui.invoke_toggle_device_quarantine("192.0.2.24".into(), true);
+        assert!(engine.is_quarantined("192.0.2.24"));
+        assert!(ui.get_devices().row_data(0).unwrap().is_quarantined);
+        ui.invoke_toggle_device_quarantine("192.0.2.24".into(), false);
+        assert!(!engine.is_quarantined("192.0.2.24"));
+        assert!(!ui.get_devices().row_data(0).unwrap().is_quarantined);
+    }
 }

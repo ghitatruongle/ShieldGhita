@@ -106,6 +106,9 @@ const BUILTIN_VIDEO_AUDIO_AD_DOMAINS: &[&str] = &[
     "diagnostics.support.microsoft.com",
 ];
 
+const REBIND_INCIDENT_COOLDOWN: Duration = Duration::from_secs(60);
+const MAX_REBIND_COOLDOWNS: usize = 1024;
+
 pub type DnsCacheMap = Arc<RwLock<HashMap<(String, u16), (Vec<u8>, Instant, u32)>>>;
 
 pub struct DnsBlocker {
@@ -1441,64 +1444,32 @@ impl DnsBlocker {
         mon.add_log(&query_name, &src_ip, false);
 
         if let Some(resp) = self.cached_response_for(&query_name, qtype, &pkt) {
+            // A cached answer bypasses the fresh-response path below, so the
+            // rebinding check must run here too or a poison (or pre-allowlist)
+            // private answer could be served silently.
+            if self.forwarded_answer_hits_private_space(&query_name, &resp) {
+                warn!(
+                    "DNS Rebinding (cached answer): domain '{}' private IP answer withheld for client {}",
+                    query_name, src_ip
+                );
+                self.record_rebind_incident(&src_ip, &query_name, &mon);
+                if let Some(nx) = Self::build_nxdomain(&pkt) {
+                    let _ = sock.send_to(&nx, src).await;
+                }
+                return;
+            }
             let _ = sock.send_to(&resp, src).await;
             return;
         }
 
         let fwd_resp = self.forward_parallel_racing(&pkt, &doh_urls).await;
         if let Some(mut resp) = fwd_resp {
-            if !Self::is_legit_local_domain(&query_name) && Self::is_private_ip_record(&resp) {
+            if self.forwarded_answer_hits_private_space(&query_name, &resp) {
                 warn!(
                     "DNS Rebinding Attack detected: domain '{}' resolved to internal private IP space for client {}",
                     query_name, src_ip
                 );
-                // Rate-limit rebinding incidents per (IP,domain) to 1 per 60s.
-                let should_record = {
-                    match self.rebind_incident_cooldown.lock() {
-                        Ok(mut cd) => {
-                            let key = (src_ip.clone(), query_name.clone());
-                            let now = Instant::now();
-                            match cd.get(&key) {
-                                Some(last)
-                                    if now.duration_since(*last) < Duration::from_secs(60) =>
-                                {
-                                    false
-                                }
-                                _ => {
-                                    cd.insert(key, now);
-                                    true
-                                }
-                            }
-                        }
-                        Err(_) => true,
-                    }
-                };
-                if should_record {
-                    mon.security_engine.record_incident(
-                    crate::modules::i18n::tr(
-                        "Tấn công DNS Rebinding (Private IP Leak)",
-                        "DNS Rebinding Attack (Private IP Leak)",
-                        "DNS 重绑定攻击 (Private IP Leak)",
-                    ),
-                    &src_ip,
-                    &format!(
-                        "{} '{}' {}",
-                        crate::modules::i18n::tr("Tên miền công cộng", "Public domain", "公共域名"),
-                        query_name,
-                        crate::modules::i18n::tr(
-                            "trả về địa chỉ IP nội bộ LAN (127.0.0.1 / 192.168.x / 10.x). Đã kích hoạt cơ chế tự vệ.",
-                            "resolved to LAN private IP (127.0.0.1 / 192.168.x / 10.x). Self-defense triggered.",
-                            "解析为局域网私有 IP (127.0.0.1 / 192.168.x / 10.x)。已触发防御机制。"
-                        )
-                    ),
-                    "CRITICAL",
-                    crate::modules::i18n::tr(
-                        "Đã chặn phân giải IP nội bộ giả mạo (Trả về NXDOMAIN)",
-                        "Blocked forged internal IP answer (Returned NXDOMAIN)",
-                        "已拦截伪造内网 IP 解析 (返回 NXDOMAIN)",
-                    ),
-                );
-                }
+                self.record_rebind_incident(&src_ip, &query_name, &mon);
                 if let Some(nx) = Self::build_nxdomain(&pkt) {
                     resp = nx;
                 }
@@ -1508,6 +1479,93 @@ impl DnsBlocker {
             let _ = sock.send_to(&resp, src).await;
         } else if let Some(servfail) = Self::build_servfail(&pkt) {
             let _ = sock.send_to(&servfail, src).await;
+        }
+    }
+
+    fn forwarded_answer_hits_private_space(&self, query_name: &str, resp: &[u8]) -> bool {
+        if Self::is_legit_local_domain(query_name) {
+            return false;
+        }
+        if !Self::is_private_ip_record(resp) {
+            return false;
+        }
+        // Narrow custom allowlist exception: a domain (or parent of it) the
+        // administrator explicitly allowlisted is trusted to answer with
+        // private addresses (self-hosted services, LAN dashboards). The
+        // default/global allowlist and every other protection stay intact —
+        // all other public names keep the fail-closed rebinding block.
+        let ca = self
+            .custom_allowed
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        !Self::match_domain_hierarchy(&query_name.trim_end_matches('.').to_lowercase(), &ca)
+    }
+
+    /// One rebinding incident per (src_ip, domain) per cooldown window; the
+    /// map is bounded by expiry-pruning plus a hard cap so a sustained attack
+    /// from many (IP, domain) pairs cannot grow it without limit.
+    fn take_rebind_incident_slot(&self, src_ip: &str, query_name: &str) -> bool {
+        let now = Instant::now();
+        match self.rebind_incident_cooldown.lock() {
+            Ok(mut cd) => {
+                let key = (src_ip.to_string(), query_name.to_string());
+                if let Some(last) = cd.get(&key) {
+                    if now.duration_since(*last) < REBIND_INCIDENT_COOLDOWN {
+                        return false;
+                    }
+                }
+                if cd.len() >= MAX_REBIND_COOLDOWNS {
+                    cd.retain(|_, t| now.duration_since(*t) < REBIND_INCIDENT_COOLDOWN);
+                    if cd.len() >= MAX_REBIND_COOLDOWNS {
+                        // Still saturated (flood of distinct pairs within one
+                        // window): shed the oldest quarter instead of growing.
+                        let mut oldest: Vec<((String, String), Instant)> =
+                            cd.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                        oldest.sort_by_key(|(_, t)| *t);
+                        let evict = cd.len() / 4;
+                        for (k, _) in oldest.into_iter().take(evict) {
+                            cd.remove(&k);
+                        }
+                    }
+                }
+                cd.insert(key, now);
+                true
+            }
+            Err(_) => true,
+        }
+    }
+
+    fn record_rebind_incident(
+        &self,
+        src_ip: &str,
+        query_name: &str,
+        mon: &crate::modules::monitor::NetworkMonitor,
+    ) {
+        if self.take_rebind_incident_slot(src_ip, query_name) {
+            mon.security_engine.record_incident(
+                crate::modules::i18n::tr(
+                    "Tấn công DNS Rebinding (Private IP Leak)",
+                    "DNS Rebinding Attack (Private IP Leak)",
+                    "DNS 重绑定攻击 (Private IP Leak)",
+                ),
+                src_ip,
+                &format!(
+                    "{} '{}' {}",
+                    crate::modules::i18n::tr("Tên miền công cộng", "Public domain", "公共域名"),
+                    query_name,
+                    crate::modules::i18n::tr(
+                        "trả về địa chỉ IP nội bộ LAN (127.0.0.1 / 192.168.x / 10.x). Đã kích hoạt cơ chế tự vệ.",
+                        "resolved to LAN private IP (127.0.0.1 / 192.168.x / 10.x). Self-defense triggered.",
+                        "解析为局域网私有 IP (127.0.0.1 / 192.168.x / 10.x)。已触发防御机制。"
+                    )
+                ),
+                "CRITICAL",
+                crate::modules::i18n::tr(
+                    "Đã chặn phân giải IP nội bộ giả mạo (Trả về NXDOMAIN)",
+                    "Blocked forged internal IP answer (Returned NXDOMAIN)",
+                    "已拦截伪造内网 IP 解析 (返回 NXDOMAIN)",
+                ),
+            );
         }
     }
 
@@ -1931,6 +1989,79 @@ mod tests {
 
         let public_resp = DnsBlocker::build_sinkhole_a_record(&query, [8, 8, 8, 8]).unwrap();
         assert!(!DnsBlocker::is_private_ip_record(&public_resp));
+    }
+
+    #[test]
+    fn test_rebind_allowlist_exception_and_cooldown_bound() {
+        // In-memory fixture: do not read the user's blocklist/ETags or start
+        // a resolver. Constructing the HTTP client sends no requests.
+        let (blocked_events_tx, _) = tokio::sync::broadcast::channel(1);
+        let blocker = DnsBlocker {
+            disk_store: Arc::new(RwLock::new(None)),
+            fast_cache: Arc::new(FastDomainCache::new()),
+            builtin_domains: Arc::new(RwLock::new(HashSet::new())),
+            allowed_domains: Arc::new(RwLock::new(HashSet::new())),
+            custom_blocked: Arc::new(RwLock::new(HashSet::new())),
+            custom_allowed: Arc::new(RwLock::new(HashSet::new())),
+            dns_cache: Arc::new(RwLock::new(HashMap::new())),
+            http_client: reqwest::Client::new(),
+            etag_cache: Arc::new(Mutex::new(HashMap::new())),
+            total_queries: Arc::new(AtomicU64::new(0)),
+            blocked_count: Arc::new(AtomicU64::new(0)),
+            silent_sinkhole_enabled: Arc::new(AtomicBool::new(true)),
+            blocked_events_tx,
+            response_policy: Arc::new(RwLock::new(None)),
+            rules_count: Arc::new(AtomicUsize::new(0)),
+            rebind_incident_cooldown: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let query = vec![
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, b'e',
+            b'v', b'i', b'l', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+        ];
+        let private_resp = DnsBlocker::build_sinkhole_a_record(&query, [192, 168, 1, 7]).unwrap();
+
+        // Default: first-seen private answer for a public name is blocked.
+        assert!(blocker.forwarded_answer_hits_private_space("evil.com", &private_resp));
+
+        // Explicit custom allowlist entry (exact or parent domain) is trusted
+        // for self-hosted/LAN services; subdomains inherit the exemption.
+        assert!(blocker.add_allowed_domain("selfhosted.example").is_ok());
+        assert!(!blocker.forwarded_answer_hits_private_space("selfhosted.example", &private_resp));
+        assert!(
+            !blocker.forwarded_answer_hits_private_space("app.selfhosted.example.", &private_resp)
+        );
+
+        // The global allowlist must NOT grant this exception (admin opt-in
+        // through custom rules only), so other names stay protected.
+        blocker
+            .allowed_domains
+            .write()
+            .unwrap()
+            .insert("open.example".to_string());
+        assert!(blocker.forwarded_answer_hits_private_space("open.example", &private_resp));
+
+        // Public answers and legit local names are never flagged.
+        let public_resp = DnsBlocker::build_sinkhole_a_record(&query, [8, 8, 8, 8]).unwrap();
+        assert!(!blocker.forwarded_answer_hits_private_space("evil.com", &public_resp));
+        assert!(!blocker.forwarded_answer_hits_private_space("router.local", &private_resp));
+
+        // Cooldown map: repeat incidents for the same (ip, domain) inside 60s
+        // are suppressed, and distinct pairs can never exceed the hard cap.
+        assert!(blocker.take_rebind_incident_slot("203.0.113.9", "flood.test"));
+        assert!(!blocker.take_rebind_incident_slot("203.0.113.9", "flood.test"));
+        for i in 0..(MAX_REBIND_COOLDOWNS * 2) {
+            blocker.take_rebind_incident_slot(
+                &format!("203.0.113.{}", i % 200),
+                &format!("flood{}.test", i % 997),
+            );
+        }
+        let map = blocker.rebind_incident_cooldown.lock().unwrap();
+        assert!(
+            map.len() <= MAX_REBIND_COOLDOWNS,
+            "rebind cooldown map must stay bounded"
+        );
+        // Oldest slots may be evicted under saturation; the hard bound, not
+        // retention of every pair during a flood, is the invariant here.
     }
 
     #[test]

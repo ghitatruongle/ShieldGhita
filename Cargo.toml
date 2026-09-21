@@ -1,6 +1,6 @@
 [package]
 name = "shield_ghita"
-version = "0.1.0"
+version = "0.1.1-alpha"
 edition = "2021"
 [features]
 default = []
@@ -52,6 +52,9 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows-service = "0.7"
+
+[dev-dependencies]
+i-slint-backend-testing = "=1.17.1"
 
 [build-dependencies]
 slint-build = "1.8"

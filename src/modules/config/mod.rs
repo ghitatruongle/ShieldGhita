@@ -71,6 +71,13 @@ pub struct AppConfig {
     /// overriding a deliberate user choice of 5353 on every load.
     #[serde(default)]
     pub port_migrated_from_5353: bool,
+    /// WFP custom remote IPv4 addresses to block when protection is ON.
+    /// Empty = DNS blocker only (default public path).
+    #[serde(default)]
+    pub wfp_blocked_ips: Vec<String>,
+    /// WFP custom local TCP ports to block (inbound accept) when protection is ON.
+    #[serde(default)]
+    pub wfp_blocked_ports: Vec<u16>,
 }
 
 fn default_ram_clean_threshold_mb() -> u64 {
@@ -186,6 +193,8 @@ impl Default for AppConfig {
             rammap_auto_clean_enabled: false,
             rammap_auto_clean_threshold_mb: default_ram_clean_threshold_mb(),
             port_migrated_from_5353: false,
+            wfp_blocked_ips: Vec::new(),
+            wfp_blocked_ports: Vec::new(),
         }
     }
 }
@@ -397,6 +406,22 @@ mod tests {
         assert!(parsed.window_maximized);
         assert!(!parsed.minimize_to_tray_on_minimize);
         assert!(parsed.start_hidden_in_tray);
+    }
+
+    #[test]
+    fn test_wfp_rule_fields_default_empty_and_roundtrip() {
+        let cfg = AppConfig {
+            wfp_blocked_ips: vec!["10.0.0.9".to_string()],
+            wfp_blocked_ports: vec![445u16],
+            ..AppConfig::default()
+        };
+        let json = toml::to_string_pretty(&cfg).unwrap();
+        let parsed: AppConfig = toml::from_str(&json).unwrap();
+        assert_eq!(parsed.wfp_blocked_ips, vec!["10.0.0.9".to_string()]);
+        assert_eq!(parsed.wfp_blocked_ports, vec![445u16]);
+        let empty: AppConfig = toml::from_str("language = \"en\"\n").unwrap();
+        assert!(empty.wfp_blocked_ips.is_empty());
+        assert!(empty.wfp_blocked_ports.is_empty());
     }
 
     #[test]

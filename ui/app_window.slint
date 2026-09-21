@@ -268,6 +268,8 @@ export component AppWindow inherits Window {
     default-font-family: I18n.lang == 2 ? "Microsoft YaHei UI" : "Segoe UI";
 
     in-out property <string> app-version: "";
+    in-out property <string> initial-panel-password: "";
+    private property <string> quarantine-target: "";
     in-out property <bool> enable-notifications: true;
     in-out property <bool> show-toast: false;
     in-out property <string> toast-domain: "";
@@ -1020,7 +1022,10 @@ export component AppWindow inherits Window {
                         for device in root.devices : LanDeviceRow {
                             device: device;
                             view-logs(ip) => { root.filter-logs-by-ip(ip); }
-                            toggle-quarantine(ip, q) => { root.toggle-device-quarantine(ip, q); }
+                            toggle-quarantine(ip, q) => {
+                                if q { root.quarantine-target = ip; }
+                                else { root.toggle-device-quarantine(ip, false); }
+                            }
                         }
                     }
 
@@ -2967,6 +2972,62 @@ export component AppWindow inherits Window {
                                 root.camera-save-pass = "";
                                 root.stop-camera-live-stream();
                                 root.start-camera-live-stream(root.camera-live-ip, "", "");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.quarantine-target != "" || root.initial-panel-password != "" : Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000bb;
+        TouchArea { }
+        Rectangle {
+            width: 580px;
+            height: 280px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #111827;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #475569;
+            VerticalLayout {
+                padding: 24px;
+                spacing: 16px;
+                Text {
+                    text: root.initial-panel-password != "" ? I18n.t4("Mật khẩu Web Panel — chỉ hiển thị lần này", "Web Panel password — shown once", "Web Panel 密码 — 仅显示一次", "Пароль Web Panel — показан один раз") : I18n.t4("Xác nhận chặn DNS", "Confirm DNS blocking", "确认阻止 DNS", "Подтвердите блокировку DNS");
+                    color: #f8fafc;
+                    font-size: 18px;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.initial-panel-password != "" ? I18n.t4("Tài khoản: admin. Lưu mật khẩu dưới đây, đăng nhập Web Panel rồi đổi mật khẩu. Không phải mật khẩu ứng dụng.", "Account: admin. Save this password, sign in to Web Panel and change it. This is not an application login.", "账户：admin。请保存以下密码，登录 Web Panel 后更改。这不是应用登录密码。", "Аккаунт: admin. Сохраните пароль, войдите в Web Panel и смените его. Это не пароль приложения.") : I18n.t4("Chỉ chặn DNS đi qua ShieldGhita cho IP này; không ngắt toàn bộ Internet. IP có thể đổi chủ. Bạn có thể mở chặn ngay bằng nút Mở.", "Only blocks DNS through ShieldGhita for this IP, not all Internet access. IP ownership may change. Use Free to unblock at any time.", "仅阻止此 IP 通过 ShieldGhita 的 DNS，并非全部互联网访问。IP 的归属可能改变。可随时点击解除。", "Блокирует только DNS через ShieldGhita для этого IP, не весь Интернет. Владелец IP может измениться. Блокировку можно снять в любое время.");
+                    color: #cbd5e1;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.initial-panel-password != "" ? root.initial-panel-password : root.quarantine-target;
+                    font-size: 18px;
+                    color: #38bdf8;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 12px;
+                    if root.initial-panel-password == "" : Button {
+                        text: I18n.t4("Hủy", "Cancel", "取消", "Отмена");
+                        clicked => { root.quarantine-target = ""; }
+                    }
+                    Button {
+                        text: root.initial-panel-password != "" ? I18n.t4("Đã lưu — đóng", "Saved — close", "已保存 — 关闭", "Сохранено — закрыть") : I18n.t4("Chặn DNS", "Block DNS", "阻止 DNS", "Блокировать DNS");
+                        clicked => {
+                            if root.initial-panel-password != "" { root.initial-panel-password = ""; }
+                            else {
+                                root.toggle-device-quarantine(root.quarantine-target, true);
+                                root.quarantine-target = "";
                             }
                         }
                     }

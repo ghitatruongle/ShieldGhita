@@ -10,6 +10,9 @@ use super::TrayMenuIds;
 
 pub static WINDOW_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 static RAM_PROCS_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Guards the periodic housekeeping job (working-set trim + hosts-file check)
+// so two runs can never overlap; the tick simply skips while one is in flight.
+static HOUSEKEEPING_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq)]
 struct WindowGeom {
@@ -151,9 +154,9 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
     let mut ram_tick: u32 = 0;
     let mut trim_tick: u32 = 0;
     let mut last_auto_clean = Instant::now();
-    // Per-interface previous counters + timestamp so we report the max
-    // per-interface *rate* (delta), not the interface with max total bytes.
-    // Using max-total flaps between Wi-Fi/Ethernet and yields bogus spikes.
+    // sysinfo 0.30.13 received()/transmitted() already subtract old counters.
+    // Use cumulative totals for our own baseline, avoiding double subtraction
+    // AND repeated stale deltas when Windows GetIfEntry2 fails a refresh.
     let mut prev_net: std::collections::HashMap<String, (u64, u64)> =
         std::collections::HashMap::new();
     let mut prev_net_t: Option<Instant> = None;
@@ -188,8 +191,13 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
             }
 
             networks.refresh();
-            // Per-interface delta: pick the interface with the largest
-            // byte-delta this tick, not the largest cumulative total.
+            // Per-interface rate over the real elapsed tick. Note we keep our
+            // own CUMULATIVE baseline (`total_received/total_transmitted`):
+            // `received()`/`transmitted()` are deltas vs sysinfo's internal
+            // old-counter, so differencing those would double-subtract; and
+            // when GetIfEntry2 fails, sysinfo keeps the STALE delta, which
+            // would re-report the previous tick's traffic forever. A failed
+            // tick yields zero because its cumulative counters are unchanged.
             let now = Instant::now();
             let is_first_tick = prev_net_t.is_none();
             let dt = prev_net_t
@@ -202,24 +210,26 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
                 if if_name.to_lowercase().contains("loopback") {
                     continue;
                 }
-                let (rx, tx) = (data.received(), data.transmitted());
+                let (rx, tx) = (data.total_received(), data.total_transmitted());
                 let (prx, ptx) = prev_net.get(if_name).copied().unwrap_or((rx, tx));
-                let drx = rx.saturating_sub(prx) as f64;
-                let dtx = tx.saturating_sub(ptx) as f64;
-                let down = drx * 8.0 / dt / 1_000_000.0;
-                let up = dtx * 8.0 / dt / 1_000_000.0;
+                let drx = rx.saturating_sub(prx);
+                let dtx = tx.saturating_sub(ptx);
+                let (down, up) = compute_net_rate(drx, dtx, dt, is_first_tick);
                 if down + up > best_down + best_up {
                     best_down = down;
                     best_up = up;
                     best_name = if_name.clone();
                 }
             }
-            // Refresh snapshot for next tick (prune vanished interfaces).
+            // Snapshot for next tick (prune vanished interfaces).
             {
                 let mut next: std::collections::HashMap<String, (u64, u64)> =
                     std::collections::HashMap::new();
                 for (if_name, data) in &networks {
-                    next.insert(if_name.clone(), (data.received(), data.transmitted()));
+                    next.insert(
+                        if_name.clone(),
+                        (data.total_received(), data.total_transmitted()),
+                    );
                 }
                 prev_net = next;
                 prev_net_t = Some(now);
@@ -294,8 +304,12 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
             // Re-clamp on READ: a hand-edited config_toml can carry any u64;
             // an absurd threshold would make the purge fire every 60s forever.
             let threshold_mb = threshold_mb.clamp(64, 65536);
+            // get_available_ram_mb() returns 0 when GlobalMemoryStatusEx fails.
+            // Treat 0 as "unknown" — never auto-purge on a failed probe.
+            let available_mb = crate::modules::rammap::get_available_ram_mb();
             if auto_clean_on
-                && crate::modules::rammap::get_available_ram_mb() < threshold_mb
+                && available_mb > 0
+                && available_mb < threshold_mb
                 && last_auto_clean.elapsed() >= Duration::from_secs(60)
             {
                 last_auto_clean = Instant::now();
@@ -313,10 +327,26 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
                 });
             }
 
+            // Every ~30s: self working-set trim + hosts-file integrity check.
+            // Both block (file IO / working-set calls), so they run on the
+            // tokio blocking pool — never inside this 1Hz UI tick. The guard
+            // makes housekeeping non-overlapping: the next check is skipped
+            // while the previous job is still running, and the flag is always
+            // released afterwards.
             trim_tick = trim_tick.wrapping_add(1);
-            if trim_tick.is_multiple_of(30) {
-                crate::modules::system::trim_process_working_set();
-                state.security_engine.inspect_hosts_file();
+            if trim_tick.is_multiple_of(30) && !HOUSEKEEPING_BUSY.swap(true, Ordering::SeqCst) {
+                let state_bg = state.clone();
+                state.runtime.spawn(async move {
+                    let res = tokio::task::spawn_blocking(move || {
+                        crate::modules::system::trim_process_working_set();
+                        state_bg.security_engine.inspect_hosts_file();
+                    })
+                    .await;
+                    if let Err(e) = res {
+                        tracing::warn!("Housekeeping join error: {e}");
+                    }
+                    HOUSEKEEPING_BUSY.store(false, Ordering::SeqCst);
+                });
             }
         },
     );
@@ -450,5 +480,54 @@ fn track_window_geom(
             persist_window_geom(s, last_seen);
             *dirty_since = None;
         }
+    }
+}
+
+/// Pure rate computation: drx/dtx are saturating differences of cumulative
+/// total_received()/total_transmitted() counters, not differences of sysinfo
+/// received()/transmitted() deltas. Suppress the unbaselined first sample.
+fn compute_net_rate(drx: u64, dtx: u64, dt_secs: f64, is_first_tick: bool) -> (f64, f64) {
+    if is_first_tick || !dt_secs.is_finite() || dt_secs <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let dt = dt_secs.max(0.001);
+    (
+        drx as f64 * 8.0 / dt / 1_000_000.0,
+        dtx as f64 * 8.0 / dt / 1_000_000.0,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_net_rate_bytes_to_mbps() {
+        // 1.5 MB received in exactly 1s = 12 Mbps.
+        let (down, up) = compute_net_rate(1_500_000, 0, 1.0, false);
+        assert!((down - 12.0).abs() < 1e-9);
+        assert_eq!(up, 0.0);
+    }
+
+    #[test]
+    fn test_net_rate_first_tick_is_zero() {
+        // sysinfo's own delta may be garbage on the very first refresh; the
+        // readout must stay at zero instead of reporting a startup spike.
+        let (down, up) = compute_net_rate(9_999_999, 9_999_999, 1.0, true);
+        assert_eq!((down, up), (0.0, 0.0));
+    }
+
+    #[test]
+    fn test_net_rate_uses_actual_elapsed() {
+        // Half a second between ticks doubles the rate (bytes/sec -> bits/s).
+        let (down, _) = compute_net_rate(750_000, 0, 0.5, false);
+        assert!((down - 12.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_net_rate_rejects_non_positive_dt() {
+        assert_eq!(compute_net_rate(1000, 1000, 0.0, false), (0.0, 0.0));
+        assert_eq!(compute_net_rate(1000, 1000, -1.0, false), (0.0, 0.0));
+        assert_eq!(compute_net_rate(1000, 1000, f64::NAN, false), (0.0, 0.0));
     }
 }

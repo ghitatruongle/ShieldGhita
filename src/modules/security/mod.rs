@@ -34,7 +34,7 @@ pub struct SecurityEngine {
     incidents: Arc<RwLock<Vec<SecurityIncident>>>,
     incident_counter: Arc<AtomicU64>,
     last_known_gateway: Arc<RwLock<Option<(String, String)>>>,
-    quarantined_ips: Arc<RwLock<std::collections::HashSet<String>>>,
+    quarantine: RwLock<QuarantineInventory>,
     port_probe_history: PortProbeHistory,
     port_scan_alert_cooldown: Arc<RwLock<HashMap<String, Instant>>>,
     hard_flood_alert_cooldown: Arc<RwLock<HashMap<String, Instant>>>,
@@ -47,8 +47,182 @@ const PORT_SCAN_DISTINCT_PORTS: usize = 10;
 const PORT_SCAN_ALERT_COOLDOWN: Duration = Duration::from_secs(600);
 const HARD_FLOOD_ALERT_COOLDOWN: Duration = Duration::from_secs(60);
 const FLOOD_ALERT_COOLDOWN: Duration = Duration::from_secs(60);
+/// Hard cap on MAC-bound quarantine entries. LAN quarantine is an operator
+/// tool for misbehaving clients, not a bulk firewall: unbounded growth would
+/// let a spoofing client inflate memory via repeated UI actions.
+const MAX_QUARANTINE_ENTRIES: usize = 256;
 
 type PortProbeHistory = Arc<RwLock<HashMap<String, Vec<(u16, Instant)>>>>;
+
+/// Why `quarantine_ip` refused an operator action. Surfaced to the UI so a
+/// rejection is never a silent success. Ordered by diagnosis usefulness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuarantineRejection {
+    /// Text was not a parseable IP (typo, hostname pasted, empty field).
+    InvalidAddress,
+    /// Parseable but non-quarantinable: loopback, unspecified, multicast,
+    /// IPv4 broadcast — blocking these has no protective value.
+    ReservedAddress,
+    /// The address is this host itself (loopback or the OS-selected local
+    /// IPv4). Quarantining self would cut the operator's own management
+    /// path; self-protection is handled by other mechanisms.
+    SelfAddress,
+    /// The address is the OS-reported default gateway. Cutting DNS to the
+    /// gateway blackholes the whole LAN's upstream path.
+    GatewayAddress,
+    /// No passive ARP observation exists yet for this IP, so the MAC owner
+    /// is unknown. Fail conservative: an IP-only quarantine could be evaded
+    /// by simply leasing a new address; wait for inventory evidence.
+    IdentityUnknown,
+    InventoryUnavailable,
+    CapacityReached,
+}
+
+impl QuarantineRejection {
+    /// Localized one-line reason for the UI status text.
+    pub fn message(self) -> String {
+        match self {
+            Self::InventoryUnavailable => i18n::tr4(
+                "Thông tin mạng chưa có hoặc đã cũ; chờ cập nhật kiểm kê",
+                "Network inventory unavailable or stale; wait for inventory refresh",
+                "网络清单不可用或已过期；请等待刷新",
+                "Сетевые данные недоступны или устарели; дождитесь обновления",
+            ),
+            Self::CapacityReached => i18n::tr4(
+                "Đã đạt giới hạn cách ly",
+                "Quarantine capacity reached",
+                "已达到隔离数量上限",
+                "Достигнут лимит карантина",
+            ),
+            Self::InvalidAddress => i18n::tr4(
+                "Địa chỉ IP không hợp lệ, không thể cách ly",
+                "Invalid IP address; quarantine refused",
+                "IP 地址无效，无法隔离",
+                "Недопустимый IP-адрес; карантин отклонён",
+            ),
+            Self::ReservedAddress => i18n::tr4(
+                "Địa chỉ dành riêng (loopback/multicast/broadcast), không thể cách ly",
+                "Reserved address (loopback/multicast/broadcast); quarantine refused",
+                "保留地址（环回/组播/广播），无法隔离",
+                "Зарезервированный адрес (loopback/multicast/broadcast); карантин отклонён",
+            ),
+            Self::SelfAddress => i18n::tr4(
+                "Không thể cách ly chính máy này",
+                "Cannot quarantine this machine itself",
+                "无法隔离本机自身",
+                "Нельзя поместить в карантин эту машину",
+            ),
+            Self::GatewayAddress => i18n::tr4(
+                "Không thể cách ly gateway hệ thống",
+                "Cannot quarantine the OS default gateway",
+                "无法隔离系统默认网关",
+                "Нельзя поместить в карантин системный шлюз",
+            ),
+            Self::IdentityUnknown => i18n::tr4(
+                "Chưa có bằng chứng MAC thụ động cho IP này; không cách ly mù",
+                "No passive MAC evidence for this IP yet; refusing blind quarantine",
+                "尚未观测到该 IP 的被动 MAC 证据；拒绝盲目隔离",
+                "Нет пассивных MAC-данных по этому IP; слепой карантин запрещён",
+            ),
+        }
+        .to_string()
+    }
+}
+
+/// A quarantine action with the MAC identity it was bound to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QuarantineEntry {
+    mac: String,
+}
+
+/// MAC-bound quarantine state plus the passive ARP inventory used to bind and
+/// auto-release entries. `ips` keys are normalized `IpAddr::to_string()` form,
+/// exactly what `is_quarantined` looks up (DNS hot path compares normalized
+/// source IPs, so an un-normalized key would silently never match).
+#[derive(Default)]
+struct QuarantineInventory {
+    /// Normalized IP -> bound MAC (uppercase, colon-separated).
+    entries: HashMap<String, QuarantineEntry>,
+    /// Passive ARP observations: normalized IP -> MAC (uppercase).
+    inventory: HashMap<String, String>,
+    self_ips: std::collections::HashSet<String>,
+    gateways: std::collections::HashSet<String>,
+    observed_at: Option<Instant>,
+}
+
+const QUARANTINE_INVENTORY_TTL: Duration = Duration::from_secs(300);
+
+impl QuarantineInventory {
+    /// Normalize a MAC the same way the ARP-table parser does so UI input,
+    /// `SendARP` output and `arp -a` output compare equal. `None` when the
+    /// string is not a well-formed 6-octet MAC (all-zero and broadcast MACs
+    /// are also rejected: they carry no owner identity).
+    fn normalize_mac(mac: &str) -> Option<String> {
+        let cleaned: String = mac
+            .trim()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect();
+        if cleaned.len() != 12 || !cleaned.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let upper = cleaned.to_uppercase();
+        if upper == "000000000000" || upper == "FFFFFFFFFFFF" {
+            return None;
+        }
+        let bytes: Vec<char> = upper.chars().collect();
+        Some(
+            bytes
+                .chunks(2)
+                .map(|c| c.iter().collect::<String>())
+                .collect::<Vec<_>>()
+                .join(":"),
+        )
+    }
+
+    /// Record/refresh a passive observation. Returns true when this is a NEW
+    /// IP->MAC binding (owner change) as opposed to a refresh of a known one.
+    fn observe(&mut self, ip: &str, mac: &str) -> bool {
+        let Some(normalized_mac) = Self::normalize_mac(mac) else {
+            return false;
+        };
+        let Some(normalized_ip) = Self::normalize_ip(ip) else {
+            return false;
+        };
+        match self.inventory.get(&normalized_ip) {
+            Some(existing) if *existing == normalized_mac => false,
+            _ => {
+                self.inventory.insert(normalized_ip, normalized_mac);
+                true
+            }
+        }
+    }
+
+    fn inventory_mac(&self, normalized_ip: &str) -> Option<&str> {
+        self.inventory.get(normalized_ip).map(|m| m.as_str())
+    }
+
+    /// Positive inventory observation that `ip` now answers with a DIFFERENT
+    /// MAC than the one the quarantine bound to. Only positive evidence
+    /// releases: absence/timeout of observations never does.
+    fn owner_changed(&self, normalized_ip: &str) -> bool {
+        match (
+            self.entries.get(normalized_ip),
+            self.inventory.get(normalized_ip),
+        ) {
+            (Some(entry), Some(current)) => *current != entry.mac,
+            _ => false,
+        }
+    }
+
+    /// Compact a normalized IP for map keying. Returns `None` for non-IPv4:
+    /// the DNS quarantine gate and the passive ARP inventory are IPv4-only,
+    /// so binding an IPv6 quarantine would be unenforceable theater.
+    fn normalize_ip(ip: &str) -> Option<String> {
+        let v4: std::net::Ipv4Addr = ip.trim().parse().ok()?;
+        Some(v4.to_string())
+    }
+}
 
 impl SecurityEngine {
     pub fn new() -> Self {
@@ -62,7 +236,7 @@ impl SecurityEngine {
             hard_query_history: Arc::new(RwLock::new(HashMap::new())),
             hard_drop_count: Arc::new(AtomicU64::new(0)),
             blocked_ips: Arc::new(RwLock::new(HashMap::new())),
-            quarantined_ips: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            quarantine: RwLock::new(QuarantineInventory::default()),
             incidents: Arc::new(RwLock::new(Vec::new())),
             incident_counter: Arc::new(AtomicU64::new(1)),
             last_known_gateway: Arc::new(RwLock::new(None)),
@@ -293,60 +467,121 @@ impl SecurityEngine {
         }
     }
 
-    pub fn quarantine_ip(&self, ip: &str) {
-        let clean = ip.trim().to_string();
-        if clean.is_empty() || clean == "127.0.0.1" || clean == "::1" {
+    pub fn update_quarantine_inventory(
+        &self,
+        observations: &[(String, String)],
+        self_ips: &[String],
+        gateways: &[String],
+    ) {
+        let Ok(mut q) = self.quarantine.write() else {
             return;
+        };
+        q.inventory.clear();
+        q.self_ips = self_ips
+            .iter()
+            .filter_map(|s| QuarantineInventory::normalize_ip(s))
+            .collect();
+        q.gateways = gateways
+            .iter()
+            .filter_map(|s| QuarantineInventory::normalize_ip(s))
+            .collect();
+        for (ip, mac) in observations.iter().take(4096) {
+            q.observe(ip, mac);
         }
-        if let Ok(mut set) = self.quarantined_ips.write() {
-            set.insert(clean.clone());
-            info!("Device {} has been quarantined by administrator", clean);
+        q.observed_at = Some(Instant::now());
+        let released: Vec<_> = q
+            .entries
+            .keys()
+            .filter(|ip| {
+                q.owner_changed(ip) || q.self_ips.contains(*ip) || q.gateways.contains(*ip)
+            })
+            .cloned()
+            .collect();
+        for ip in released {
+            q.entries.remove(&ip);
+            info!(
+                "DNS quarantine released after identity or local route change: {}",
+                ip
+            );
         }
+    }
+
+    pub fn quarantine_ip(&self, ip: &str) -> Result<(), QuarantineRejection> {
+        let address: std::net::Ipv4Addr = ip
+            .trim()
+            .parse()
+            .map_err(|_| QuarantineRejection::InvalidAddress)?;
+        if address.is_loopback()
+            || address.is_unspecified()
+            || address.is_multicast()
+            || address.is_broadcast()
+        {
+            return Err(QuarantineRejection::ReservedAddress);
+        }
+        let clean = address.to_string();
+        let mut q = self
+            .quarantine
+            .write()
+            .map_err(|_| QuarantineRejection::InventoryUnavailable)?;
+        if q.self_ips.contains(&clean) {
+            return Err(QuarantineRejection::SelfAddress);
+        }
+        if q.gateways.contains(&clean) {
+            return Err(QuarantineRejection::GatewayAddress);
+        }
+        if q.observed_at
+            .is_none_or(|t| t.elapsed() > QUARANTINE_INVENTORY_TTL)
+            || q.self_ips.is_empty()
+            || q.gateways.is_empty()
+        {
+            return Err(QuarantineRejection::InventoryUnavailable);
+        }
+        let mac = q
+            .inventory_mac(&clean)
+            .ok_or(QuarantineRejection::IdentityUnknown)?
+            .to_string();
+        if q.entries.contains_key(&clean) {
+            return Ok(());
+        }
+        if q.entries.len() >= MAX_QUARANTINE_ENTRIES {
+            return Err(QuarantineRejection::CapacityReached);
+        }
+        q.entries.insert(clean.clone(), QuarantineEntry { mac });
+        drop(q);
         self.record_incident(
-            i18n::tr(
-                "Thiết bị đã bị cô lập (Quarantined)",
-                "Device Quarantined by Admin",
-                "设备已被管理员隔离",
-            ),
+            "DNS quarantine",
             &clean,
-            &format!(
-                "{} {}",
-                i18n::tr(
-                    "Quản trị viên đã đưa thiết bị vào chế độ cách ly kiểm dịch mạng:",
-                    "Administrator isolated network device:",
-                    "管理员已将网络设备隔离:"
-                ),
-                clean
-            ),
+            "Administrator requested MAC-bound DNS blocking",
             "HIGH",
-            i18n::tr(
-                "Đã ngắt toàn bộ quyền truy cập Internet/DNS",
-                "All Internet & DNS access severed",
-                "已阻断所有互联网与 DNS 访问",
-            ),
+            "Only DNS through ShieldGhita blocked; other Internet access is unaffected",
         );
+        Ok(())
     }
 
     pub fn unquarantine_ip(&self, ip: &str) {
-        let clean = ip.trim();
-        if let Ok(mut set) = self.quarantined_ips.write() {
-            set.remove(clean);
-            info!("Device {} has been released from quarantine", clean);
+        let Some(clean) = QuarantineInventory::normalize_ip(ip) else {
+            return;
+        };
+        if let Ok(mut q) = self.quarantine.write() {
+            q.entries.remove(&clean);
         }
     }
 
     pub fn is_quarantined(&self, ip: &str) -> bool {
-        self.quarantined_ips
+        let Some(clean) = QuarantineInventory::normalize_ip(ip) else {
+            return false;
+        };
+        self.quarantine
             .read()
-            .map(|s| s.contains(ip.trim()))
+            .map(|q| q.entries.contains_key(&clean))
             .unwrap_or(false)
     }
 
     #[allow(dead_code)]
     pub fn get_quarantined_ips(&self) -> Vec<String> {
-        self.quarantined_ips
+        self.quarantine
             .read()
-            .map(|s| s.iter().cloned().collect())
+            .map(|q| q.entries.keys().cloned().collect())
             .unwrap_or_default()
     }
 
@@ -374,6 +609,10 @@ impl SecurityEngine {
                     "检测到非法 DHCP 服务器：IP {} ({})！预期授权网关 DHCP：{}",
                     server_ip, server_mac, expected_gateway
                 ),
+                i18n::RU => format!(
+                    "Обнаружен нелегитимный DHCP-сервер: IP {} ({})! Ожидаемый шлюз DHCP: {}",
+                    server_ip, server_mac, expected_gateway
+                ),
                 _ => format!(
                     "Phát hiện máy chủ DHCP giả mạo tại IP {} ({})! Gateway DHCP chính thức dự kiến: {}",
                     server_ip, server_mac, expected_gateway
@@ -381,18 +620,20 @@ impl SecurityEngine {
             };
 
             let incident = self.record_incident(
-                i18n::tr(
+                i18n::tr4(
                     "Máy chủ DHCP giả mạo (Rogue DHCP Server)",
                     "Rogue DHCP Server Detected",
                     "非法 DHCP 服务器 (Rogue DHCP)",
+                    "Обнаружен нелегитимный DHCP-сервер",
                 ),
                 server_ip,
                 &details,
                 "CRITICAL",
-                i18n::tr(
+                i18n::tr4(
                     "Cảnh báo: Nguy cơ chiếm quyền cấp phát IP và chuyển hướng mạng",
                     "Alert: Risk of IP allocation hijacking and traffic redirection",
                     "告警：存在 IP 分配劫持及流量重定向风险",
+                    "Тревога: риск перехвата выдачи IP и перенаправления трафика",
                 ),
             );
             return Some(incident);
@@ -580,26 +821,29 @@ impl SecurityEngine {
                         || hostname.contains(&format!(".{t}."));
                     if matched {
                         let incident = self.record_incident(
-                            i18n::tr(
+                            i18n::tr4(
                                 "Phát hiện chỉnh sửa độc hại tệp Hosts (Hosts Tamper)",
                                 "Hosts File Tampering / Malicious Hijack Detected",
                                 "检测到恶意篡改 Hosts 文件 (Hosts Tamper)",
+                                "Обнаружена подмена файла hosts",
                             ),
                             "127.0.0.1",
                             &format!(
                                 "{}: '{}'",
-                                i18n::tr(
+                                i18n::tr4(
                                     "Tệp hosts chứa bản ghi chuyển hướng tên miền nhạy cảm",
                                     "Hosts file contains sensitive domain redirection",
-                                    "Hosts 文件包含敏感域名重定向记录"
+                                    "Hosts 文件包含敏感域名重定向记录",
+                                    "В hosts есть перенаправления чувствительных доменов"
                                 ),
                                 trimmed
                             ),
                             "CRITICAL",
-                            i18n::tr(
+                            i18n::tr4(
                                 "Đề xuất: Khôi phục tệp hosts về trạng thái mặc định của Windows",
                                 "Recommended: Restore hosts file to default Windows clean state",
                                 "建议：将 hosts 文件恢复为 Windows 默认干净状态",
+                                "Рекомендуется: восстановить hosts к чистому состоянию Windows",
                             ),
                         );
                         return Some(incident);
@@ -675,16 +919,18 @@ impl SecurityEngine {
             }
             let mitigation = if auto_block {
                 self.block_ip_temporarily(source_ip, Duration::from_secs(300));
-                i18n::tr(
+                i18n::tr4(
                     "Đã tự động khóa IP nguồn trong 5 phút (IPS Mitigation)",
                     "Source IP auto-blocked for 5 minutes (IPS Mitigation)",
                     "已自动封锁源 IP 5 分钟 (IPS 处置)",
+                    "IP-источник автоматически заблокирован на 5 минут (IPS)",
                 )
             } else {
-                i18n::tr(
+                i18n::tr4(
                     "Cảnh báo bảo mật (Auto-block chưa kích hoạt)",
                     "Security alert (Auto-block not enabled)",
                     "安全告警 (未启用自动封锁)",
+                    "Оповещение безопасности (автоблокировка выключена)",
                 )
             };
 
@@ -697,6 +943,10 @@ impl SecurityEngine {
                     "异常查询频率：{} 次/2秒（超过阈值 {}/s）",
                     query_count_last_sec, limit
                 ),
+                i18n::RU => format!(
+                    "Аномальная частота запросов: {} за 2 с (порог {}/с)",
+                    query_count_last_sec, limit
+                ),
                 _ => format!(
                     "Tần suất truy vấn bất thường: {} yêu cầu/2s (vượt ngưỡng {}/s)",
                     query_count_last_sec, limit
@@ -704,10 +954,11 @@ impl SecurityEngine {
             };
 
             return Some(self.record_incident(
-                i18n::tr(
+                i18n::tr4(
                     "Tấn công từ chối dịch vụ (DNS Flood / DoS)",
                     "Denial-of-Service attack (DNS Flood / DoS)",
                     "拒绝服务攻击 (DNS Flood / DoS)",
+                    "DoS-атака (DNS Flood / DoS)",
                 ),
                 source_ip,
                 &details,
@@ -724,16 +975,18 @@ impl SecurityEngine {
                     if entropy >= 3.85 {
                         let mitigation = if auto_block {
                             self.block_ip_temporarily(source_ip, Duration::from_secs(180));
-                            i18n::tr(
+                            i18n::tr4(
                                 "Đã hủy gói tin & cô lập kết nối nguồn 3 phút",
                                 "Packets dropped & source isolated for 3 minutes",
                                 "已丢弃数据包并隔离源连接 3 分钟",
+                                "Пакеты отброшены; источник изолирован на 3 минуты",
                             )
                         } else {
-                            i18n::tr(
+                            i18n::tr4(
                                 "Đã ghi nhận mối nguy rò rỉ dữ liệu",
                                 "Data-exfiltration risk logged",
                                 "已记录数据泄露风险",
+                                "Риск утечки данных зарегистрирован",
                             )
                         };
 
@@ -746,6 +999,10 @@ impl SecurityEngine {
                                 "可疑子域名包含编码负载：'{}'（熵：{:.2}，长度：{}）",
                                 sub, entropy, sub.len()
                             ),
+                            i18n::RU => format!(
+                                "Подозрительный поддомен с закодированной нагрузкой: '{}' (энтропия {:.2}, длина {})",
+                                sub, entropy, sub.len()
+                            ),
                             _ => format!(
                                 "Subdomain nghi vấn chứa payload mã hóa: '{}' (Entropy: {:.2}, Độ dài: {})",
                                 sub, entropy, sub.len()
@@ -753,10 +1010,11 @@ impl SecurityEngine {
                         };
 
                         return Some(self.record_incident(
-                            i18n::tr(
+                            i18n::tr4(
                                 "Phát hiện DNS Tunneling / Rò rỉ dữ liệu",
                                 "DNS Tunneling / Data Exfiltration detected",
                                 "检测到 DNS 隧道 / 数据泄露",
+                                "Обнаружен DNS-туннель / утечка данных",
                             ),
                             source_ip,
                             &details,
@@ -771,32 +1029,36 @@ impl SecurityEngine {
         if Self::is_dga_domain(domain) {
             let mitigation = if auto_block {
                 self.block_ip_temporarily(source_ip, Duration::from_secs(120));
-                i18n::tr(
+                i18n::tr4(
                     "Đã hủy gói tin & cô lập IP kết nối botnet",
                     "Dropped query & isolated botnet communication",
                     "已丢弃查询并隔离僵尸网络通信",
+                    "Запрос отброшен; связь с ботнетом изолирована",
                 )
             } else {
-                i18n::tr(
+                i18n::tr4(
                     "Đã ghi nhận cảnh báo tên miền DGA",
                     "DGA domain alert logged",
                     "已记录 DGA 域名告警",
+                    "Тревога DGA-домена зарегистрирована",
                 )
             };
             let details = format!(
                 "{}: '{}'",
-                i18n::tr(
+                i18n::tr4(
                     "Tên miền có đặc tính sinh tự động từ Botnet DGA",
                     "Domain matches Botnet DGA characteristics",
-                    "域名符合僵尸网络 DGA 特征"
+                    "域名符合僵尸网络 DGA 特征",
+                    "Домен соответствует признакам DGA-ботнета"
                 ),
                 domain
             );
             return Some(self.record_incident(
-                i18n::tr(
+                i18n::tr4(
                     "Phát hiện tên miền Botnet DGA (Algorithmically Generated Domain)",
                     "Botnet DGA Domain Detected",
                     "检测到僵尸网络 DGA 域名",
+                    "Обнаружен DGA-домен ботнета",
                 ),
                 source_ip,
                 &details,
@@ -815,15 +1077,17 @@ impl SecurityEngine {
         if Self::is_darknet_pseudo_tld(domain) {
             // Always NXDOMAIN — not gated on auto_block. See `is_darknet_pseudo_tld`
             // docs and the DNS dispatch path which must drop these even in IDS-only mode.
-            let mitigation = i18n::tr(
+            let mitigation = i18n::tr4(
                 "Đã tự động cách ly tên miền độc hại (NXDOMAIN Drop)",
                 "Malicious domain auto-isolated (NXDOMAIN Drop)",
                 "已自动隔离恶意域名 (NXDOMAIN 丢弃)",
+                "Вредоносный домен изолирован (NXDOMAIN Drop)",
             );
 
             let details = match i18n::current_index() {
                 i18n::EN => format!("Query to botnet underground domain detected: {}", domain),
                 i18n::ZH => format!("检测到访问僵尸网络隐蔽域名的查询：{}", domain),
+                i18n::RU => format!("Обнаружен запрос к подпольному домену ботнета: {}", domain),
                 _ => format!(
                     "Phát hiện truy vấn domain thuộc mạng lưới ngầm botnet: {}",
                     domain
@@ -831,10 +1095,11 @@ impl SecurityEngine {
             };
 
             return Some(self.record_incident(
-                i18n::tr(
+                i18n::tr4(
                     "Máy chủ điều khiển Botnet / C2 độc hại",
                     "Botnet / Malicious C2 Server",
                     "僵尸网络 / 恶意 C2 控制服务器",
+                    "Сервер управления ботнетом / вредоносный C2",
                 ),
                 source_ip,
                 &details,
@@ -1009,16 +1274,18 @@ impl SecurityEngine {
         let auto_block = self.is_auto_block_enabled();
         let mitigation = if auto_block {
             self.block_ip_temporarily(remote_ip, Duration::from_secs(600));
-            i18n::tr(
+            i18n::tr4(
                 "Đã tự động cô lập IP quét cổng trong 10 phút (IPS Mitigation)",
                 "Port-scanning IP auto-isolated for 10 minutes (IPS Mitigation)",
                 "已自动隔离端口扫描 IP 10 分钟 (IPS 处置)",
+                "IP сканера портов изолирован на 10 минут (IPS)",
             )
         } else {
-            i18n::tr(
+            i18n::tr4(
                 "Cảnh báo quét cổng (Auto-block chưa kích hoạt)",
                 "Port-scan alert (Auto-block not enabled)",
                 "端口扫描告警 (未启用自动封锁)",
+                "Тревога сканирования портов (автоблокировка выключена)",
             )
         };
 
@@ -1035,6 +1302,12 @@ impl SecurityEngine {
                 distinct_ports,
                 local_port
             ),
+            i18n::RU => format!(
+                "С этого хоста за {} с просканировано {} различных локальных портов (последний: {})",
+                PORT_SCAN_WINDOW.as_secs(),
+                distinct_ports,
+                local_port
+            ),
             _ => format!(
                 "Phát hiện {} cổng cục bộ khác nhau bị dò từ máy này trong {}s (mới nhất: cổng {})",
                 distinct_ports,
@@ -1044,10 +1317,11 @@ impl SecurityEngine {
         };
 
         Some(self.record_incident(
-            i18n::tr(
+            i18n::tr4(
                 "Phát hiện quét cổng hàng loạt (Inbound Port Scan)",
                 "Mass port scanning detected (Inbound Port Scan)",
                 "检测到批量端口扫描 (Inbound Port Scan)",
+                "Обнаружено массовое сканирование портов",
             ),
             remote_ip,
             &details,
@@ -1123,6 +1397,63 @@ impl SecurityEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quarantine_binds_owner_and_protects_routes() {
+        let sec = SecurityEngine::new();
+        let self_ips = vec!["192.0.2.10".into()];
+        let gateways = vec!["192.0.2.1".into()];
+        let observed = vec![("192.0.2.24".into(), "02:00:00:00:00:24".into())];
+        assert_eq!(
+            sec.quarantine_ip("192.0.2.24"),
+            Err(QuarantineRejection::InventoryUnavailable)
+        );
+        sec.update_quarantine_inventory(&observed, &self_ips, &gateways);
+        assert_eq!(
+            sec.quarantine_ip("192.0.2.10"),
+            Err(QuarantineRejection::SelfAddress)
+        );
+        assert_eq!(
+            sec.quarantine_ip("192.0.2.1"),
+            Err(QuarantineRejection::GatewayAddress)
+        );
+        assert_eq!(
+            sec.quarantine_ip("192.0.2.25"),
+            Err(QuarantineRejection::IdentityUnknown)
+        );
+        for ip in [
+            "invalid",
+            "127.0.0.2",
+            "::1",
+            "0.0.0.0",
+            "224.0.0.1",
+            "255.255.255.255",
+        ] {
+            assert!(sec.quarantine_ip(ip).is_err());
+        }
+        sec.quarantine_ip("192.0.2.24").unwrap();
+        let count = sec.incidents_count();
+        sec.quarantine_ip("192.0.2.24").unwrap();
+        assert_eq!(sec.incidents_count(), count);
+        assert!(sec.is_quarantined("192.0.2.24"));
+        sec.update_quarantine_inventory(&[], &self_ips, &gateways);
+        assert!(sec.is_quarantined("192.0.2.24"));
+        sec.update_quarantine_inventory(
+            &[("192.0.2.24".into(), "02:00:00:00:00:25".into())],
+            &self_ips,
+            &gateways,
+        );
+        assert!(!sec.is_quarantined("192.0.2.24"));
+        sec.quarantine_ip("192.0.2.24").unwrap();
+        sec.unquarantine_ip("192.0.2.24");
+        assert!(!sec.is_quarantined("192.0.2.24"));
+        sec.quarantine.write().unwrap().observed_at =
+            Some(Instant::now() - Duration::from_secs(601));
+        assert_eq!(
+            sec.quarantine_ip("192.0.2.24"),
+            Err(QuarantineRejection::InventoryUnavailable)
+        );
+    }
 
     #[test]
     fn test_entropy_calculation() {

@@ -10,6 +10,91 @@ use tracing::info;
 use super::port_scanner::{self, OpenPort, PortRisk};
 use crate::modules::i18n;
 
+const MAX_ARP_TABLE_ENTRIES: usize = 4096;
+
+#[derive(Deserialize)]
+struct AdapterIpv4 {
+    address: Ipv4Addr,
+    prefix: u8,
+    gateway: Option<Ipv4Addr>,
+}
+
+fn read_adapter_ipv4() -> Vec<AdapterIpv4> {
+    let script = "@(Get-NetIPConfiguration -ErrorAction Stop | ForEach-Object { $g = @($_.IPv4DefaultGateway.NextHop)[0]; foreach ($a in $_.IPv4Address) { [pscustomobject]@{ address=$a.IPAddress; prefix=$a.PrefixLength; gateway=if ($g) { [string]$g } else { $null } } } }) | ConvertTo-Json -Compress";
+    let Ok(output) = crate::modules::system::silent_command("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    serde_json::from_slice(&output.stdout).unwrap_or_default()
+}
+
+fn bounded_subnet_hosts(local: Ipv4Addr, prefix: u8, cap: usize) -> Vec<Ipv4Addr> {
+    if prefix > 32 || local.is_loopback() || local.is_link_local() || local.is_unspecified() {
+        return Vec::new();
+    }
+    let value = u32::from(local);
+    let mask = u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0);
+    let network = value & mask;
+    let broadcast = network | !mask;
+    let (first, last) = if prefix >= 31 {
+        (network, broadcast)
+    } else {
+        (network + 1, broadcast - 1)
+    };
+    let count = u64::from(last) - u64::from(first) + 1;
+    let start = if count > cap as u64 {
+        value.saturating_sub((cap / 2) as u32).max(first)
+    } else {
+        first
+    };
+    (u64::from(start)..=u64::from(last))
+        .take(cap.min(254))
+        .map(|n| Ipv4Addr::from(n as u32))
+        .filter(|ip| *ip != local)
+        .collect()
+}
+
+fn parse_arp_table(text: &str, limit: usize) -> (Vec<(String, String)>, usize) {
+    let mut entries = Vec::new();
+    let mut skipped = 0;
+    for line in text.lines() {
+        if entries.len() >= limit {
+            break;
+        }
+        let mut parts = line.split_whitespace();
+        let (Some(ip), Some(mac), Some(_kind)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let Ok(ip) = ip.parse::<Ipv4Addr>() else {
+            continue;
+        };
+        let mac = mac.replace('-', ":").to_uppercase();
+        let octets: Vec<_> = mac.split(':').collect();
+        let valid_mac = octets.len() == 6
+            && octets
+                .iter()
+                .all(|part| part.len() == 2 && part.bytes().all(|b| b.is_ascii_hexdigit()));
+        if !valid_mac
+            || ip.is_multicast()
+            || ip.is_broadcast()
+            || ip.is_unspecified()
+            || ip.is_loopback()
+            || mac == "FF:FF:FF:FF:FF:FF"
+            || mac == "00:00:00:00:00:00"
+        {
+            skipped += 1;
+            continue;
+        }
+        entries.push((ip.to_string(), mac));
+    }
+    (entries, skipped)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LanDevice {
     pub name: String,
@@ -422,24 +507,8 @@ impl LanScanner {
     /// non-/24 layouts, and mislabeling a printer/NAS as "Router" poisons
     /// the ARP-spoof baseline.
     pub fn is_gateway_ip(ip: &str) -> bool {
-        match crate::modules::system::win32_net::detect_default_gateway_ip() {
-            Some(gw) => {
-                if gw.trim() == ip.trim() {
-                    return true;
-                }
-                // Same-/24 .1/.254 keeps the classic heuristic for common
-                // home routers without mislabeling foreign-subnet hosts.
-                let same_subnet_24 = |a: &str, b: &str| {
-                    let pa: Vec<&str> = a.split('.').collect();
-                    let pb: Vec<&str> = b.split('.').collect();
-                    pa.len() == 4 && pb.len() == 4 && pa[..3] == pb[..3]
-                };
-                (ip.ends_with(".1") || ip.ends_with(".254")) && same_subnet_24(ip, &gw)
-            }
-            // No route info (e.g. probe failed): fall back to the classic
-            // heuristic so the gateway row does not disappear entirely.
-            None => ip.ends_with(".1") || ip.ends_with(".254"),
-        }
+        crate::modules::system::win32_net::detect_default_gateway_ip()
+            .is_some_and(|gw| gw.trim() == ip.trim())
     }
 
     pub fn classify_final(
@@ -743,8 +812,15 @@ impl LanScanner {
             .or_else(|_| std::env::var("HOSTNAME"))
             .unwrap_or_else(|_| "This PC".to_string());
 
+        let adapters = tokio::task::spawn_blocking(read_adapter_ipv4)
+            .await
+            .unwrap_or_default();
         if let Some(local_ip) = local_ip_opt {
-            let octets = local_ip.octets();
+            let targets = adapters
+                .iter()
+                .find(|a| a.address == local_ip)
+                .map(|a| bounded_subnet_hosts(local_ip, a.prefix, 254))
+                .unwrap_or_default();
             // Spawn all 253 probes immediately; each task acquires the
             // semaphore *inside* so the loop never blocks serially. Use
             // tokio::spawn (not spawn_blocking per IP) — SendARP is a short
@@ -753,8 +829,7 @@ impl LanScanner {
             let arp_semaphore = Arc::new(tokio::sync::Semaphore::new(64));
             let mut join_set = tokio::task::JoinSet::new();
 
-            for i in 1..=254u8 {
-                let target_ip = Ipv4Addr::new(octets[0], octets[1], octets[2], i);
+            for target_ip in targets {
                 if target_ip == local_ip {
                     continue;
                 }
@@ -782,35 +857,37 @@ impl LanScanner {
             }
         }
 
-        if let Ok(output) = crate::modules::system::silent_command("arp")
-            .arg("-a")
-            .output()
+        if let Ok(Ok(output)) = tokio::task::spawn_blocking(|| {
+            crate::modules::system::silent_command("arp")
+                .arg("-a")
+                .output()
+        })
+        .await
         {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                let line = line.trim();
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 3 {
-                    let ip = parts[0].to_string();
-                    let mac_raw = parts[1];
-
-                    if ip.parse::<IpAddr>().is_err() {
-                        continue;
-                    }
-
-                    let mac = mac_raw.replace('-', ":").to_uppercase();
-                    if mac == "FF:FF:FF:FF:FF:FF"
-                        || mac == "00:00:00:00:00:00"
-                        || ip.ends_with(".255")
-                        || ip.starts_with("224.")
-                        || ip.starts_with("239.")
-                    {
-                        continue;
-                    }
-
-                    discovered_map.entry(ip).or_insert(mac);
-                }
+            let (entries, skipped) = parse_arp_table(&stdout, MAX_ARP_TABLE_ENTRIES);
+            for (ip, mac) in entries {
+                discovered_map.entry(ip).or_insert(mac);
             }
+            if skipped > 0 {
+                info!(
+                    "ARP table: accepted entries, skipped {} malformed/non-unicast lines",
+                    skipped
+                );
+            }
+        }
+
+        if let Some(sec) = &sec_engine {
+            let observations: Vec<_> = discovered_map
+                .iter()
+                .map(|(ip, mac)| (ip.clone(), mac.clone()))
+                .collect();
+            let self_ips: Vec<_> = adapters.iter().map(|a| a.address.to_string()).collect();
+            let gateways: Vec<_> = adapters
+                .iter()
+                .filter_map(|a| a.gateway.map(|g| g.to_string()))
+                .collect();
+            sec.update_quarantine_inventory(&observations, &self_ips, &gateways);
         }
 
         let local_ip_str = local_ip_opt
@@ -1020,6 +1097,35 @@ impl LanScanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefix_bounds_never_escape_selected_subnet() {
+        let local = Ipv4Addr::new(192, 0, 2, 130);
+        let hosts = bounded_subnet_hosts(local, 25, 254);
+        assert_eq!(hosts.len(), 125);
+        assert!(hosts
+            .iter()
+            .all(|ip| ip.octets()[3] >= 129 && ip.octets()[3] <= 254));
+        assert!(bounded_subnet_hosts(local, 32, 254).is_empty());
+        assert_eq!(
+            bounded_subnet_hosts(local, 31, 254),
+            vec![Ipv4Addr::new(192, 0, 2, 131)]
+        );
+        assert!(bounded_subnet_hosts(local, 33, 254).is_empty());
+        assert!(bounded_subnet_hosts(local, 16, 254).len() <= 254);
+        assert!(bounded_subnet_hosts(local, 16, 0).is_empty());
+    }
+
+    #[test]
+    fn test_arp_table_validation_and_cap() {
+        let text = "Internet Address Physical Address Type\n192.0.2.4 02-aa-bb-cc-dd-ee dynamic\n224.0.0.1 01-00-5e-00-00-01 static\n192.0.2.5 invalid dynamic\n192.0.2.6 02-11-22-33-44-55 dynamic";
+        let (entries, skipped) = parse_arp_table(text, 8);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], ("192.0.2.4".into(), "02:AA:BB:CC:DD:EE".into()));
+        assert_eq!(skipped, 2);
+        assert_eq!(parse_arp_table(text, 1).0.len(), 1);
+        assert!(parse_arp_table(text, 0).0.is_empty());
+    }
 
     #[test]
     fn test_lookup_vendor() {

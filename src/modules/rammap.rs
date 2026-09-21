@@ -28,7 +28,7 @@ const PAGE_EXECUTE_READ: u32 = 0x20;
 const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 const PAGE_EXECUTE_WRITECOPY: u32 = 0x80;
 const PAGE_GUARD: u32 = 0x100;
-const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+const PROCESS_QUERY_INFORMATION: u32 = 0x0400;
 const PROCESS_TERMINATE: u32 = 0x0001;
 
 #[repr(C)]
@@ -101,6 +101,8 @@ struct SystemMemoryListInfo {
     modified_page_count_page_file: usize,
 }
 
+/// Available physical RAM in MB. Returns 0 when the OS probe fails — callers
+/// must treat 0 as "unknown", not as "no free memory".
 pub fn get_available_ram_mb() -> u64 {
     let mut ms = MemoryStatusEx {
         dw_length: size_of::<MemoryStatusEx>() as u32,
@@ -466,7 +468,11 @@ pub fn empty(op: EmptyOp) -> Result<u64, String> {
         }
         EmptyOp::SystemWorkingSet => {
             // RAMMap's "Empty System Working Set": trim the file cache via
-            // SetSystemFileCacheSize(MIN=-1, MAX=-1). (The previous
+            // SetSystemFileCacheSize(MIN=-1, MAX=-1). Microsoft documents
+            // these sizes as the flush sentinel and flags=0 as retaining the
+            // current limit enablement. No persistent limit change to restore.
+            // https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-setsystemfilecachesize
+            // (The previous
             // NtSetSystemInformation(SystemFileCacheInformation, 0) passed a
             // bare u32 0 and never flushed anything.)
             use windows::Win32::System::Memory::SetSystemFileCacheSize;
@@ -556,87 +562,247 @@ fn is_rwx(protect: u32) -> bool {
     base == PAGE_EXECUTE_READWRITE || base == PAGE_EXECUTE_WRITECOPY
 }
 
-pub fn scan_suspicious_processes(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanStatus {
+    Checked,
+    Skipped,
+    AccessDenied,
+    Error,
+    Partial,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessScanCoverage {
+    pub pid: u32,
+    pub status: ScanStatus,
+    pub regions_checked: usize,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MemoryScanReport {
+    pub findings: Vec<SuspiciousProcess>,
+    pub coverage: Vec<ProcessScanCoverage>,
+    /// Processes outside the requested top-N sample are not checked.
+    pub not_selected: usize,
+    pub error: Option<String>,
+}
+
+impl MemoryScanReport {
+    pub fn count(&self, status: ScanStatus) -> usize {
+        self.coverage.iter().filter(|p| p.status == status).count()
+    }
+}
+
+fn query_stop_status(regions_checked: usize, error: u32) -> ScanStatus {
+    // VirtualQueryEx documents ERROR_INVALID_PARAMETER above the highest
+    // accessible address. Only accept it after a successful, contiguous walk;
+    // the same error on the very first query must NOT mean "checked".
+    if regions_checked > 0 && error == 87 {
+        ScanStatus::Checked
+    } else if regions_checked > 0 {
+        ScanStatus::Partial
+    } else if error == 5 {
+        ScanStatus::AccessDenied
+    } else {
+        ScanStatus::Error
+    }
+}
+
+fn next_region_address(address: usize, base: usize, size: usize) -> Option<usize> {
+    let next = base.checked_add(size)?;
+    (size > 0 && base <= address && next > address).then_some(next)
+}
+
+struct ScanHandle(HANDLE);
+impl Drop for ScanHandle {
+    fn drop(&mut self) {
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// Metadata-only heuristic: private executable mappings can also be legitimate
+/// (including JIT). No browser exemption, memory writes, or automatic killing.
+pub fn scan_suspicious_processes_report(
     max_processes: usize,
     min_region_mb: f64,
-) -> Vec<SuspiciousProcess> {
+) -> MemoryScanReport {
+    use windows::Win32::Foundation::GetLastError;
     use windows::Win32::System::Threading::{OpenProcess as WinOpenProcess, PROCESS_ACCESS_RIGHTS};
-    let my_pid = std::process::id();
-    let mut results = Vec::new();
-    for proc in top_processes(max_processes) {
-        if proc.pid == my_pid || proc.pid == 0 || proc.pid == 4 {
+    let mut report = MemoryScanReport::default();
+    if max_processes == 0 || !min_region_mb.is_finite() || min_region_mb < 0.0 {
+        report.error = Some("Invalid scan limit or region threshold".into());
+        return report;
+    }
+    let processes = all_processes();
+    report.not_selected = processes.len().saturating_sub(max_processes);
+    if processes.is_empty() {
+        report.error = Some("No processes could be enumerated".into());
+        return report;
+    }
+    for proc in processes.into_iter().take(max_processes) {
+        let mut coverage = ProcessScanCoverage {
+            pid: proc.pid,
+            status: ScanStatus::Skipped,
+            regions_checked: 0,
+            detail: String::new(),
+        };
+        if proc.pid == std::process::id() || proc.pid == 0 || proc.pid == 4 {
+            coverage.detail = "Self or core system process excluded".into();
+            report.coverage.push(coverage);
             continue;
         }
+        // VirtualQueryEx requires PROCESS_QUERY_INFORMATION, not LIMITED.
         let handle = match unsafe {
             WinOpenProcess(
-                PROCESS_ACCESS_RIGHTS(PROCESS_QUERY_LIMITED_INFORMATION),
+                PROCESS_ACCESS_RIGHTS(PROCESS_QUERY_INFORMATION),
                 false,
                 proc.pid,
             )
         } {
-            Ok(h) => h,
-            Err(_) => continue,
+            Ok(h) if !h.is_invalid() && !h.0.is_null() => ScanHandle(h),
+            Ok(_) => {
+                coverage.status = ScanStatus::Error;
+                coverage.detail = "OpenProcess returned an invalid handle".into();
+                report.coverage.push(coverage);
+                continue;
+            }
+            Err(e) => {
+                coverage.status = if e.code() == windows::core::HRESULT::from_win32(5) {
+                    ScanStatus::AccessDenied
+                } else {
+                    ScanStatus::Error
+                };
+                coverage.detail = format!("OpenProcess: {e}");
+                report.coverage.push(coverage);
+                continue;
+            }
         };
         let mut found = SuspiciousProcess {
             pid: proc.pid,
-            name: proc.name.clone(),
+            name: proc.name,
             regions: 0,
             total_mb: 0.0,
             rwx_regions: 0,
         };
         let mut address = 0usize;
-        let mut mbi = MEMORY_BASIC_INFORMATION::default();
-        unsafe {
-            // Upper bound of user address space; stop before kernel range so
-            // a wrapped `address + region_size` can never loop forever.
-            const MAX_USER_ADDRESS: usize = 0x7FFF_FFFF_FFFF;
-            while VirtualQueryEx(
-                handle,
-                address as *const c_void,
-                &mut mbi,
-                size_of::<MEMORY_BASIC_INFORMATION>(),
-            ) >= size_of::<MEMORY_BASIC_INFORMATION>()
+        // Bound work on a changing process; exhausting the budget is partial,
+        // never a clean bill of health. Native pointer width avoids x86 overflow.
+        const MAX_QUERIES: usize = 262_144;
+        coverage.status = ScanStatus::Partial;
+        coverage.detail = "Region query budget exhausted".into();
+        for _ in 0..MAX_QUERIES {
+            let mut mbi = MEMORY_BASIC_INFORMATION::default();
+            let bytes = unsafe {
+                VirtualQueryEx(
+                    handle.0,
+                    address as *const c_void,
+                    &mut mbi,
+                    size_of::<MEMORY_BASIC_INFORMATION>(),
+                )
+            };
+            if bytes == 0 {
+                let error = unsafe { GetLastError() }.0;
+                coverage.status = query_stop_status(coverage.regions_checked, error);
+                coverage.detail = if coverage.status == ScanStatus::Checked {
+                    "Reached end of queryable address space".into()
+                } else {
+                    format!("VirtualQueryEx at {address:#x}: Win32 error {error}")
+                };
+                break;
+            }
+            if bytes != size_of::<MEMORY_BASIC_INFORMATION>() {
+                coverage.status = if coverage.regions_checked > 0 {
+                    ScanStatus::Partial
+                } else {
+                    ScanStatus::Error
+                };
+                coverage.detail = "VirtualQueryEx returned a short structure".into();
+                break;
+            }
+            let Some(next) = next_region_address(address, mbi.BaseAddress as usize, mbi.RegionSize)
+            else {
+                coverage.detail = "Invalid, overflowing, or non-advancing memory region".into();
+                break;
+            };
+            coverage.regions_checked += 1;
+            if mbi.State.0 == MEM_COMMIT
+                && mbi.Type.0 == MEM_PRIVATE
+                && is_executable(mbi.Protect.0)
+                && mbi.RegionSize as f64 / MB >= min_region_mb
             {
-                if mbi.RegionSize == 0 {
-                    break;
-                }
-                let committed_private = mbi.State.0 == MEM_COMMIT && mbi.Type.0 == MEM_PRIVATE;
-                if committed_private
-                    && is_executable(mbi.Protect.0)
-                    && mbi.RegionSize as f64 / MB >= min_region_mb
-                {
-                    found.regions += 1;
-                    found.total_mb += mbi.RegionSize as f64 / MB;
-                    if is_rwx(mbi.Protect.0) {
-                        found.rwx_regions += 1;
-                    }
-                }
-                match address.checked_add(mbi.RegionSize) {
-                    Some(next) if next > address && next <= MAX_USER_ADDRESS => {
-                        address = next;
-                    }
-                    _ => break,
+                found.regions += 1;
+                found.total_mb += mbi.RegionSize as f64 / MB;
+                if is_rwx(mbi.Protect.0) {
+                    found.rwx_regions += 1;
                 }
             }
-            let _ = CloseHandle(handle);
+            address = next;
         }
         if found.regions > 0 {
-            results.push(found);
+            // Findings from a partially queried process remain visible.
+            report.findings.push(found);
         }
+        report.coverage.push(coverage);
     }
-    results.sort_by(|a, b| {
+    report.findings.sort_by(|a, b| {
         b.rwx_regions.cmp(&a.rwx_regions).then(
             b.total_mb
                 .partial_cmp(&a.total_mb)
                 .unwrap_or(std::cmp::Ordering::Equal),
         )
     });
-    results
+    report
+}
+
+/// Legacy findings-only API retained for the panel caller outside this file's
+/// ownership. Consumers must migrate to the report API before claiming a scan
+/// completed; an empty Vec is NOT evidence that inaccessible processes are safe.
+pub fn scan_suspicious_processes(
+    max_processes: usize,
+    min_region_mb: f64,
+) -> Vec<SuspiciousProcess> {
+    let report = scan_suspicious_processes_report(max_processes, min_region_mb);
+    if report.error.is_some()
+        || report
+            .coverage
+            .iter()
+            .any(|p| p.status != ScanStatus::Checked)
+    {
+        tracing::warn!("RAM scan has incomplete coverage: {:?}", report.coverage);
+    }
+    report.findings
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_failures_never_count_as_checked() {
+        assert_eq!(query_stop_status(0, 5), ScanStatus::AccessDenied);
+        assert_eq!(query_stop_status(0, 87), ScanStatus::Error);
+        assert_eq!(query_stop_status(5, 5), ScanStatus::Partial);
+        assert_eq!(query_stop_status(5, 6), ScanStatus::Partial);
+        assert_eq!(query_stop_status(5, 87), ScanStatus::Checked);
+    }
+
+    #[test]
+    fn region_walk_requires_forward_progress_without_overflow() {
+        assert_eq!(next_region_address(4096, 4096, 4096), Some(8192));
+        assert_eq!(next_region_address(4096, 0, 8192), Some(8192));
+        assert_eq!(next_region_address(4096, 8192, 4096), None);
+        assert_eq!(next_region_address(4096, 4096, 0), None);
+        assert_eq!(next_region_address(4096, 0, 4096), None);
+        assert_eq!(next_region_address(usize::MAX, usize::MAX, 1), None);
+    }
+
+    #[test]
+    fn empty_report_has_no_checked_processes() {
+        let report = MemoryScanReport::default();
+        assert_eq!(report.count(ScanStatus::Checked), 0);
+        assert!(report.findings.is_empty());
+    }
 
     #[test]
     fn test_snapshot_totals_are_plausible() {

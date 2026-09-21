@@ -103,7 +103,7 @@ export component FileAnalyzerTab inherits Rectangle {
                 }
 
                 Text {
-                    text: I18n.t4("Phân tích tĩnh an toàn offline • Bóc tách mã độc đội lốt câu chào, ký tự Zero-width tàng hình, Base64 & PE nhúng lén.", "Safe offline static analysis • Unmasks greeting wrappers, zero-width stego, embedded Base64 & PE files.", "安全离线静态分析 • 揭露打招呼伪装壳、零宽隐写字符、嵌套Base64与可执行文件。", "Безопасный офлайн-анализ • Обнаружение псевдо-приветствий, zero-width символов, Base64 и PE.");
+                    text: I18n.t4("Phân tích tĩnh offline • KHÔNG chạy code • Không gửi tệp ra Internet • Kết luận theo bộ mẫu hiện có, không thay thế antivirus.", "Offline static analysis • Does NOT execute code • Does not upload files • Heuristic against current signatures — not a full antivirus.", "离线静态分析 • 不执行代码 • 不上传文件 • 基于现有特征启发式，不能替代杀毒软件。", "Офлайн-статический анализ • НЕ выполняет код • Не отправляет файлы • Эвристика по текущим сигнатурам — не антивирус.");
                     font-size: 11px;
                     color: #94a3b8;
                 }
