@@ -213,11 +213,11 @@ pub fn scan_file<P: AsRef<Path>>(path: P) -> Result<FileScanReport, String> {
             )
         )
     })?;
-    // Static-analysis window capped at 16 MB: entropy/PE/text heuristics are
-    // fully effective on the first megabytes, while a 64 MB window could spike
-    // the working set ~190 MB (buffer + lossy + lowercase copies). Hashes below
-    // still stream over the ENTIRE file, so integrity output is unaffected.
-    let max_read = (file_size_bytes as usize).min(16 * 1024 * 1024);
+    // Static-analysis window capped at 8 MB: entropy/PE/text heuristics are
+    // fully effective on the first megabytes, while a larger window spikes the
+    // working set (buffer + lossy + lowercase copies). Hashes below still
+    // stream over the ENTIRE file, so integrity output is unaffected.
+    let max_read = (file_size_bytes as usize).min(8 * 1024 * 1024);
     let mut buffer = vec![0u8; max_read];
     file.read_exact(&mut buffer).map_err(|e| {
         format!(
@@ -295,6 +295,8 @@ pub fn scan_file<P: AsRef<Path>>(path: P) -> Result<FileScanReport, String> {
             snippet: file_name.clone(),
         });
     }
+
+    scan_double_extension(&file_name, &mut findings, &mut risk_score);
 
     let non_exe_exts = [
         "txt", "jpg", "jpeg", "png", "gif", "pdf", "doc", "docx", "xls", "xlsx", "mp4", "mp3",
@@ -498,6 +500,18 @@ pub fn scan_file<P: AsRef<Path>>(path: P) -> Result<FileScanReport, String> {
             25,
             "LOLBin mshta thực thi HTML Application",
         ),
+        (
+            "-windowstyle hidden",
+            "HIGH",
+            30,
+            "PowerShell chạy cửa sổ ẩn (-WindowStyle Hidden)",
+        ),
+        (
+            "-w hidden",
+            "HIGH",
+            30,
+            "PowerShell rút gọn chạy cửa sổ ẩn (-w hidden)",
+        ),
     ];
 
     let mut found_command_count = 0;
@@ -612,10 +626,10 @@ fn localized_summary(lang: u8, risk_level: &str, finding_count: usize, score: i3
         "Оценка риска",
     );
     let limits = tr4_with(lang,
-        "Phân tích tĩnh theo heuristic chỉ kiểm tra tối đa 16 MiB đầu tiên; mã băm bao phủ toàn bộ tệp. Kết quả không chứng minh tệp an toàn hoặc có mã độc.",
-        "Static heuristics inspect at most the first 16 MiB; hashes cover the entire file. Results do not prove safety or maliciousness.",
-        "静态启发式分析最多检查前 16 MiB；哈希覆盖整个文件。结果不能证明文件安全或具有恶意。",
-        "Статические эвристики проверяют только первые 16 MiB; хеши охватывают весь файл. Результаты не доказывают безопасность или вредоносность.");
+        "Phân tích tĩnh theo heuristic chỉ kiểm tra tối đa 8 MiB đầu tiên; mã băm bao phủ toàn bộ tệp. Kết quả không chứng minh tệp an toàn hoặc có mã độc.",
+        "Static heuristics inspect at most the first 8 MiB; hashes cover the entire file. Results do not prove safety or maliciousness.",
+        "静态启发式分析最多检查前 8 MiB；哈希覆盖整个文件。结果不能证明文件安全或具有恶意。",
+        "Статические эвристики проверяют только первые 8 MiB; хеши охватывают весь файл. Результаты не доказывают безопасность или вредоносность.");
     format!("\u{1f44b} Hello! {assessment} {count_label}: {finding_count}. {score_label}: {score}/100. {limits}")
 }
 
@@ -624,6 +638,7 @@ fn command_evidence_family(command: &str) -> &str {
         "| iex" | "|iex" => "invoke-expression",
         "-enc " => "-encodedcommand",
         "certutil -urlcache" | "certutil -decode" => "certutil",
+        "-windowstyle hidden" | "-w hidden" => "hidden-window",
         c => c,
     }
 }
@@ -843,6 +858,40 @@ fn scan_hidden_deceptive_code(text: &str, findings: &mut Vec<FileFinding>, risk_
     }
 }
 
+fn scan_double_extension(file_name: &str, findings: &mut Vec<FileFinding>, risk_score: &mut i32) {
+    let dangerous = [
+        "exe", "scr", "vbs", "vbe", "js", "jse", "bat", "cmd", "ps1", "msi", "com", "pif", "hta",
+        "jar", "wsf",
+    ];
+    let decoy = [
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "jpg", "jpeg", "png",
+        "gif", "zip", "rar", "csv", "mp4", "iso",
+    ];
+    let lower = file_name.to_ascii_lowercase();
+    let parts: Vec<&str> = lower.split('.').collect();
+    if parts.len() < 3 {
+        return;
+    }
+    let last = parts[parts.len() - 1];
+    let prev = parts[parts.len() - 2];
+    if dangerous.contains(&last) && decoy.contains(&prev) {
+        *risk_score += 40;
+        findings.push(FileFinding {
+            severity: "HIGH".to_string(),
+            category: "Double Extension Masquerade".to_string(),
+            description: tr4(
+                "Phần mở rộng kép giả mạo: tệp trông như .{prev} vô hại nhưng thực chất là .{last} có thể thực thi.",
+                "Double-extension masquerade: the file looks like a harmless .{prev} but is actually an executable .{last}.",
+                "双重扩展名伪装：文件看似无害的 .{prev}，实为可执行的 .{last}。",
+                "Двойное расширение-маска: файл выглядит как безобидный .{prev}, но на самом деле исполняемый .{last}.",
+            )
+            .replace("{prev}", prev)
+            .replace("{last}", last),
+            snippet: file_name.to_string(),
+        });
+    }
+}
+
 fn has_pe_structure(bytes: &[u8]) -> bool {
     let read16 = |offset: usize| {
         bytes
@@ -957,6 +1006,67 @@ fn is_b64_char(b: u8) -> bool {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn double_extension_masquerade_flagged() {
+        let path =
+            std::env::temp_dir().join(format!("sg_double_ext_{}.pdf.exe", std::process::id()));
+        std::fs::write(&path, b"plain data that is not a PE").unwrap();
+        let report = scan_file(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.category == "Double Extension Masquerade"));
+        assert!(report.risk_score >= 40);
+    }
+
+    #[test]
+    fn single_extension_executable_not_double_flagged() {
+        let path = std::env::temp_dir().join(format!("sg_single_ext_{}.exe", std::process::id()));
+        std::fs::write(&path, b"plain data that is not a PE").unwrap();
+        let report = scan_file(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.category == "Double Extension Masquerade"));
+    }
+
+    #[test]
+    fn benign_document_with_dots_not_double_flagged() {
+        let path =
+            std::env::temp_dir().join(format!("sg_benign_dots_{}.v1.2.pdf", std::process::id()));
+        std::fs::write(&path, b"%PDF-1.4 harmless report text").unwrap();
+        let report = scan_file(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.category == "Double Extension Masquerade"));
+    }
+
+    #[test]
+    fn hidden_window_aliases_score_once() {
+        let path = std::env::temp_dir().join(format!("sg_hidden_win_{}.ps1", std::process::id()));
+        std::fs::write(
+            &path,
+            b"powershell -w hidden -windowstyle hidden -Command Write-Output done",
+        )
+        .unwrap();
+        let report = scan_file(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let cmd_findings = report
+            .findings
+            .iter()
+            .filter(|f| f.category == "Malicious Command Pattern")
+            .count();
+        assert_eq!(cmd_findings, 2, "both aliases reported as findings");
+        assert_eq!(
+            report.risk_score, 30,
+            "hidden-window family must score only once"
+        );
+    }
 
     #[test]
     fn tmf_format_tokens_alone_do_not_score_as_exploitation() {

@@ -4,7 +4,7 @@ import {
     DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem,
     AttackHistoryItem, CameraItem, BehaviorProfileItem, DnsBenchmarkItem,
     PingResultItem, NetworkHealthReport,
-    RamProcessItem, FileScanFindingItem, FileScanResult,
+    RamProcessItem, FileScanFindingItem, FileScanResult, LocationThreatItem,
 } from "common.slint";
 import { TabButton, StatCard } from "widgets.slint";
 import { RamMapTab } from "rammap.slint";
@@ -15,6 +15,7 @@ export { NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry }
 export { DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem }
 export { AttackHistoryItem, CameraItem, BehaviorProfileItem, DnsBenchmarkItem }
 export { PingResultItem, NetworkHealthReport, RamProcessItem, FileScanFindingItem, FileScanResult }
+export { LocationThreatItem }
 
 component LanDeviceRow inherits Rectangle {
     in property <NetworkDevice> device;
@@ -366,6 +367,15 @@ export component AppWindow inherits Window {
     in-out property <string> file-scan-status: "";
     callback pick-file-and-scan();
     callback rescan-current-file();
+
+    in-out property <bool> location-scan-is-busy: false;
+    in-out property <string> location-scan-status: "";
+    in-out property <float> location-scan-progress: 0;
+    in-out property <int> location-scan-found: 0;
+    in-out property <string> location-scan-root: "";
+    in-out property <[LocationThreatItem]> location-scan-threats;
+    callback pick-folder-and-scan();
+    callback stop-location-scan();
 
     in-out property <bool> attack-modal-open: false;
     in-out property <int> attack-modal-tab: 2;
@@ -748,7 +758,7 @@ export component AppWindow inherits Window {
             }
 
             TabButton {
-                text: I18n.t4("🔬 Soi Tệp (Beta)", "🔬 File Scan (Beta)", "🔬 文件分析 (Beta)", "🔬 Анализ файлов (Beta)");
+                text: I18n.t4("🔬 Soi Tệp", "🔬 File Scan", "🔬 文件分析", "🔬 Анализ файлов");
                 active: root.active-tab == 8;
                 active-color: #fb923c;
                 clicked => { root.active-tab = 8; }
@@ -2538,8 +2548,16 @@ export component AppWindow inherits Window {
                     findings: root.file-scan-findings;
                     is-scanning: root.file-scan-is-busy;
                     scan-status: root.file-scan-status;
+                    location-busy: root.location-scan-is-busy;
+                    location-status: root.location-scan-status;
+                    location-progress: root.location-scan-progress;
+                    location-found: root.location-scan-found;
+                    location-root: root.location-scan-root;
+                    location-threats: root.location-scan-threats;
                     pick-file-and-scan => { root.pick-file-and-scan(); }
                     rescan-current-file => { root.rescan-current-file(); }
+                    pick-folder-and-scan => { root.pick-folder-and-scan(); }
+                    stop-location-scan => { root.stop-location-scan(); }
                 }
             }
         }

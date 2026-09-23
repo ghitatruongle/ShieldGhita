@@ -78,6 +78,14 @@ pub struct AppConfig {
     /// WFP custom local TCP ports to block (inbound accept) when protection is ON.
     #[serde(default)]
     pub wfp_blocked_ports: Vec<u16>,
+    #[serde(default = "default_location_scan_max_files")]
+    pub location_scan_max_files: usize,
+    #[serde(default)]
+    pub location_scan_extensions: Vec<String>,
+}
+
+fn default_location_scan_max_files() -> usize {
+    5000
 }
 
 fn default_ram_clean_threshold_mb() -> u64 {
@@ -195,6 +203,8 @@ impl Default for AppConfig {
             port_migrated_from_5353: false,
             wfp_blocked_ips: Vec::new(),
             wfp_blocked_ports: Vec::new(),
+            location_scan_max_files: default_location_scan_max_files(),
+            location_scan_extensions: Vec::new(),
         }
     }
 }

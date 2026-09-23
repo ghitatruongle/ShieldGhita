@@ -2,6 +2,7 @@ use crate::app::AppState;
 use crate::modules::i18n;
 use crate::modules::system::dns_manager;
 use slint::{ComponentHandle, ModelRc, VecModel};
+use std::cell::RefCell;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -15,6 +16,30 @@ fn sat_i32_u64(v: u64) -> i32 {
 
 fn sat_i32_u32(v: u32) -> i32 {
     i32::try_from(v).unwrap_or(i32::MAX)
+}
+
+#[derive(Default)]
+struct UiTextCache {
+    lang: String,
+    last_update_src: Option<String>,
+    status_tag: i8,
+    traffic: String,
+    initialized: bool,
+}
+
+thread_local! {
+    static UI_TEXT_CACHE: RefCell<UiTextCache> =
+        RefCell::new(UiTextCache { status_tag: -1, ..UiTextCache::default() });
+}
+
+fn cached_text_changed(slot: &mut String, incoming: &str) -> bool {
+    if *slot == incoming {
+        false
+    } else {
+        slot.clear();
+        slot.push_str(incoming);
+        true
+    }
 }
 
 pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
@@ -33,88 +58,19 @@ pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
     ui_win.set_master_locked(is_locked);
     ui_win.set_silent_sinkhole(s.blocker.is_silent_sinkhole());
 
-    let (
-        lang_code,
-        autostart,
-        minimize,
-        notify,
-        net_adblock,
-        attack_det,
-        auto_blk,
-        arp_det,
-        min_tray_mode,
-        start_hidden,
-        last_blocklist_update,
-    ) = s
-        .config
-        .read()
-        .map(|c| {
-            (
-                c.language.clone(),
-                c.start_with_windows,
-                c.minimize_to_tray,
-                c.enable_block_notifications,
-                c.network_wide_adblock_enabled,
-                c.attack_detection_enabled,
-                c.auto_block_attacks,
-                c.arp_spoof_detection,
-                c.minimize_to_tray_on_minimize,
-                c.start_hidden_in_tray,
-                c.last_blocklist_update.clone(),
-            )
-        })
-        .unwrap_or((
-            "vi".to_string(),
-            true,
-            true,
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            None,
-        ));
-    i18n::set_language(&lang_code);
-    ui_win
-        .global::<crate::I18n>()
-        .set_lang(i18n::current_index() as i32);
-
     let protection = s.protection_atomic.load(Ordering::Relaxed);
     ui_win.set_protection_enabled(protection);
-    ui_win.set_status_text(if is_locked {
-        i18n::tr(
-            "🔒 Đã khóa Internet",
-            "🔒 Internet Locked",
-            "🔒 已锁定互联网",
-        )
-        .into()
-    } else if protection {
-        i18n::tr(
-            "🟢 Đang bảo vệ tối cao",
-            "🟢 Active Protection",
-            "🟢 高级防护中",
-        )
-        .into()
-    } else {
-        i18n::tr("🔴 Đã tạm dừng", "🔴 Paused", "🔴 已暂停").into()
-    });
-
-    ui_win.set_autostart_enabled(autostart);
-    ui_win.set_minimize_to_tray_enabled(minimize);
-    ui_win.set_enable_notifications(notify);
-    ui_win.set_network_wide_adblock(net_adblock);
-    ui_win.set_attack_detection_enabled(attack_det);
-    ui_win.set_auto_block_attacks(auto_blk);
-    ui_win.set_arp_spoof_detection(arp_det);
-    ui_win.set_minimize_to_tray_on_minimize(min_tray_mode);
-    ui_win.set_start_hidden_in_tray(start_hidden);
 
     let (cpu, mem) = s.monitor.get_system_metrics();
     ui_win.set_cpu_usage(cpu);
     ui_win.set_mem_usage(mem);
-    ui_win.set_live_traffic_rate(s.monitor.get_live_traffic_rate().into());
+
+    let traffic = s.monitor.get_live_traffic_rate();
+    let traffic_changed =
+        UI_TEXT_CACHE.with(|c| cached_text_changed(&mut c.borrow_mut().traffic, &traffic));
+    if traffic_changed {
+        ui_win.set_live_traffic_rate(traffic.into());
+    }
 
     let sec_score = s.security_engine.get_security_score();
     ui_win.set_security_score(sec_score);
@@ -122,18 +78,91 @@ pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
     ui_win.set_lan_devices_count(sat_i32_usize(s.monitor.get_lan_device_count()));
     ui_win.set_is_scanning(s.monitor.is_lan_scanning());
 
-    let last_update = last_blocklist_update
-        .unwrap_or_else(|| i18n::tr("Chưa cập nhật", "Not updated", "尚未更新").to_string());
-    ui_win.set_last_update_text(
-        if lang_code == "vi" {
-            format!("Cập nhật: {}", last_update)
-        } else if lang_code == "zh" {
-            format!("更新时间: {}", last_update)
-        } else {
-            format!("Updated: {}", last_update)
+    {
+        let cfg = s.config.read().unwrap_or_else(|e| e.into_inner());
+
+        let first_run = UI_TEXT_CACHE.with(|c| !c.borrow().initialized);
+        let lang_changed = UI_TEXT_CACHE.with(|c| c.borrow().lang != cfg.language);
+        let force_text = first_run || lang_changed;
+        if force_text {
+            i18n::set_language(&cfg.language);
+            ui_win
+                .global::<crate::I18n>()
+                .set_lang(i18n::current_index() as i32);
+            UI_TEXT_CACHE.with(|c| {
+                let mut cache = c.borrow_mut();
+                cache.lang.clone_from(&cfg.language);
+                cache.initialized = true;
+            });
         }
-        .into(),
-    );
+
+        ui_win.set_autostart_enabled(cfg.start_with_windows);
+        ui_win.set_minimize_to_tray_enabled(cfg.minimize_to_tray);
+        ui_win.set_enable_notifications(cfg.enable_block_notifications);
+        ui_win.set_network_wide_adblock(cfg.network_wide_adblock_enabled);
+        ui_win.set_attack_detection_enabled(cfg.attack_detection_enabled);
+        ui_win.set_auto_block_attacks(cfg.auto_block_attacks);
+        ui_win.set_arp_spoof_detection(cfg.arp_spoof_detection);
+        ui_win.set_minimize_to_tray_on_minimize(cfg.minimize_to_tray_on_minimize);
+        ui_win.set_start_hidden_in_tray(cfg.start_hidden_in_tray);
+
+        let status_tag: i8 = if is_locked {
+            0
+        } else if protection {
+            1
+        } else {
+            2
+        };
+        let status_changed = UI_TEXT_CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            let stale = cache.status_tag != status_tag || force_text;
+            if stale {
+                cache.status_tag = status_tag;
+            }
+            stale
+        });
+        if status_changed {
+            let txt = if is_locked {
+                i18n::tr(
+                    "🔒 Đã khóa Internet",
+                    "🔒 Internet Locked",
+                    "🔒 已锁定互联网",
+                )
+            } else if protection {
+                i18n::tr(
+                    "🟢 Đang bảo vệ tối cao",
+                    "🟢 Active Protection",
+                    "🟢 高级防护中",
+                )
+            } else {
+                i18n::tr("🔴 Đã tạm dừng", "🔴 Paused", "🔴 已暂停")
+            };
+            ui_win.set_status_text(txt.into());
+        }
+
+        let last_update_changed = UI_TEXT_CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            let stale = cache.last_update_src != cfg.last_blocklist_update || force_text;
+            if stale {
+                cache.last_update_src.clone_from(&cfg.last_blocklist_update);
+            }
+            stale
+        });
+        if last_update_changed {
+            let raw = cfg
+                .last_blocklist_update
+                .as_deref()
+                .unwrap_or_else(|| i18n::tr("Chưa cập nhật", "Not updated", "尚未更新"));
+            let text = if cfg.language == "vi" {
+                format!("Cập nhật: {}", raw)
+            } else if cfg.language == "zh" {
+                format!("更新时间: {}", raw)
+            } else {
+                format!("Updated: {}", raw)
+            };
+            ui_win.set_last_update_text(text.into());
+        }
+    }
 
     let active_tab = ui_win.get_active_tab();
     match active_tab {
@@ -319,4 +348,19 @@ fn refresh_rules_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
     let allow_models: Vec<slint::SharedString> =
         allowed_rules.into_iter().map(|r| r.into()).collect();
     ui_win.set_allowed_rules(ModelRc::new(VecModel::from(allow_models)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cached_text_changed;
+
+    #[test]
+    fn reports_change_only_when_text_differs() {
+        let mut slot = String::new();
+        assert!(cached_text_changed(&mut slot, "a"));
+        assert_eq!(slot, "a");
+        assert!(!cached_text_changed(&mut slot, "a"));
+        assert!(cached_text_changed(&mut slot, "b"));
+        assert_eq!(slot, "b");
+    }
 }

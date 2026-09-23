@@ -13,6 +13,8 @@ static RAM_PROCS_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 // Guards the periodic housekeeping job (working-set trim + hosts-file check)
 // so two runs can never overlap; the tick simply skips while one is in flight.
 static HOUSEKEEPING_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LAST_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+const RAM_PROCESSES_UI_LIMIT: usize = 200;
 
 #[derive(Debug, Clone, PartialEq)]
 struct WindowGeom {
@@ -186,108 +188,124 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
             handle_tray_icon_events(&ui_win);
             handle_minimize_to_tray(&ui_win, &state, &mut tray_hide_armed);
             track_window_geom(&ui_win, &state, &mut last_seen_geom, &mut geom_dirty_since);
-            if WINDOW_VISIBLE.load(Ordering::SeqCst) {
+
+            let visible_now = WINDOW_VISIBLE.load(Ordering::SeqCst);
+            let was_visible = LAST_VISIBLE.swap(visible_now, Ordering::SeqCst);
+            if was_visible && !visible_now {
+                let rt = state.runtime.clone();
+                rt.spawn(async move {
+                    let _ = tokio::task::spawn_blocking(
+                        crate::modules::system::trim_process_working_set,
+                    )
+                    .await;
+                });
+            }
+
+            if visible_now {
                 super::refresh::refresh_ui_state(&ui_win, &state);
             }
 
-            networks.refresh();
-            // Per-interface rate over the real elapsed tick. Note we keep our
-            // own CUMULATIVE baseline (`total_received/total_transmitted`):
-            // `received()`/`transmitted()` are deltas vs sysinfo's internal
-            // old-counter, so differencing those would double-subtract; and
-            // when GetIfEntry2 fails, sysinfo keeps the STALE delta, which
-            // would re-report the previous tick's traffic forever. A failed
-            // tick yields zero because its cumulative counters are unchanged.
-            let now = Instant::now();
-            let is_first_tick = prev_net_t.is_none();
-            let dt = prev_net_t
-                .map(|t0| now.duration_since(t0).as_secs_f64().max(0.001))
-                .unwrap_or(1.0);
-            let mut best_down: f64 = 0.0;
-            let mut best_up: f64 = 0.0;
-            let mut best_name = String::new();
-            for (if_name, data) in &networks {
-                if if_name.to_lowercase().contains("loopback") {
-                    continue;
-                }
-                let (rx, tx) = (data.total_received(), data.total_transmitted());
-                let (prx, ptx) = prev_net.get(if_name).copied().unwrap_or((rx, tx));
-                let drx = rx.saturating_sub(prx);
-                let dtx = tx.saturating_sub(ptx);
-                let (down, up) = compute_net_rate(drx, dtx, dt, is_first_tick);
-                if down + up > best_down + best_up {
-                    best_down = down;
-                    best_up = up;
-                    best_name = if_name.clone();
-                }
-            }
-            // Snapshot for next tick (prune vanished interfaces).
-            {
-                let mut next: std::collections::HashMap<String, (u64, u64)> =
-                    std::collections::HashMap::new();
+            if visible_now {
+                networks.refresh();
+                // Per-interface rate over the real elapsed tick. Note we keep our
+                // own CUMULATIVE baseline (`total_received/total_transmitted`):
+                // `received()`/`transmitted()` are deltas vs sysinfo's internal
+                // old-counter, so differencing those would double-subtract; and
+                // when GetIfEntry2 fails, sysinfo keeps the STALE delta, which
+                // would re-report the previous tick's traffic forever. A failed
+                // tick yields zero because its cumulative counters are unchanged.
+                let now = Instant::now();
+                let is_first_tick = prev_net_t.is_none();
+                let dt = prev_net_t
+                    .map(|t0| now.duration_since(t0).as_secs_f64().max(0.001))
+                    .unwrap_or(1.0);
+                let mut best_down: f64 = 0.0;
+                let mut best_up: f64 = 0.0;
+                let mut best_name = String::new();
                 for (if_name, data) in &networks {
-                    next.insert(
-                        if_name.clone(),
-                        (data.total_received(), data.total_transmitted()),
-                    );
+                    if if_name.to_lowercase().contains("loopback") {
+                        continue;
+                    }
+                    let (rx, tx) = (data.total_received(), data.total_transmitted());
+                    let (prx, ptx) = prev_net.get(if_name).copied().unwrap_or((rx, tx));
+                    let drx = rx.saturating_sub(prx);
+                    let dtx = tx.saturating_sub(ptx);
+                    let (down, up) = compute_net_rate(drx, dtx, dt, is_first_tick);
+                    if down + up > best_down + best_up {
+                        best_down = down;
+                        best_up = up;
+                        best_name = if_name.clone();
+                    }
                 }
-                prev_net = next;
-                prev_net_t = Some(now);
-            }
-            let (down_mbps, up_mbps) = if is_first_tick {
-                (0.0, 0.0)
-            } else {
-                (best_down, best_up)
-            };
-            ui_win.set_net_down_mbps(down_mbps as f32);
-            ui_win.set_net_up_mbps(up_mbps as f32);
-            ui_win.set_net_if_name(best_name.into());
+                // Snapshot for next tick (prune vanished interfaces).
+                {
+                    let mut next: std::collections::HashMap<String, (u64, u64)> =
+                        std::collections::HashMap::new();
+                    for (if_name, data) in &networks {
+                        next.insert(
+                            if_name.clone(),
+                            (data.total_received(), data.total_transmitted()),
+                        );
+                    }
+                    prev_net = next;
+                    prev_net_t = Some(now);
+                }
+                let (down_mbps, up_mbps) = if is_first_tick {
+                    (0.0, 0.0)
+                } else {
+                    (best_down, best_up)
+                };
+                ui_win.set_net_down_mbps(down_mbps as f32);
+                ui_win.set_net_up_mbps(up_mbps as f32);
+                ui_win.set_net_if_name(best_name.into());
 
-            ram_tick = ram_tick.wrapping_add(1);
-            if ui_win.get_active_tab() == 7 {
-                let b = crate::modules::rammap::snapshot();
-                ui_win.set_ram_total_mb(b.total_mb as f32);
-                ui_win.set_ram_available_mb(b.available_mb as f32);
-                ui_win.set_ram_active_mb(b.active_mb as f32);
-                ui_win.set_ram_standby_mb(b.standby_mb as f32);
-                ui_win.set_ram_modified_mb(b.modified_mb as f32);
-                ui_win.set_ram_free_mb(b.free_mb as f32);
-                ui_win.set_ram_zero_mb(b.zero_mb as f32);
-                ui_win.set_ram_page_cache_mb(b.page_cache_mb as f32);
-                ui_win.set_ram_kernel_mb(b.kernel_mb as f32);
-                ui_win.set_ram_commit_mb(b.commit_mb as f32);
-                ui_win.set_ram_commit_limit_mb(b.commit_limit_mb as f32);
-                ui_win.set_ram_lists_available(b.lists_available);
-                if ram_tick.is_multiple_of(3) && !RAM_PROCS_BUSY.swap(true, Ordering::SeqCst) {
-                    let ui_weak_bg = ui_weak.clone();
-                    state.runtime.spawn(async move {
-                        let procs =
-                            tokio::task::spawn_blocking(crate::modules::rammap::all_processes)
-                                .await
-                                .unwrap_or_default();
-                        let applied = slint::invoke_from_event_loop(move || {
-                            if let Some(u) = ui_weak_bg.upgrade() {
-                                let models: Vec<crate::RamProcessItem> = procs
-                                    .into_iter()
-                                    .map(|p| crate::RamProcessItem {
-                                        pid: i32::try_from(p.pid).unwrap_or(i32::MAX),
-                                        name: p.name.into(),
-                                        working_set_mb: p.working_set_mb as f32,
-                                        percent_ram: p.percent_ram as f32,
-                                        exe_path: p.exe_path.into(),
-                                        is_critical: p.is_critical,
-                                    })
-                                    .collect();
-                                u.set_ram_processes(slint::ModelRc::new(slint::VecModel::from(
-                                    models,
-                                )));
-                            }
+                ram_tick = ram_tick.wrapping_add(1);
+                if ui_win.get_active_tab() == 7 {
+                    let b = crate::modules::rammap::snapshot();
+                    ui_win.set_ram_total_mb(b.total_mb as f32);
+                    ui_win.set_ram_available_mb(b.available_mb as f32);
+                    ui_win.set_ram_active_mb(b.active_mb as f32);
+                    ui_win.set_ram_standby_mb(b.standby_mb as f32);
+                    ui_win.set_ram_modified_mb(b.modified_mb as f32);
+                    ui_win.set_ram_free_mb(b.free_mb as f32);
+                    ui_win.set_ram_zero_mb(b.zero_mb as f32);
+                    ui_win.set_ram_page_cache_mb(b.page_cache_mb as f32);
+                    ui_win.set_ram_kernel_mb(b.kernel_mb as f32);
+                    ui_win.set_ram_commit_mb(b.commit_mb as f32);
+                    ui_win.set_ram_commit_limit_mb(b.commit_limit_mb as f32);
+                    ui_win.set_ram_lists_available(b.lists_available);
+                    if ram_tick.is_multiple_of(3) && !RAM_PROCS_BUSY.swap(true, Ordering::SeqCst) {
+                        let ui_weak_bg = ui_weak.clone();
+                        state.runtime.spawn(async move {
+                            let procs = tokio::task::spawn_blocking(|| {
+                                crate::modules::rammap::top_processes(RAM_PROCESSES_UI_LIMIT)
+                            })
+                            .await
+                            .unwrap_or_default();
+                            let applied = slint::invoke_from_event_loop(move || {
+                                if let Some(u) = ui_weak_bg.upgrade() {
+                                    let models: Vec<crate::RamProcessItem> = procs
+                                        .into_iter()
+                                        .map(|p| crate::RamProcessItem {
+                                            pid: i32::try_from(p.pid).unwrap_or(i32::MAX),
+                                            name: p.name.into(),
+                                            working_set_mb: p.working_set_mb as f32,
+                                            percent_ram: p.percent_ram as f32,
+                                            exe_path: p.exe_path.into(),
+                                            is_critical: p.is_critical,
+                                        })
+                                        .collect();
+                                    u.set_ram_processes(slint::ModelRc::new(
+                                        slint::VecModel::from(models),
+                                    ));
+                                }
+                            });
+                            // Always release the busy flag so a failed invoke cannot
+                            // freeze the process list forever.
+                            let _ = applied;
+                            RAM_PROCS_BUSY.store(false, Ordering::SeqCst);
                         });
-                        // Always release the busy flag so a failed invoke cannot
-                        // freeze the process list forever.
-                        let _ = applied;
-                        RAM_PROCS_BUSY.store(false, Ordering::SeqCst);
-                    });
+                    }
                 }
             }
 

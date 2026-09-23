@@ -1146,6 +1146,241 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             });
         });
     });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_pick_folder_and_scan(move || {
+        let s = s.clone();
+        let ui_weak = ui_weak.clone();
+        if ui_weak
+            .upgrade()
+            .map(|u| u.get_location_scan_is_busy())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        let owner = main_window_hwnd(&ui_weak);
+        let Some(root_str) = crate::modules::security::pick_folder_dialog(owner) else {
+            return;
+        };
+
+        let cancel = s.location_scan_cancel.clone();
+        cancel.store(false, Ordering::SeqCst);
+        let opts = s
+            .config
+            .read()
+            .map(|c| crate::modules::security::LocationScanOptions {
+                max_files: c.location_scan_max_files.clamp(1, 20_000),
+                extensions: c.location_scan_extensions.clone(),
+            })
+            .unwrap_or_default();
+        let max_files = opts.max_files;
+
+        let reset_weak = ui_weak.clone();
+        let reset_root = root_str.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui_inst) = reset_weak.upgrade() {
+                ui_inst.set_location_scan_is_busy(true);
+                ui_inst.set_location_scan_root(reset_root.into());
+                ui_inst.set_location_scan_progress(0.0);
+                ui_inst.set_location_scan_found(0);
+                ui_inst.set_location_scan_threats(slint::ModelRc::new(slint::VecModel::default()));
+                ui_inst.set_location_scan_status(
+                    crate::modules::i18n::tr4(
+                        "👋 Xin chào! Bắt đầu quét vị trí (chỉ cảnh báo, không xoá)...",
+                        "👋 Hello! Location scan started (alert only, nothing is deleted)...",
+                        "👋 您好！位置扫描已开始（仅告警，不删除）...",
+                        "👋 Здравствуйте! Сканирование начато (только оповещение)...",
+                    )
+                    .into(),
+                );
+            }
+        });
+
+        let sec = s.security_engine.clone();
+        let root_path = std::path::PathBuf::from(&root_str);
+        let ui_scan = ui_weak.clone();
+        s.runtime.spawn(async move {
+            let threat_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+            let ui_progress = ui_scan.clone();
+            let sec_threat = sec.clone();
+            let threat_count_progress = threat_count.clone();
+            let threat_count_threat = threat_count.clone();
+
+            let scan_result = tokio::task::spawn_blocking(move || {
+                crate::modules::security::scan_location(
+                    &root_path,
+                    &opts,
+                    &cancel,
+                    move |scanned, _found, _current| {
+                        let found = threat_count_progress.load(Ordering::SeqCst);
+                        if !super::poller::WINDOW_VISIBLE.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        let pct =
+                            ((scanned as f64 / max_files as f64) * 100.0).min(100.0) as f32;
+                        let status = match crate::modules::i18n::current_index() {
+                            1 => format!("🔎 Scanned {scanned} files • {found} threat(s) flagged"),
+                            2 => format!("🔎 已扫描 {scanned} 个文件 • 发现 {found} 个威胁"),
+                            3 => format!("🔎 Просканировано {scanned} • угроз: {found}"),
+                            _ => format!("🔎 Đã quét {scanned} tệp • {found} mối nguy"),
+                        };
+                        let ui_cb = ui_progress.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui_inst) = ui_cb.upgrade() {
+                                ui_inst.set_location_scan_progress(pct);
+                                ui_inst.set_location_scan_status(status.into());
+                                ui_inst.set_location_scan_found(found as i32);
+                            }
+                        });
+                    },
+                    move |scan| {
+                        if scan.risk_level == "MALICIOUS" {
+                            sec_threat.record_incident(
+                                crate::modules::i18n::tr4(
+                                    "Phát hiện mã độc khi quét vị trí",
+                                    "Malicious File Detected During Location Scan",
+                                    "位置扫描发现恶意文件",
+                                    "Вредоносный файл при сканировании положения",
+                                ),
+                                &scan.file_name,
+                                &scan.file_path,
+                                "HIGH",
+                                crate::modules::i18n::tr4(
+                                    "Chỉ cảnh báo — vui lòng kiểm tra thủ công, ứng dụng không xoá tệp",
+                                    "Alert only — review manually; the app does not delete files",
+                                    "仅告警 — 请手动检查，应用不会删除文件",
+                                    "Только оповещение — проверьте вручную, приложение не удаляет файлы",
+                                ),
+                            );
+                        }
+                        threat_count_threat.fetch_add(1, Ordering::SeqCst);
+                    },
+                )
+            })
+            .await;
+
+            if let Ok(report) = &scan_result {
+                let found = threat_count.load(Ordering::SeqCst);
+                let pct = ((report.files_scanned as f64 / max_files as f64) * 100.0).min(100.0)
+                    as f32;
+                let status = match crate::modules::i18n::current_index() {
+                    1 => format!("🔎 Scanned {} files • {} threat(s) flagged", report.files_scanned, found),
+                    2 => format!("🔎 已扫描 {} 个文件 • 发现 {} 个威胁", report.files_scanned, found),
+                    3 => format!("🔎 Просканировано {} • угроз: {}", report.files_scanned, found),
+                    _ => format!("🔎 Đã quét {} tệp • {} mối nguy", report.files_scanned, found),
+                };
+                let final_weak = ui_scan.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui_inst) = final_weak.upgrade() {
+                        ui_inst.set_location_scan_progress(pct);
+                        ui_inst.set_location_scan_status(status.into());
+                        ui_inst.set_location_scan_found(found as i32);
+                    }
+                });
+            }
+
+            let summary_weak = ui_scan.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = summary_weak.upgrade() {
+                    ui_inst.set_location_scan_is_busy(false);
+                }
+            });
+
+            match scan_result {
+                Ok(report) => {
+                    let done_weak = ui_scan.clone();
+                    let items: Vec<crate::LocationThreatItem> = report
+                        .threats
+                        .iter()
+                        .map(|t| crate::LocationThreatItem {
+                            file_name: t.file_name.clone().into(),
+                            file_path: t.file_path.clone().into(),
+                            risk_score: t.risk_score,
+                            risk_level: t.risk_level.clone().into(),
+                            category: t.top_category.clone().into(),
+                        })
+                        .collect();
+                    let prefix = if report.cancelled {
+                        crate::modules::i18n::tr4("⏹ Đã dừng", "⏹ Stopped", "⏹ 已停止", "⏹ Остановлено")
+                    } else if report.budget_reached {
+                        crate::modules::i18n::tr4(
+                            "⚠ Đạt giới hạn tệp",
+                            "⚠ File budget reached",
+                            "⚠ 已达文件上限",
+                            "⚠ Достигнут лимит файлов",
+                        )
+                    } else {
+                        crate::modules::i18n::tr4(
+                            "✅ Hoàn tất quét vị trí",
+                            "✅ Location scan complete",
+                            "✅ 位置扫描完成",
+                            "✅ Сканирование завершено",
+                        )
+                    };
+                    let body = match crate::modules::i18n::current_index() {
+                        1 => format!(
+                            " — {scanned} files scanned, {threats} threat(s) ({malicious} malicious) in {:.1}s",
+                            report.elapsed_ms as f64 / 1000.0,
+                            scanned = report.files_scanned,
+                            threats = report.threats.len(),
+                            malicious = report.malicious_count(),
+                        ),
+                        2 => format!(
+                            " — 已扫描 {scanned} 个文件，发现 {threats} 个威胁（{malicious} 个恶意），耗时 {:.1} 秒",
+                            report.elapsed_ms as f64 / 1000.0,
+                            scanned = report.files_scanned,
+                            threats = report.threats.len(),
+                            malicious = report.malicious_count(),
+                        ),
+                        3 => format!(
+                            " — файлов: {scanned}, угроз: {threats} (вредоносных: {malicious}), время {:.1} с",
+                            report.elapsed_ms as f64 / 1000.0,
+                            scanned = report.files_scanned,
+                            threats = report.threats.len(),
+                            malicious = report.malicious_count(),
+                        ),
+                        _ => format!(
+                            " — đã quét {scanned} tệp, {threats} mối nguy ({malicious} độc hại), thời gian {:.1} giây",
+                            report.elapsed_ms as f64 / 1000.0,
+                            scanned = report.files_scanned,
+                            threats = report.threats.len(),
+                            malicious = report.malicious_count(),
+                        ),
+                    };
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui_inst) = done_weak.upgrade() {
+                            ui_inst.set_location_scan_progress(100.0);
+                            ui_inst.set_location_scan_found(items.len() as i32);
+                            ui_inst.set_location_scan_threats(slint::ModelRc::new(
+                                slint::VecModel::from(items),
+                            ));
+                            ui_inst
+                                .set_location_scan_status(format!("{prefix}{body}").into());
+                        }
+                    });
+                }
+                Err(e) => {
+                    let err_weak = ui_scan.clone();
+                    let label =
+                        crate::modules::i18n::tr4("❌ Lỗi:", "❌ Error:", "❌ 错误：", "❌ Ошибка:")
+                            .to_string();
+                    let msg = format!("{label} {e}");
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui_inst) = err_weak.upgrade() {
+                            ui_inst.set_location_scan_status(msg.into());
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    let cancel_stop = state.location_scan_cancel.clone();
+    ui.on_stop_location_scan(move || {
+        cancel_stop.store(true, Ordering::SeqCst);
+    });
 }
 
 #[cfg(test)]

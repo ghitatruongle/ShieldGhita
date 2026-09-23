@@ -9,7 +9,9 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 pub mod file_analyzer;
+pub mod location_scan;
 pub use file_analyzer::{pick_file_dialog, scan_file};
+pub use location_scan::{pick_folder_dialog, scan_location, LocationScanOptions};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityIncident {

@@ -30,6 +30,7 @@ pub struct AppState {
     pub logs_ui_version: AtomicU64,
     pub console_ui_version: AtomicU64,
     pub toast_gen: Arc<AtomicU64>,
+    pub location_scan_cancel: Arc<AtomicBool>,
     #[cfg(feature = "admin")]
     pub local_manager: Arc<crate::modules::local::LocalManager>,
 }
@@ -119,6 +120,7 @@ impl AppState {
             logs_ui_version: AtomicU64::new(0),
             console_ui_version: AtomicU64::new(0),
             toast_gen: Arc::new(AtomicU64::new(0)),
+            location_scan_cancel: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "admin")]
             local_manager,
         });
