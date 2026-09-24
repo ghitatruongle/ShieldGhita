@@ -95,6 +95,49 @@ pub fn apply_protection(s: &Arc<AppState>, enabled: bool) {
     }
 }
 
+fn copy_text_to_clipboard(text: &str) {
+    let payload = text.to_string();
+    std::thread::spawn(move || {
+        let _ = crate::modules::system::dns_manager::silent_command("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Set-Clipboard -Value $env:SG_CLIP",
+            ])
+            .env("SG_CLIP", payload)
+            .output();
+    });
+}
+
+fn reveal_in_explorer(path: &str) {
+    let _ = crate::modules::rammap::open_process_folder(path);
+}
+
+fn show_app_toast(
+    ui: &crate::AppWindow,
+    toast_gen: &std::sync::Arc<std::sync::atomic::AtomicU64>,
+    title: String,
+    body: String,
+    is_threat: bool,
+) {
+    let my_gen = toast_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    ui.set_toast_title(title.into());
+    ui.set_toast_domain(body.into());
+    ui.set_toast_time(chrono::Local::now().format("%H:%M:%S").to_string().into());
+    ui.set_toast_is_threat(is_threat);
+    ui.set_show_toast(true);
+    let ui_weak = ui.as_weak();
+    let gen = toast_gen.clone();
+    slint::Timer::single_shot(std::time::Duration::from_millis(4500), move || {
+        if gen.load(Ordering::SeqCst) != my_gen {
+            return;
+        }
+        if let Some(u) = ui_weak.upgrade() {
+            u.set_show_toast(false);
+        }
+    });
+}
+
 /// Raw HWND of the main window (null when unavailable), used to parent the
 /// Win32 file picker so it can never open BEHIND the app window.
 fn main_window_hwnd(ui_weak: &slint::Weak<crate::AppWindow>) -> *mut std::ffi::c_void {
@@ -354,6 +397,18 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
     ui.on_dismiss_toast(move || {
         if let Some(ui_inst) = ui_weak_toast.upgrade() {
             ui_inst.set_show_toast(false);
+        }
+    });
+
+    let ui_weak_onboard = ui.as_weak();
+    let s_onboard = state.clone();
+    ui.on_dismiss_onboarding(move || {
+        if let Some(ui_inst) = ui_weak_onboard.upgrade() {
+            ui_inst.set_show_onboarding(false);
+        }
+        if let Ok(mut cfg) = s_onboard.config.write() {
+            cfg.onboarding_done = true;
+            let _ = cfg.save();
         }
     });
 
@@ -1052,11 +1107,208 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         let _ = crate::modules::rammap::open_process_folder(path.as_str());
     });
 
+    let ui_copy_hash = ui.as_weak();
+    let ui_export = ui.as_weak();
+    let ui_open_loc = ui.as_weak();
+    let ui_export_loc = ui.as_weak();
+    let toast_gen = state.toast_gen.clone();
+    ui.on_copy_file_hash(move |kind| {
+        let ui_ref = ui_copy_hash.clone();
+        let kind = kind.to_string();
+        let (md5, sha1, sha256) = ui_ref
+            .upgrade()
+            .map(|u| {
+                let r = u.get_file_scan_result();
+                (r.md5.to_string(), r.sha1.to_string(), r.sha256.to_string())
+            })
+            .unwrap_or_default();
+        let value = match kind.as_str() {
+            "md5" => md5,
+            "sha1" => sha1,
+            _ => sha256,
+        };
+        if !value.is_empty() {
+            copy_text_to_clipboard(&value);
+        }
+    });
+
+    let toast_gen_export = toast_gen.clone();
+    ui.on_export_file_report(move || {
+        let Some(ui_inst) = ui_export.upgrade() else {
+            return;
+        };
+        if ui_inst.get_file_scan_is_busy() {
+            return;
+        }
+        let res = ui_inst.get_file_scan_result();
+        let path = res.file_path.to_string();
+        if path.is_empty() {
+            return;
+        }
+        ui_inst.set_file_scan_is_busy(true);
+        let ui_toast = ui_export.clone();
+        let toast_gen = toast_gen_export.clone();
+        std::thread::spawn(move || {
+            let report_res = crate::modules::security::scan_file(&path);
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(ui_inst) = ui_toast.upgrade() else {
+                    return;
+                };
+                ui_inst.set_file_scan_is_busy(false);
+                match report_res {
+                    Ok(report) => match crate::modules::security::export_report_txt(&report) {
+                        Ok(out) => {
+                            show_app_toast(
+                                &ui_inst,
+                                &toast_gen,
+                                crate::modules::i18n::tr4(
+                                    "💾 Đã xuất báo cáo",
+                                    "💾 Report exported",
+                                    "💾 报告已导出",
+                                    "💾 Отчёт сохранён",
+                                )
+                                .to_string(),
+                                out,
+                                false,
+                            );
+                        }
+                        Err(e) => {
+                            ui_inst.set_file_scan_status(format!("❌ {e}").into());
+                        }
+                    },
+                    Err(e) => {
+                        ui_inst.set_file_scan_status(format!("❌ {e}").into());
+                    }
+                }
+            });
+        });
+    });
+
+    ui.on_open_file_location(move || {
+        let path = ui_open_loc
+            .upgrade()
+            .map(|u| u.get_file_scan_result().file_path.to_string())
+            .unwrap_or_default();
+        if !path.is_empty() {
+            reveal_in_explorer(&path);
+        }
+    });
+
+    let toast_gen_loc_exp = toast_gen.clone();
+    ui.on_export_location_threats(move || {
+        let Some(ui_inst) = ui_export_loc.upgrade() else {
+            return;
+        };
+        let model = ui_inst.get_location_scan_threats();
+        let threats: Vec<crate::modules::security::ThreatHit> = {
+            use slint::Model as _;
+            (0..model.row_count())
+                .filter_map(|i| model.row_data(i))
+                .map(|t| crate::modules::security::ThreatHit {
+                    file_path: t.file_path.to_string(),
+                    file_name: t.file_name.to_string(),
+                    risk_score: t.risk_score,
+                    risk_level: t.risk_level.to_string(),
+                    top_category: t.category.to_string(),
+                })
+                .collect()
+        };
+        let report = crate::modules::security::LocationScanReport {
+            root: ui_inst.get_location_scan_root().to_string(),
+            files_scanned: 0,
+            files_skipped: 0,
+            directories_visited: 0,
+            threats,
+            cancelled: false,
+            budget_reached: false,
+            elapsed_ms: 0,
+            progress_ratio: 1.0,
+        };
+        match crate::modules::security::export_threats_csv(&report) {
+            Ok(out) => {
+                show_app_toast(
+                    &ui_inst,
+                    &toast_gen_loc_exp,
+                    crate::modules::i18n::tr4(
+                        "💾 Đã xuất danh sách mối nguy",
+                        "💾 Threat list exported",
+                        "💾 威胁列表已导出",
+                        "💾 Список угроз сохранён",
+                    )
+                    .to_string(),
+                    out,
+                    false,
+                );
+            }
+            Err(e) => {
+                ui_inst.set_location_scan_status(format!("❌ {e}").into());
+            }
+        }
+    });
+
+    ui.on_open_threat_file(move |path| {
+        let p = path.to_string();
+        if !p.is_empty() {
+            reveal_in_explorer(&p);
+        }
+    });
+
+    ui.on_copy_threat_path(move |path| {
+        let p = path.to_string();
+        if !p.is_empty() {
+            copy_text_to_clipboard(&p);
+        }
+    });
+
     let s = state.clone();
     let ui_weak = ui.as_weak();
+    ui.on_rescan_threat_file(move |path| {
+        let path_str = path.to_string();
+        if path_str.is_empty() {
+            return;
+        }
+        let s = s.clone();
+        let ui_weak = ui_weak.clone();
+        s.runtime.spawn(async move {
+            let busy_weak = ui_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = busy_weak.upgrade() {
+                    ui_inst.set_file_scan_is_busy(true);
+                    ui_inst.set_file_scan_status(
+                        crate::modules::i18n::tr4(
+                            "👋 Xin chào! Đang soi tệp từ danh sách quét vị trí...",
+                            "👋 Hello! Scanning file from location results...",
+                            "👋 您好！正在分析位置扫描结果中的文件...",
+                            "👋 Здравствуйте! Анализ файла из результатов сканирования...",
+                        )
+                        .into(),
+                    );
+                }
+            });
+            let report_res =
+                tokio::task::spawn_blocking(move || crate::modules::security::scan_file(&path_str))
+                    .await
+                    .unwrap_or_else(|e| Err(format!("Task failure: {e}")));
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui_inst) = ui_weak.upgrade() {
+                    match report_res {
+                        Ok(report) => fa_render_result(&ui_inst, report),
+                        Err(err_msg) => fa_render_error(&ui_inst, &err_msg, true),
+                    }
+                    ui_inst.set_file_scan_is_busy(false);
+                    ui_inst.set_active_tab(8);
+                }
+            });
+        });
+    });
+
+    let s = state.clone();
+    let ui_weak = ui.as_weak();
+    let toast_gen_pick = toast_gen.clone();
     ui.on_pick_file_and_scan(move || {
         let s = s.clone();
         let ui_weak = ui_weak.clone();
+        let toast_gen = toast_gen_pick.clone();
         // The dialog must run on the event-loop thread with the main window
         // as owner: previously it ran on a spawn_blocking thread with a null
         // owner and could open behind the app. GetOpenFileNameW pumps its own
@@ -1090,7 +1342,26 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui_inst) = ui_weak.upgrade() {
                         match report_res {
-                            Ok(report) => fa_render_result(&ui_inst, report),
+                            Ok(report) => {
+                                let level = report.risk_level.clone();
+                                let name = report.file_name.clone();
+                                fa_render_result(&ui_inst, report);
+                                if level == "MALICIOUS" || level == "SUSPICIOUS" {
+                                    show_app_toast(
+                                        &ui_inst,
+                                        &toast_gen,
+                                        crate::modules::i18n::tr4(
+                                            "🚨 Phát hiện tệp đáng ngờ",
+                                            "🚨 Suspicious file detected",
+                                            "🚨 发现可疑文件",
+                                            "🚨 Обнаружен подозрительный файл",
+                                        )
+                                        .to_string(),
+                                        name.to_string(),
+                                        true,
+                                    );
+                                }
+                            }
                             Err(err_msg) => fa_render_error(&ui_inst, &err_msg, true),
                         }
                         ui_inst.set_file_scan_is_busy(false);
@@ -1102,9 +1373,11 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s = state.clone();
     let ui_weak = ui.as_weak();
+    let toast_gen_rescan = toast_gen.clone();
     ui.on_rescan_current_file(move || {
         let s = s.clone();
         let ui_weak = ui_weak.clone();
+        let toast_gen = toast_gen_rescan.clone();
         let cur_path = ui_weak
             .upgrade()
             .map(|u| u.get_file_scan_result().file_path.to_string())
@@ -1138,7 +1411,26 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui_inst) = ui_weak.upgrade() {
                     match report_res {
-                        Ok(report) => fa_render_result(&ui_inst, report),
+                        Ok(report) => {
+                            let level = report.risk_level.clone();
+                            let name = report.file_name.clone();
+                            fa_render_result(&ui_inst, report);
+                            if level == "MALICIOUS" || level == "SUSPICIOUS" {
+                                show_app_toast(
+                                    &ui_inst,
+                                    &toast_gen,
+                                    crate::modules::i18n::tr4(
+                                        "🚨 Phát hiện tệp đáng ngờ",
+                                        "🚨 Suspicious file detected",
+                                        "🚨 发现可疑文件",
+                                        "🚨 Обнаружен подозрительный файл",
+                                    )
+                                    .to_string(),
+                                    name.to_string(),
+                                    true,
+                                );
+                            }
+                        }
                         Err(err_msg) => fa_render_error(&ui_inst, &err_msg, false),
                     }
                     ui_inst.set_file_scan_is_busy(false);
@@ -1149,9 +1441,11 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s = state.clone();
     let ui_weak = ui.as_weak();
+    let toast_gen_folder = toast_gen.clone();
     ui.on_pick_folder_and_scan(move || {
         let s = s.clone();
         let ui_weak = ui_weak.clone();
+        let toast_gen = toast_gen_folder.clone();
         if ui_weak
             .upgrade()
             .map(|u| u.get_location_scan_is_busy())
@@ -1163,10 +1457,15 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         let Some(root_str) = crate::modules::security::pick_folder_dialog(owner) else {
             return;
         };
+        let root_path_pre = std::path::PathBuf::from(&root_str);
 
         let cancel = s.location_scan_cancel.clone();
         cancel.store(false, Ordering::SeqCst);
-        let opts = s
+        let ui_ext = ui_weak
+            .upgrade()
+            .map(|u| u.get_location_extension_filter().to_string())
+            .unwrap_or_default();
+        let mut opts = s
             .config
             .read()
             .map(|c| crate::modules::security::LocationScanOptions {
@@ -1174,7 +1473,13 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 extensions: c.location_scan_extensions.clone(),
             })
             .unwrap_or_default();
-        let max_files = opts.max_files;
+        if !ui_ext.trim().is_empty() {
+            opts.extensions = ui_ext
+                .split([',', ';', ' '])
+                .map(|x| x.trim().trim_start_matches('.').to_lowercase())
+                .filter(|x| !x.is_empty())
+                .collect();
+        }
 
         let reset_weak = ui_weak.clone();
         let reset_root = root_str.clone();
@@ -1198,7 +1503,7 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         });
 
         let sec = s.security_engine.clone();
-        let root_path = std::path::PathBuf::from(&root_str);
+        let root_path = root_path_pre;
         let ui_scan = ui_weak.clone();
         s.runtime.spawn(async move {
             let threat_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1209,22 +1514,41 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             let threat_count_threat = threat_count.clone();
 
             let scan_result = tokio::task::spawn_blocking(move || {
+                let estimated =
+                    crate::modules::security::estimate_scannable_files(&root_path, &opts);
+                let scan_started = std::time::Instant::now();
                 crate::modules::security::scan_location(
                     &root_path,
                     &opts,
                     &cancel,
-                    move |scanned, _found, _current| {
+                    move |scanned, _found, ratio, _current| {
                         let found = threat_count_progress.load(Ordering::SeqCst);
                         if !super::poller::WINDOW_VISIBLE.load(Ordering::SeqCst) {
                             return;
                         }
-                        let pct =
-                            ((scanned as f64 / max_files as f64) * 100.0).min(100.0) as f32;
+                        let pct = (ratio * 100.0).clamp(0.0, 100.0);
+                        let elapsed = scan_started.elapsed().as_secs_f64();
+                        let rate = (scanned as f64 / elapsed.max(0.001)).max(0.001);
+                        let denom = estimated.max(scanned).max(1);
+                        let remain = denom.saturating_sub(scanned) as f64;
+                        let eta_sec = (remain / rate).max(0.0);
                         let status = match crate::modules::i18n::current_index() {
-                            1 => format!("🔎 Scanned {scanned} files • {found} threat(s) flagged"),
-                            2 => format!("🔎 已扫描 {scanned} 个文件 • 发现 {found} 个威胁"),
-                            3 => format!("🔎 Просканировано {scanned} • угроз: {found}"),
-                            _ => format!("🔎 Đã quét {scanned} tệp • {found} mối nguy"),
+                            1 => format!(
+                                "🔎 Scanned {scanned}/{denom} files • {found} threat(s) • {pct:.0}% • ETA {eta:.0}s",
+                                eta = eta_sec
+                            ),
+                            2 => format!(
+                                "🔎 已扫描 {scanned}/{denom} 个文件 • 发现 {found} 个威胁 • {pct:.0}% • 剩余约 {eta:.0}s",
+                                eta = eta_sec
+                            ),
+                            3 => format!(
+                                "🔎 Просканировано {scanned}/{denom} • угроз: {found} • {pct:.0}% • ещё ~{eta:.0}s",
+                                eta = eta_sec
+                            ),
+                            _ => format!(
+                                "🔎 Đã quét {scanned}/{denom} tệp • {found} mối nguy • {pct:.0}% • còn ~{eta:.0}s",
+                                eta = eta_sec
+                            ),
                         };
                         let ui_cb = ui_progress.clone();
                         let _ = slint::invoke_from_event_loop(move || {
@@ -1237,6 +1561,15 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                     },
                     move |scan| {
                         if scan.risk_level == "MALICIOUS" {
+                            let top = scan
+                                .findings
+                                .first()
+                                .map(|f| f.category.as_str())
+                                .unwrap_or("-");
+                            let details = format!(
+                                "{} • {} • {}/100",
+                                scan.file_path, top, scan.risk_score
+                            );
                             sec_threat.record_incident(
                                 crate::modules::i18n::tr4(
                                     "Phát hiện mã độc khi quét vị trí",
@@ -1245,7 +1578,7 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                                     "Вредоносный файл при сканировании положения",
                                 ),
                                 &scan.file_name,
-                                &scan.file_path,
+                                &details,
                                 "HIGH",
                                 crate::modules::i18n::tr4(
                                     "Chỉ cảnh báo — vui lòng kiểm tra thủ công, ứng dụng không xoá tệp",
@@ -1261,36 +1594,9 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             })
             .await;
 
-            if let Ok(report) = &scan_result {
-                let found = threat_count.load(Ordering::SeqCst);
-                let pct = ((report.files_scanned as f64 / max_files as f64) * 100.0).min(100.0)
-                    as f32;
-                let status = match crate::modules::i18n::current_index() {
-                    1 => format!("🔎 Scanned {} files • {} threat(s) flagged", report.files_scanned, found),
-                    2 => format!("🔎 已扫描 {} 个文件 • 发现 {} 个威胁", report.files_scanned, found),
-                    3 => format!("🔎 Просканировано {} • угроз: {}", report.files_scanned, found),
-                    _ => format!("🔎 Đã quét {} tệp • {} mối nguy", report.files_scanned, found),
-                };
-                let final_weak = ui_scan.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui_inst) = final_weak.upgrade() {
-                        ui_inst.set_location_scan_progress(pct);
-                        ui_inst.set_location_scan_status(status.into());
-                        ui_inst.set_location_scan_found(found as i32);
-                    }
-                });
-            }
-
-            let summary_weak = ui_scan.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui_inst) = summary_weak.upgrade() {
-                    ui_inst.set_location_scan_is_busy(false);
-                }
-            });
-
             match scan_result {
                 Ok(report) => {
-                    let done_weak = ui_scan.clone();
+                    let pct = (report.progress_ratio * 100.0).clamp(0.0, 100.0);
                     let items: Vec<crate::LocationThreatItem> = report
                         .threats
                         .iter()
@@ -1303,7 +1609,12 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                         })
                         .collect();
                     let prefix = if report.cancelled {
-                        crate::modules::i18n::tr4("⏹ Đã dừng", "⏹ Stopped", "⏹ 已停止", "⏹ Остановлено")
+                        crate::modules::i18n::tr4(
+                            "⏹ Đã dừng",
+                            "⏹ Stopped",
+                            "⏹ 已停止",
+                            "⏹ Остановлено",
+                        )
                     } else if report.budget_reached {
                         crate::modules::i18n::tr4(
                             "⚠ Đạt giới hạn tệp",
@@ -1318,6 +1629,16 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                             "✅ 位置扫描完成",
                             "✅ Сканирование завершено",
                         )
+                    };
+                    let stopped_at = if report.cancelled {
+                        match crate::modules::i18n::current_index() {
+                            1 => format!(" at {pct:.0}%", pct = pct),
+                            2 => format!("（进度 {pct:.0}%）", pct = pct),
+                            3 => format!(" на {pct:.0}%", pct = pct),
+                            _ => format!(" lúc {pct:.0}%", pct = pct),
+                        }
+                    } else {
+                        String::new()
                     };
                     let body = match crate::modules::i18n::current_index() {
                         1 => format!(
@@ -1349,15 +1670,27 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                             malicious = report.malicious_count(),
                         ),
                     };
+                    let done_weak = ui_scan.clone();
+                    let toast_title = prefix;
+                    let toast_body = body.trim_start_matches(" — ").to_string();
+                    let status_text = format!("{prefix}{stopped_at}{body}");
+                    let threat_hit = report.malicious_count() > 0;
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui_inst) = done_weak.upgrade() {
-                            ui_inst.set_location_scan_progress(100.0);
+                            ui_inst.set_location_scan_progress(pct);
                             ui_inst.set_location_scan_found(items.len() as i32);
                             ui_inst.set_location_scan_threats(slint::ModelRc::new(
                                 slint::VecModel::from(items),
                             ));
-                            ui_inst
-                                .set_location_scan_status(format!("{prefix}{body}").into());
+                            ui_inst.set_location_scan_status(status_text.into());
+                            ui_inst.set_location_scan_is_busy(false);
+                            show_app_toast(
+                                &ui_inst,
+                                &toast_gen,
+                                toast_title.to_string(),
+                                toast_body,
+                                threat_hit,
+                            );
                         }
                     });
                 }
@@ -1370,6 +1703,7 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui_inst) = err_weak.upgrade() {
                             ui_inst.set_location_scan_status(msg.into());
+                            ui_inst.set_location_scan_is_busy(false);
                         }
                     });
                 }

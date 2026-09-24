@@ -10,8 +10,11 @@ use tracing::{info, warn};
 
 pub mod file_analyzer;
 pub mod location_scan;
-pub use file_analyzer::{pick_file_dialog, scan_file};
-pub use location_scan::{pick_folder_dialog, scan_location, LocationScanOptions};
+pub use file_analyzer::{export_report_txt, pick_file_dialog, scan_file};
+pub use location_scan::{
+    estimate_scannable_files, export_threats_csv, pick_folder_dialog, scan_location,
+    LocationScanOptions, LocationScanReport, ThreatHit,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityIncident {
@@ -1394,11 +1397,85 @@ impl SecurityEngine {
         let penalty = (incident_count as i32) * 5;
         (base - penalty).clamp(10, 100)
     }
+
+    pub fn get_security_score_hint(&self) -> String {
+        let incident_count = self.incidents.read().map(|l| l.len()).unwrap_or(0);
+        let detection_on = self.is_detection_enabled();
+        let auto_block_on = self.is_auto_block_enabled();
+        if !detection_on {
+            return i18n::tr4(
+                "Điểm yếu: IDS đang tắt — bật Phát hiện tấn công để tăng điểm",
+                "Weak: IDS is off — enable Attack Detection to raise the score",
+                "薄弱：IDS 已关闭 — 开启攻击检测以提高评分",
+                "Слабо: IDS выключен — включите обнаружение атак",
+            )
+            .to_string();
+        }
+        if !auto_block_on {
+            return i18n::tr4(
+                "Điểm yếu: Auto-block đang tắt — bật IPS để tự cách ly nguồn tấn công",
+                "Weak: Auto-block is off — enable IPS to isolate attackers",
+                "薄弱：自动封锁已关闭 — 开启 IPS 以隔离攻击源",
+                "Слабо: автоблокировка выключена — включите IPS",
+            )
+            .to_string();
+        }
+        if incident_count > 0 {
+            return format!(
+                "{} {}",
+                i18n::tr4(
+                    "Điểm trừ do sự cố an ninh gần đây:",
+                    "Score reduced by recent incidents:",
+                    "因近期安全事件扣分：",
+                    "Снижено из-за недавних инцидентов:",
+                ),
+                incident_count
+            );
+        }
+        i18n::tr4(
+            "Đang bảo vệ tốt: IDS + IPS bật, chưa có sự cố",
+            "Well protected: IDS + IPS on, no incidents",
+            "防护良好：IDS + IPS 已开，无事件",
+            "Хорошая защита: IDS + IPS включены, инцидентов нет",
+        )
+        .to_string()
+    }
+
+    pub fn filter_incidents(&self, query: &str) -> Vec<SecurityIncident> {
+        let q = query.trim().to_lowercase();
+        let incidents = self.get_incidents();
+        if q.is_empty() {
+            return incidents;
+        }
+        incidents
+            .into_iter()
+            .filter(|inc| {
+                inc.incident_type.to_lowercase().contains(&q)
+                    || inc.source_ip.to_lowercase().contains(&q)
+                    || inc.details.to_lowercase().contains(&q)
+                    || inc.severity.to_lowercase().contains(&q)
+                    || inc.mitigation.to_lowercase().contains(&q)
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn score_hint_tracks_toggles_and_incidents() {
+        let sec = SecurityEngine::new();
+        assert!(sec.get_security_score_hint().len() > 5);
+        sec.set_detection_enabled(true);
+        sec.set_auto_block(true);
+        assert!(sec.get_security_score_hint().len() > 5);
+        sec.record_incident("t", "1.2.3.4", "d", "HIGH", "m");
+        assert!(sec.filter_incidents("1.2.3.4").len() == 1);
+        assert!(sec.filter_incidents("zzz-no-match").is_empty());
+        assert!(!sec.filter_incidents("").is_empty());
+    }
 
     #[test]
     fn quarantine_binds_owner_and_protects_routes() {

@@ -190,6 +190,10 @@ pub fn setup_ui_bridge(
         ui.on_send_camera_ptz(|_| {});
     }
 
+    if !cfg.onboarding_done {
+        ui.set_show_onboarding(true);
+    }
+
     let _timer = poller::start(ui, state.clone(), (show_id, toggle_id, quit_id));
     std::mem::forget(_timer);
 
@@ -296,7 +300,13 @@ fn spawn_toast_forwarders(ui: &crate::AppWindow, state: &Arc<AppState>) {
             while let Ok(incident) = rx_alert.recv().await {
                 let ui_weak_inner = ui_weak.clone();
                 let title = format!("🚨 {}", incident.incident_type);
-                let domain_msg = format!("{} [{}]", incident.details, incident.source_ip);
+                let domain_msg = if incident.source_ip.is_empty()
+                    || incident.details.contains(&incident.source_ip)
+                {
+                    incident.details.clone()
+                } else {
+                    format!("{} [{}]", incident.details, incident.source_ip)
+                };
                 let time_str = incident.time.clone();
 
                 let my_gen = toast_gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;

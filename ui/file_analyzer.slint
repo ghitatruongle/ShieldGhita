@@ -1,4 +1,4 @@
-import { Button, ScrollView, ListView } from "std-widgets.slint";
+import { Button, ScrollView, ListView, LineEdit } from "std-widgets.slint";
 import { I18n, FileScanResult, FileScanFindingItem, LocationThreatItem } from "common.slint";
 
 export component FileFindingRow inherits Rectangle {
@@ -75,8 +75,11 @@ export component FileFindingRow inherits Rectangle {
 
 export component LocationThreatRow inherits Rectangle {
     in property <LocationThreatItem> threat;
+    callback open-path(string);
+    callback copy-path(string);
+    callback rescan-path(string);
 
-    height: 46px;
+    height: 58px;
     background: #111827;
     border-radius: 6px;
     border-width: 1px;
@@ -132,7 +135,7 @@ export component LocationThreatRow inherits Rectangle {
             font-size: 10px;
             color: #cbd5e1;
             overflow: elide;
-            max-width: 160px;
+            max-width: 120px;
         }
 
         Text {
@@ -140,6 +143,19 @@ export component LocationThreatRow inherits Rectangle {
             font-size: 11px;
             font-weight: 700;
             color: threat.risk-level == "MALICIOUS" ? #f87171 : #fbbf24;
+        }
+
+        Button {
+            text: "📂";
+            clicked => { root.open-path(threat.file-path); }
+        }
+        Button {
+            text: "📋";
+            clicked => { root.copy-path(threat.file-path); }
+        }
+        Button {
+            text: "🔬";
+            clicked => { root.rescan-path(threat.file-path); }
         }
     }
 }
@@ -156,11 +172,19 @@ export component FileAnalyzerTab inherits Rectangle {
     in property <int> location-found: 0;
     in property <string> location-root: "";
     in property <[LocationThreatItem]> location-threats;
+    in-out property <string> location-extension-filter: "";
 
     callback pick-file-and-scan();
     callback rescan-current-file();
+    callback copy-file-hash(string);
+    callback export-file-report();
+    callback open-file-location();
     callback pick-folder-and-scan();
     callback stop-location-scan();
+    callback export-location-threats();
+    callback open-threat-file(string);
+    callback copy-threat-path(string);
+    callback rescan-threat-file(string);
 
     VerticalLayout {
         padding: 14px;
@@ -439,6 +463,27 @@ export component FileAnalyzerTab inherits Rectangle {
                         color: #64748b;
                         overflow: elide;
                     }
+
+                    Button {
+                        text: "MD5";
+                        clicked => { root.copy-file-hash("md5"); }
+                    }
+                    Button {
+                        text: "SHA1";
+                        clicked => { root.copy-file-hash("sha1"); }
+                    }
+                    Button {
+                        text: "SHA256";
+                        clicked => { root.copy-file-hash("sha256"); }
+                    }
+                    Button {
+                        text: I18n.t4("💾 Báo cáo", "💾 Report", "💾 报告", "💾 Отчёт");
+                        clicked => { root.export-file-report(); }
+                    }
+                    Button {
+                        text: I18n.t4("📂 Mở vị trí", "📂 Reveal", "📂 打开位置", "📂 Показать");
+                        clicked => { root.open-file-location(); }
+                    }
                 }
             }
 
@@ -507,7 +552,7 @@ export component FileAnalyzerTab inherits Rectangle {
                         spacing: 2px;
 
                         Text {
-                            text: I18n.t4("🗂️ QUÉT VỊ TRÍ CHỈ ĐỊNH (BETA)", "🗂️ LOCATION / DRIVE SCAN (BETA)", "🗂️ 指定位置扫描 (测试版)", "🗂️ СКАНИРОВАНИЕ ПОЛОЖЕНИЯ (БЕТА)");
+                            text: I18n.t4("🗂️ QUÉT VỊ TRÍ CHỈ ĐỊNH", "🗂️ LOCATION / DRIVE SCAN", "🗂️ 指定位置扫描", "🗂️ СКАНИРОВАНИЕ ПОЛОЖЕНИЯ");
                             font-size: 13px;
                             font-weight: 800;
                             color: #fbbf24;
@@ -529,6 +574,18 @@ export component FileAnalyzerTab inherits Rectangle {
                     if root.location-busy : Button {
                         text: I18n.t4("⏹ Dừng", "⏹ Stop", "⏹ 停止", "⏹ Стоп");
                         clicked => { root.stop-location-scan(); }
+                    }
+
+                    Button {
+                        text: I18n.t4("💾 Xuất CSV", "💾 Export CSV", "💾 导出 CSV", "💾 CSV");
+                        enabled: root.location-threats.length > 0;
+                        clicked => { root.export-location-threats(); }
+                    }
+
+                    LineEdit {
+                        width: 140px;
+                        text <=> root.location-extension-filter;
+                        placeholder-text: I18n.t4("Lọc đuôi: ps1,exe", "Filter: ps1,exe", "筛选: ps1,exe", "Фильтр: ps1,exe");
                     }
                 }
 
@@ -592,6 +649,9 @@ export component FileAnalyzerTab inherits Rectangle {
                     vertical-stretch: 1;
                     for t in root.location-threats : LocationThreatRow {
                         threat: t;
+                        open-path(p) => { root.open-threat-file(p); }
+                        copy-path(p) => { root.copy-threat-path(p); }
+                        rescan-path(p) => { root.rescan-threat-file(p); }
                     }
                 }
             }

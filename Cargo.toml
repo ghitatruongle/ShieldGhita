@@ -1,6 +1,6 @@
 [package]
 name = "shield_ghita"
-version = "0.1.1-beta"
+version = "0.1.1"
 edition = "2021"
 [features]
 default = []

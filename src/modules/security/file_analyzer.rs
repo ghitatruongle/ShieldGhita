@@ -512,6 +512,114 @@ pub fn scan_file<P: AsRef<Path>>(path: P) -> Result<FileScanReport, String> {
             30,
             "PowerShell rút gọn chạy cửa sổ ẩn (-w hidden)",
         ),
+        (
+            "-ep bypass",
+            "HIGH",
+            30,
+            "Bỏ qua ExecutionPolicy (-ep bypass)",
+        ),
+        (
+            "-executionpolicy bypass",
+            "HIGH",
+            30,
+            "Bỏ qua ExecutionPolicy (-ExecutionPolicy Bypass)",
+        ),
+        (
+            "amsiutils",
+            "CRITICAL",
+            40,
+            "Vô hiệu AMSI (AmsiUtils) — né tránh quét script",
+        ),
+        (
+            "amsi.dll",
+            "HIGH",
+            30,
+            "Tác động AMSI (amsi.dll) trong script",
+        ),
+        (
+            "vssadmin delete",
+            "CRITICAL",
+            40,
+            "Xóa Shadow Copy (vssadmin delete) — dấu hiệu ransomware",
+        ),
+        (
+            "vssadmin delete shadows",
+            "CRITICAL",
+            40,
+            "Xóa toàn bộ Shadow Copy — dấu hiệu ransomware",
+        ),
+        (
+            "frombase64string",
+            "HIGH",
+            25,
+            "Giải mã Base64 động (FromBase64String)",
+        ),
+        (
+            "new-object net.webclient",
+            "HIGH",
+            25,
+            "Tạo WebClient tải dữ liệu từ Internet",
+        ),
+        (
+            "invoke-webrequest",
+            "MEDIUM",
+            15,
+            "Tải tài nguyên từ Internet (Invoke-WebRequest)",
+        ),
+        (
+            "set-mppreference",
+            "HIGH",
+            30,
+            "Chỉnh Windows Defender (Set-MpPreference)",
+        ),
+        (
+            "add-mppreference",
+            "HIGH",
+            30,
+            "Nới lỏng Windows Defender (Add-MpPreference)",
+        ),
+        (
+            "disableantispyware",
+            "HIGH",
+            30,
+            "Tắt Antispyware/Defender (DisableAntiSpyware)",
+        ),
+        (
+            "mimikatz",
+            "CRITICAL",
+            45,
+            "Công cụ đánh cắp credential (Mimikatz)",
+        ),
+        (
+            "sekurlsa",
+            "CRITICAL",
+            40,
+            "Trích credential LSASS (sekurlsa)",
+        ),
+        (
+            "procdump",
+            "HIGH",
+            25,
+            "Dump tiến trình (procdump) — có thể dò credential",
+        ),
+        (
+            "wmic process call create",
+            "HIGH",
+            25,
+            "Tạo tiến trình qua WMI (wmic process call create)",
+        ),
+        (
+            "schtasks /create",
+            "MEDIUM",
+            15,
+            "Tạo Scheduled Task duy trì (schtasks /create)",
+        ),
+        (
+            "reg add",
+            "MEDIUM",
+            10,
+            "Sửa Registry (reg add) — có thể cài persistence",
+        ),
     ];
 
     let mut found_command_count = 0;
@@ -567,6 +675,8 @@ pub fn scan_file<P: AsRef<Path>>(path: P) -> Result<FileScanReport, String> {
         "SAFE"
     };
 
+    sort_findings_by_severity(&mut findings);
+
     let summary_text = localized_summary(current_index(), risk_level, findings.len(), risk_score);
 
     Ok(FileScanReport {
@@ -584,6 +694,60 @@ pub fn scan_file<P: AsRef<Path>>(path: P) -> Result<FileScanReport, String> {
         findings,
         summary_text,
     })
+}
+
+pub fn format_report_text(report: &FileScanReport) -> String {
+    let mut out = String::new();
+    out.push_str("Shield Ghita — Offline Static File Analyzer\n");
+    out.push_str(&format!("File: {}\n", report.file_path));
+    out.push_str(&format!("Name: {}\n", report.file_name));
+    out.push_str(&format!("Size: {} bytes\n", report.file_size_bytes));
+    out.push_str(&format!("MD5: {}\n", report.md5));
+    out.push_str(&format!("SHA1: {}\n", report.sha1));
+    out.push_str(&format!("SHA256: {}\n", report.sha256));
+    out.push_str(&format!("Entropy: {:.3}\n", report.entropy));
+    out.push_str(&format!("Packed: {}\n", report.is_packed));
+    out.push_str(&format!("PE: {}\n", report.is_pe));
+    out.push_str(&format!(
+        "Risk: {} ({}/100)\n",
+        report.risk_level, report.risk_score
+    ));
+    out.push_str(&format!("Summary: {}\n", report.summary_text));
+    out.push_str(&format!("Findings: {}\n", report.findings.len()));
+    for (i, f) in report.findings.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. [{}] {} — {}\n",
+            i + 1,
+            f.severity,
+            f.category,
+            f.description
+        ));
+        if !f.snippet.is_empty() {
+            out.push_str(&format!("   snippet: {}\n", f.snippet));
+        }
+    }
+    out
+}
+
+pub fn export_report_txt(report: &FileScanReport) -> Result<String, String> {
+    let text = format_report_text(report);
+    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+    let dir = std::path::PathBuf::from(app_data).join("ShieldGhita");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe_name: String = report
+        .file_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let path = dir.join(format!("file_scan_{safe_name}.txt"));
+    std::fs::write(&path, &text).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 // Explicit language makes summary tests independent of the process-wide language.
@@ -639,8 +803,32 @@ fn command_evidence_family(command: &str) -> &str {
         "-enc " => "-encodedcommand",
         "certutil -urlcache" | "certutil -decode" => "certutil",
         "-windowstyle hidden" | "-w hidden" => "hidden-window",
+        "-ep bypass" | "-executionpolicy bypass" => "executionpolicy-bypass",
+        "amsiutils" | "amsi.dll" => "amsi-tamper",
+        "vssadmin delete" | "vssadmin delete shadows" => "shadow-copy-delete",
+        "downloadstring" | "downloadfile" => "remote-download",
+        "frombase64string" => "base64-decode",
+        "new-object net.webclient" | "invoke-webrequest" => "web-download",
+        "set-mppreference" | "add-mppreference" | "disableantispyware" => "defender-tamper",
+        "mimikatz" | "sekurlsa" => "credential-dump",
+        "procdump" => "process-dump",
+        "wmic process call create" => "wmi-process-create",
         c => c,
     }
+}
+
+fn severity_rank(severity: &str) -> u8 {
+    match severity {
+        "CRITICAL" => 0,
+        "HIGH" => 1,
+        "MEDIUM" => 2,
+        "LOW" => 3,
+        _ => 4,
+    }
+}
+
+fn sort_findings_by_severity(findings: &mut [FileFinding]) {
+    findings.sort_by_key(|f| severity_rank(&f.severity));
 }
 
 fn contains_command_token(text: &str, keyword: &str) -> bool {
@@ -686,6 +874,7 @@ fn scan_tmf_file(
             "rundll32" => "rundll32.exe",
             "mshta" => "mshta.exe",
             "bitsadmin" => "bitsadmin /transfer",
+            "downloadstring" | "downloadfile" => "remote-download",
             other => other,
         };
         let already_reported = scored_commands.contains(family);
@@ -1047,6 +1236,39 @@ mod tests {
     }
 
     #[test]
+    fn findings_sorted_critical_first() {
+        let path = std::env::temp_dir().join(format!("sg_sort_sev_{}.ps1", std::process::id()));
+        std::fs::write(
+            &path,
+            b"reg add HKLM\\software\\run\npowershell -w hidden -enc aGk=\nmimikatz\n",
+        )
+        .unwrap();
+        let report = scan_file(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(report.findings.len() >= 2);
+        let ranks: Vec<u8> = report
+            .findings
+            .iter()
+            .map(|f| severity_rank(&f.severity))
+            .collect();
+        let mut sorted = ranks.clone();
+        sorted.sort_unstable();
+        assert_eq!(ranks, sorted);
+    }
+
+    #[test]
+    fn export_report_txt_contains_hashes() {
+        let path = std::env::temp_dir().join(format!("sg_export_rep_{}.txt", std::process::id()));
+        std::fs::write(&path, b"hello report").unwrap();
+        let report = scan_file(&path).unwrap();
+        let text = format_report_text(&report);
+        assert!(text.contains(&report.md5));
+        assert!(text.contains(&report.sha256));
+        assert!(text.contains(&report.file_name));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn hidden_window_aliases_score_once() {
         let path = std::env::temp_dir().join(format!("sg_hidden_win_{}.ps1", std::process::id()));
         std::fs::write(
@@ -1129,7 +1351,7 @@ mod tests {
             "downloadstring",
             &mut findings,
             &mut score,
-            &std::collections::HashSet::from(["downloadstring"]),
+            &std::collections::HashSet::from(["remote-download"]),
         );
         assert_eq!(score, 30, "TMF must not score the same command twice");
         assert_eq!(findings.len(), 1);

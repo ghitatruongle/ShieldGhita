@@ -11,6 +11,8 @@ pub const DEFAULT_LOCATION_SCAN_MAX_FILES: usize = 5000;
 const MAX_SCANNABLE_BYTES: u64 = 64 * 1024 * 1024;
 const PROGRESS_NOTIFY_EVERY: usize = 16;
 const PROGRESS_MIN_INTERVAL_MS: u128 = 20;
+const RUNNING_PROGRESS_CAP: f32 = 0.95;
+const FILES_PER_PENDING_DIR_ESTIMATE: usize = 12;
 
 #[derive(Debug, Default)]
 struct ProgressThrottle {
@@ -85,6 +87,7 @@ pub struct LocationScanReport {
     pub cancelled: bool,
     pub budget_reached: bool,
     pub elapsed_ms: u128,
+    pub progress_ratio: f32,
 }
 
 impl LocationScanReport {
@@ -98,6 +101,7 @@ impl LocationScanReport {
             cancelled: false,
             budget_reached: false,
             elapsed_ms: 0,
+            progress_ratio: 0.0,
         }
     }
 
@@ -188,6 +192,19 @@ fn is_threat_level(level: &str) -> bool {
     level == "MALICIOUS" || level == "SUSPICIOUS"
 }
 
+fn estimated_total_files(scanned: usize, pending_dirs: usize, max_files: usize) -> usize {
+    let guess = scanned + pending_dirs.saturating_mul(FILES_PER_PENDING_DIR_ESTIMATE) + 8;
+    guess.clamp(scanned.max(1), max_files.max(scanned.max(1)))
+}
+
+fn soft_progress_ratio(scanned: usize, pending_dirs: usize, max_files: usize) -> f32 {
+    if scanned == 0 && pending_dirs == 0 {
+        return 0.0;
+    }
+    let estimated = estimated_total_files(scanned, pending_dirs, max_files) as f32;
+    ((scanned as f32 / estimated) * RUNNING_PROGRESS_CAP).clamp(0.0, RUNNING_PROGRESS_CAP)
+}
+
 pub fn scan_location<Progress, Threat>(
     root: &Path,
     options: &LocationScanOptions,
@@ -196,7 +213,7 @@ pub fn scan_location<Progress, Threat>(
     mut on_threat: Threat,
 ) -> LocationScanReport
 where
-    Progress: FnMut(usize, usize, &Path),
+    Progress: FnMut(usize, usize, f32, &Path),
     Threat: FnMut(&FileScanReport),
 {
     let started = Instant::now();
@@ -204,6 +221,7 @@ where
     let mut report = LocationScanReport::empty(root);
 
     if !root.is_dir() || is_skippable_dir(root, &roots) {
+        report.progress_ratio = 1.0;
         report.elapsed_ms = started.elapsed().as_millis();
         return report;
     }
@@ -276,7 +294,18 @@ where
                     if report.files_scanned.is_multiple_of(PROGRESS_NOTIFY_EVERY)
                         && throttle.allow()
                     {
-                        progress(report.files_scanned, report.threats.len(), &path);
+                        let ratio = soft_progress_ratio(
+                            report.files_scanned,
+                            stack.len(),
+                            options.max_files,
+                        );
+                        report.progress_ratio = report.progress_ratio.max(ratio);
+                        progress(
+                            report.files_scanned,
+                            report.threats.len(),
+                            report.progress_ratio,
+                            &path,
+                        );
                     }
                 }
                 Err(_) => {
@@ -286,9 +315,24 @@ where
         }
     }
 
+    if report.cancelled {
+        if report.files_scanned > 0 {
+            report.progress_ratio = report
+                .progress_ratio
+                .max(soft_progress_ratio(
+                    report.files_scanned,
+                    0,
+                    options.max_files,
+                ))
+                .min(RUNNING_PROGRESS_CAP);
+        }
+    } else {
+        report.progress_ratio = 1.0;
+    }
     progress(
         report.files_scanned,
         report.threats.len(),
+        report.progress_ratio,
         Path::new(report.root.as_str()),
     );
     report.elapsed_ms = started.elapsed().as_millis();
@@ -375,6 +419,95 @@ pub fn pick_folder_dialog(owner_hwnd: *mut c_void) -> Option<String> {
     picked
 }
 
+pub fn estimate_scannable_files(root: &Path, options: &LocationScanOptions) -> usize {
+    if !root.is_dir() {
+        return 0;
+    }
+    let roots = os_protected_roots();
+    if is_skippable_dir(root, &roots) {
+        return 0;
+    }
+    let mut count = 0usize;
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    visited.insert(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    let mut walked = 0usize;
+    const WALK_BUDGET: usize = 50_000;
+    while let Some(dir) = stack.pop() {
+        if walked >= WALK_BUDGET {
+            break;
+        }
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            walked += 1;
+            if walked >= WALK_BUDGET {
+                break;
+            }
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if visited.insert(canonical) && !is_skippable_dir(&path, &roots) {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if !file_type.is_file() || !extension_allowed(&path, &options.extensions) {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                if meta.len() > 0 && meta.len() <= MAX_SCANNABLE_BYTES {
+                    count += 1;
+                    if count >= options.max_files {
+                        return options.max_files;
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
+fn csv_escape(field: &str) -> String {
+    let risky = field
+        .chars()
+        .next()
+        .map(|c| matches!(c, '=' | '+' | '-' | '@' | '\t' | '\r'))
+        .unwrap_or(false);
+    let mut s = field.replace('"', "\"\"");
+    if risky {
+        s = format!("'{}", s);
+    }
+    format!("\"{}\"", s)
+}
+
+pub fn export_threats_csv(report: &LocationScanReport) -> Result<String, String> {
+    let mut csv = String::from("file_name,file_path,risk_score,risk_level,category\n");
+    for t in &report.threats {
+        csv.push_str(&format!(
+            "{},{},{},{},{}\n",
+            csv_escape(&t.file_name),
+            csv_escape(&t.file_path),
+            t.risk_score,
+            csv_escape(&t.risk_level),
+            csv_escape(&t.top_category),
+        ));
+    }
+    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+    let dir = std::path::PathBuf::from(app_data).join("ShieldGhita");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!(
+        "location_scan_threats_{}.csv",
+        chrono::Local::now().format("%Y%m%d_%H%M%S_%3f")
+    ));
+    std::fs::write(&path, &csv).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 #[cfg(not(windows))]
 pub fn pick_folder_dialog(owner_hwnd: *mut c_void) -> Option<String> {
     let _ = owner_hwnd;
@@ -422,7 +555,7 @@ mod tests {
             &dir,
             &LocationScanOptions::default(),
             &cancel,
-            |_, _, _| {},
+            |_, _, _, _| {},
             |_| {},
         );
 
@@ -433,6 +566,7 @@ mod tests {
             .iter()
             .any(|t| t.risk_level == "MALICIOUS" && t.file_name == "deploy.ps1"));
         assert!(report.malicious_count() >= 1);
+        assert_eq!(report.progress_ratio, 1.0);
     }
 
     #[test]
@@ -450,11 +584,12 @@ mod tests {
             max_files: 5,
             extensions: Vec::new(),
         };
-        let report = scan_location(&dir, &opts, &cancel, |_, _, _| {}, |_| {});
+        let report = scan_location(&dir, &opts, &cancel, |_, _, _, _| {}, |_| {});
 
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(report.files_scanned, 5);
         assert!(report.budget_reached);
+        assert_eq!(report.progress_ratio, 1.0);
     }
 
     #[test]
@@ -469,7 +604,7 @@ mod tests {
             max_files: 100,
             extensions: vec!["ps1".to_string()],
         };
-        let report = scan_location(&dir, &opts, &cancel, |_, _, _| {}, |_| {});
+        let report = scan_location(&dir, &opts, &cancel, |_, _, _, _| {}, |_| {});
 
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(report.files_scanned, 1);
@@ -488,13 +623,62 @@ mod tests {
             &dir,
             &LocationScanOptions::default(),
             &cancel,
-            |_, _, _| {},
+            |_, _, _, _| {},
             |_| {},
         );
 
         let _ = fs::remove_dir_all(&dir);
         assert!(report.cancelled);
         assert_eq!(report.files_scanned, 0);
+        assert_eq!(report.progress_ratio, 0.0);
+    }
+
+    #[test]
+    fn cancel_after_partial_work_keeps_partial_ratio() {
+        let dir = unique_temp_dir("cancel_partial");
+        for i in 0..80 {
+            write_file(
+                &dir.join(format!("file{i}.txt")),
+                b"harmless content for partial cancel ratio",
+            );
+        }
+
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let cancel_flag = cancel.clone();
+        let report = scan_location(
+            &dir,
+            &LocationScanOptions {
+                max_files: 100,
+                extensions: Vec::new(),
+            },
+            &cancel,
+            move |scanned, _, _, _| {
+                if scanned >= PROGRESS_NOTIFY_EVERY {
+                    cancel_flag.store(true, Ordering::SeqCst);
+                }
+            },
+            |_| {},
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        assert!(report.cancelled);
+        assert!(report.files_scanned > 0);
+        assert!(report.progress_ratio > 0.0);
+        assert!(
+            report.progress_ratio <= RUNNING_PROGRESS_CAP,
+            "cancel must not claim 100%"
+        );
+    }
+
+    #[test]
+    fn soft_progress_ratio_is_bounded_and_monotonic_enough() {
+        assert_eq!(soft_progress_ratio(0, 0, 5000), 0.0);
+        let early = soft_progress_ratio(1, 20, 5000);
+        let later = soft_progress_ratio(200, 2, 5000);
+        assert!((0.0..=RUNNING_PROGRESS_CAP).contains(&early));
+        assert!((0.0..=RUNNING_PROGRESS_CAP).contains(&later));
+        assert!(later > early);
+        assert!(soft_progress_ratio(5000, 0, 5000) <= RUNNING_PROGRESS_CAP);
     }
 
     #[test]
@@ -509,7 +693,7 @@ mod tests {
             &dir,
             &LocationScanOptions::default(),
             &cancel,
-            |_, _, _| {},
+            |_, _, _, _| {},
             |_| {
                 fired.fetch_add(1, Ordering::SeqCst);
             },
@@ -528,12 +712,79 @@ mod tests {
             &dir,
             &LocationScanOptions::default(),
             &cancel,
-            |_, _, _| {},
+            |_, _, _, _| {},
             |_| {},
         );
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(report.files_scanned, 0);
         assert!(report.threats.is_empty());
+        assert_eq!(report.progress_ratio, 1.0);
+    }
+
+    #[test]
+    fn skippable_root_completes_with_full_ratio() {
+        let dir = unique_temp_dir("skip_root");
+        let cancel = AtomicBool::new(false);
+        let opts = LocationScanOptions {
+            max_files: 10,
+            extensions: Vec::new(),
+        };
+        let report = scan_location(
+            std::path::Path::new("Z:\\definitely-missing-shield-ghita"),
+            &opts,
+            &cancel,
+            |_, _, _, _| {},
+            |_| {},
+        );
+        assert!(!report.cancelled);
+        assert_eq!(report.files_scanned, 0);
+        assert_eq!(report.progress_ratio, 1.0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn estimate_counts_matching_files() {
+        let dir = unique_temp_dir("estimate");
+        write_file(&dir.join("a.txt"), b"x");
+        write_file(&dir.join("b.ps1"), b"y");
+        write_file(&dir.join("c.png"), b"z");
+        let opts = LocationScanOptions {
+            max_files: 100,
+            extensions: Vec::new(),
+        };
+        assert_eq!(estimate_scannable_files(&dir, &opts), 3);
+        let opts_ps1 = LocationScanOptions {
+            max_files: 100,
+            extensions: vec!["ps1".to_string()],
+        };
+        assert_eq!(estimate_scannable_files(&dir, &opts_ps1), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_threats_csv_lists_rows() {
+        let report = LocationScanReport {
+            root: "C:\\tmp".to_string(),
+            files_scanned: 1,
+            files_skipped: 0,
+            directories_visited: 1,
+            threats: vec![ThreatHit {
+                file_path: "C:\\tmp\\evil.ps1".to_string(),
+                file_name: "evil.ps1".to_string(),
+                risk_score: 70,
+                risk_level: "MALICIOUS".to_string(),
+                top_category: "Malicious Command Pattern".to_string(),
+            }],
+            cancelled: false,
+            budget_reached: false,
+            elapsed_ms: 12,
+            progress_ratio: 1.0,
+        };
+        let out = export_threats_csv(&report).unwrap();
+        let text = fs::read_to_string(&out).unwrap();
+        assert!(text.contains("evil.ps1"));
+        assert!(text.contains("MALICIOUS"));
+        let _ = fs::remove_file(&out);
     }
 
     #[test]

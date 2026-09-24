@@ -96,6 +96,8 @@ pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
             });
         }
 
+        ui_win.set_security_score_hint(s.security_engine.get_security_score_hint().into());
+
         ui_win.set_autostart_enabled(cfg.start_with_windows);
         ui_win.set_minimize_to_tray_enabled(cfg.minimize_to_tray);
         ui_win.set_enable_notifications(cfg.enable_block_notifications);
@@ -221,7 +223,12 @@ fn refresh_security_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
             .collect();
         ui_win.set_devices(ModelRc::new(VecModel::from(device_models)));
     } else {
-        let incidents = s.security_engine.get_incidents();
+        let query = ui_win.get_incident_search().to_string();
+        let incidents = if query.trim().is_empty() {
+            s.security_engine.get_incidents()
+        } else {
+            s.security_engine.filter_incidents(&query)
+        };
         let incident_models: Vec<crate::SecurityIncident> = incidents
             .into_iter()
             .map(|inc| crate::SecurityIncident {

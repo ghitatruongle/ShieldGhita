@@ -82,6 +82,8 @@ pub struct AppConfig {
     pub location_scan_max_files: usize,
     #[serde(default)]
     pub location_scan_extensions: Vec<String>,
+    #[serde(default)]
+    pub onboarding_done: bool,
 }
 
 fn default_location_scan_max_files() -> usize {
@@ -205,6 +207,7 @@ impl Default for AppConfig {
             wfp_blocked_ports: Vec::new(),
             location_scan_max_files: default_location_scan_max_files(),
             location_scan_extensions: Vec::new(),
+            onboarding_done: false,
         }
     }
 }

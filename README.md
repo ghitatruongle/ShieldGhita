@@ -4,7 +4,7 @@
 
 **Master Internet Controller & Ultra-Fast Network Security Shield for Windows**
 
-[![Version](https://img.shields.io/badge/version-0.1.1--beta-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
+[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com)
 
@@ -71,15 +71,20 @@
 ### 8. Offline Static File Analyzer 🔬
 - **Safe, Read-Only Inspection**: Pick any file (executables, scripts, documents, trace files) and the app performs fully offline static analysis in a memory sandbox — it never executes the code and never uploads the file anywhere.
 - **Hidden-Payload Detection**: Uncovers disguised PE executables, RTLO/double-extension masquerades (`invoice.pdf.exe`), zero-width steganography, backtick & caret obfuscation, malicious Base64 payloads, deceptive "friendly greeting" wrappers, and dangerous LOLBin commands (PowerShell hidden windows, AMSI bypass, credential dumping, ransomware shadow-copy deletion, and more).
-- **Multi-Hash Integrity**: Computes MD5 / SHA-1 / SHA-256 over the entire file plus Shannon-entropy packing detection, with a transparent 0–100 risk score and per-finding severity (CRITICAL / HIGH / MEDIUM).
+- **Multi-Hash Integrity**: Computes MD5 / SHA-1 / SHA-256 over the entire file plus Shannon-entropy packing detection, with a transparent 0–100 risk score and per-finding severity (CRITICAL / HIGH / MEDIUM), sorted worst-first. Copy any hash in one click, export a full text report, or reveal the file in Explorer.
 - **Honest Scope**: A heuristic triage aid, not a full antivirus — analysis covers the first 8 MiB while hashes always cover the whole file.
+
+### 9. Location / Drive Scan 🗂️
+- **Folder & Drive Sweep**: Point Shield Ghita at any folder or disk and it walks matching files with a smooth progress bar, estimated file count, and live ETA.
+- **Alert Only — Never Deletes**: Malicious or suspicious files are listed and logged as incidents; the app never removes or quarantines your data.
+- **Operator Tools**: Filter by extension, stop mid-scan and keep a truthful progress snapshot, click a threat to reveal / copy path / deep-scan that file, and export the threat list as CSV.
 
 ---
 
 ## Installation & Getting Started
 
 ### 1. Pre-built Setup Installer
-- Download `ShieldGhita_Setup_v0.1.1-beta.exe` and execute with **Administrator** privileges.
+- Download `ShieldGhita_Setup_v0.1.1.exe` and execute with **Administrator** privileges.
 - The installer itself runs in English, Tiếng Việt or 简体中文, lets you choose the application language, automatically terminates running instances, cleanly uninstalls previous versions, and deploys the new release safely.
 
 ### 2. Build From Source (For Developers)
@@ -166,15 +171,20 @@ cargo run --release
 ### 8. Phân Tích Tệp Tĩnh Offline 🔬
 - **Kiểm tra an toàn, chỉ đọc**: Chọn bất kỳ tệp nào (file thực thi, script, tài liệu, tệp dấu vết) và ứng dụng phân tích tĩnh hoàn toàn offline trong sandbox bộ nhớ — không bao giờ chạy code và không bao giờ tải tệp đi đâu.
 - **Phát hiện mã độc ẩn**: Phát hiện file PE ngụy trang, giả mạo phần mở rộng kép/RTLO (`invoice.pdf.exe`), steganography ký tự vô hình (zero-width), obfuscation bằng backtick & caret, payload Base64 độc hại, vỏ bọc "lời chào thân mật" đánh lừa, và các lệnh LOLBin nguy hiểm (PowerShell ẩn cửa sổ, vượt mặt AMSI, đánh cắp credential, xóa shadow copy của ransomware...).
-- **Đa mã băm toàn vẹn**: Tính MD5 / SHA-1 / SHA-256 trên toàn bộ tệp kèm phát hiện đóng gói bằng entropy Shannon, với điểm rủi ro minh bạch 0–100 và mức độ từng phát hiện (CRITICAL / HIGH / MEDIUM).
+- **Đa mã băm toàn vẹn**: Tính MD5 / SHA-1 / SHA-256 trên toàn bộ tệp kèm phát hiện đóng gói bằng entropy Shannon, với điểm rủi ro minh bạch 0–100 và mức độ từng phát hiện (CRITICAL / HIGH / MEDIUM), xếp nặng trước. Copy hash một chạm, xuất báo cáo text, hoặc mở vị trí tệp trong Explorer.
 - **Phạm vi trung thực**: Là công cụ phân loại theo heuristic, không phải phần mềm diệt virus đầy đủ — phân tích phủ 8 MiB đầu tiên trong khi mã băm luôn phủ toàn bộ tệp.
+
+### 9. Quét Thư Mục / Ổ Đĩa 🗂️
+- **Quét theo vị trí**: Chỉ Shield Ghita vào thư mục hoặc ổ đĩa bất kỳ — thanh tiến độ mượt, ước lượng số tệp và ETA trực tiếp.
+- **Chỉ cảnh báo — KHÔNG xoá**: Tệp độc hại/nghi vấn được liệt kê và ghi sự cố; ứng dụng không bao giờ gỡ hay cách ly dữ liệu của bạn.
+- **Công cụ vận hành**: Lọc theo đuôi tệp, dừng giữa chừng vẫn giữ % thật, click mối nguy để mở chỗ tệp / copy đường dẫn / soi sâu, xuất danh sách CSV.
 
 ---
 
 ## Hướng dẫn cài đặt & Sử dụng
 
 ### 1. Cài đặt nhanh qua bộ Setup
-- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.1-beta.exe` và chạy với quyền **Administrator**.
+- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.1.exe` và chạy với quyền **Administrator**.
 - Trình cài đặt hỗ trợ tiếng Việt / English / 简体中文, cho phép chọn ngôn ngữ ứng dụng, tự động dừng ứng dụng cũ, dọn sạch phiên bản trước và cập nhật phiên bản mới một cách an toàn.
 
 ### 2. Chạy từ mã nguồn (Dành cho Developer)
