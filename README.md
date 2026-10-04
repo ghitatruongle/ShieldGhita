@@ -4,7 +4,7 @@
 
 **Master Internet Controller & Ultra-Fast Network Security Shield for Windows**
 
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
+[![Version](https://img.shields.io/badge/version-0.1.2-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com)
 
@@ -79,12 +79,31 @@
 - **Alert Only — Never Deletes**: Malicious or suspicious files are listed and logged as incidents; the app never removes or quarantines your data.
 - **Operator Tools**: Filter by extension, stop mid-scan and keep a truthful progress snapshot, click a threat to reveal / copy path / deep-scan that file, and export the threat list as CSV.
 
+### 10. Ad-Block Statistics & Per-Device Control 📊
+- **Per-Device Blocking Modes**: Shield Ghita IS your LAN DNS server, so every device can run its own policy — Default, Trusted (ad-blocking exempt) or Strict (block everything, e.g. child lock) — persisted across restarts.
+- **Timed Pause**: Suspend ad blocking for 5/15/30 minutes with a live countdown and resume anytime.
+- **Live Statistics**: Top blocked domains, top blocked clients and a 48-hour hourly histogram, with one-click CSV export and a clear-stats button.
+- **Hosts File Hygiene**: One-click check of the system hosts file for DNS-overriding entries that would break ad blocking or redirect to phishing.
+- **Smaller Memory Footprint**: Blocklists are compacted before caching — subdomains covered by a blocked parent suffix are dropped, cutting RAM with zero coverage loss.
+
+### 11. Antivirus & Quarantine 🛡
+- **Signature Matching**: Offline SHA-256 signature database (including the industry-standard EICAR test vector) checked on every scan, with an optional update feed (`av_signature_url` in config.toml).
+- **Real-time Guard**: New files landing in Downloads, Desktop or USB drives are scanned within seconds (separate toggle, off by default).
+- **Ransomware Canary**: Honey files plus mass-mutation detection — tampering triggers a CRITICAL incident and an emergency Master Internet Lock.
+- **Encrypted Quarantine**: Malicious files are moved into an AES-256-encrypted vault (key sealed with Windows DPAPI) and the original is securely overwritten (3 passes) — restore is bit-exact, delete is unrecoverable.
+- **Manual Quarantine**: Quarantine any file on demand from the Antivirus tab.
+
+### 12. Security & Vulnerability Audit 🔎
+- **Local Windows Audit**: SMBv1, RDP/NLA, UAC, firewall profiles, Windows Update age, startup entries, LSA protection and blank-password policy — all via locale-free registry checks.
+- **LAN Device Audit**: Risky service ports (Telnet, RTSP, RDP, SMB) per device with severity badges and concrete hardening advice.
+- **Honest Scope**: A read-only audit — Shield Ghita reports and advises, it never changes your system configuration.
+
 ---
 
 ## Installation & Getting Started
 
 ### 1. Pre-built Setup Installer
-- Download `ShieldGhita_Setup_v0.1.1.exe` and execute with **Administrator** privileges.
+- Download `ShieldGhita_Setup_v0.1.2.exe` and execute with **Administrator** privileges.
 - The installer itself runs in English, Tiếng Việt or 简体中文, lets you choose the application language, automatically terminates running instances, cleanly uninstalls previous versions, and deploys the new release safely.
 
 ### 2. Build From Source (For Developers)
@@ -179,12 +198,31 @@ cargo run --release
 - **Chỉ cảnh báo — KHÔNG xoá**: Tệp độc hại/nghi vấn được liệt kê và ghi sự cố; ứng dụng không bao giờ gỡ hay cách ly dữ liệu của bạn.
 - **Công cụ vận hành**: Lọc theo đuôi tệp, dừng giữa chừng vẫn giữ % thật, click mối nguy để mở chỗ tệp / copy đường dẫn / soi sâu, xuất danh sách CSV.
 
+### 10. Thống Kê Chặn & Điều Khiển Theo Thiết Bị 📊
+- **Chế độ chặn theo từng thiết bị**: Shield Ghita chính là máy chủ DNS của LAN nên mỗi thiết bị có thể có chính sách riêng — Mặc định, Tin cậy (miễn chặn) hoặc Nghiêm ngặt (chặn toàn bộ, kiểu khoá trẻ em) — lưu lại kể cả khi khởi động lại.
+- **Tạm dừng có hẹn giờ**: Nghỉ chặn 5/15/30 phút với đồng hồ đếm ngược, tiếp tục bất cứ lúc nào.
+- **Thống kê trực tiếp**: Top tên miền bị chặn, top thiết bị bị chặn, biểu đồ theo giờ 48 giờ, xuất CSV một chạm, nút xoá thống kê.
+- **Vệ sinh file hosts**: Kiểm tra một chạm file hosts hệ thống xem có mục ghi đè DNS làm hỏng việc chặn quảng cáo hoặc chuyển hướng lừa đảo.
+- **Tiết kiệm RAM hơn**: Blocklist được nén trước khi lưu — tên miền con bị tên miền cha che phủ sẽ bị loại bỏ, giảm RAM mà không mất độ phủ.
+
+### 11. Diệt Virus & Cách Ly 🛡
+- **Đối chiếu chữ ký**: Cơ sở dữ liệu chữ ký SHA-256 offline (bao gồm mẫu kiểm thử EICAR tiêu chuẩn ngành) chạy trên mọi lần quét, hỗ trợ nguồn cập nhật qua `av_signature_url` trong config.toml.
+- **Bảo vệ thời gian thực**: Tệp mới xuất hiện ở Downloads, Desktop hoặc ổ USB được quét trong vài giây (công tắc riêng, mặc định tắt).
+- **Canary chống ransomware**: Tệp mồi + phát hiện đổi tên/xóa hàng loạt — bị đụng tới là báo CRITICAL và kích hoạt Khóa Mạng Khẩn cấp.
+- **Cách ly mã hóa**: Tệp độc được chuyển vào kho mã hóa AES-256 (khóa bọc bằng DPAPI của Windows), bản gốc bị ghi đè an toàn 3 vòng — khôi phục nguyên vẹn, xóa là mất hẳn.
+- **Cách ly thủ công**: Cách ly bất kỳ tệp nào ngay từ tab Diệt Virus.
+
+### 12. Kiểm Toán Bảo Mật & Lỗ Hổng 🔎
+- **Kiểm toán Windows cục bộ**: SMBv1, RDP/NLA, UAC, cấu hình tường lửa, tuổi bản vá Windows Update, danh sách tự khởi động, bảo vệ LSA, chính sách mật khẩu rỗng — toàn bộ qua registry không phụ thuộc ngôn ngữ hệ thống.
+- **Kiểm toán thiết bị LAN**: Cổng dịch vụ rủi ro (Telnet, RTSP, RDP, SMB) trên từng thiết bị với nhãn mức độ và khuyến nghị gia cố cụ thể.
+- **Phạm vi trung thực**: Chỉ đọc — Shield Ghita báo cáo và khuyến nghị, không bao giờ tự thay đổi cấu hình máy bạn.
+
 ---
 
 ## Hướng dẫn cài đặt & Sử dụng
 
 ### 1. Cài đặt nhanh qua bộ Setup
-- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.1.exe` và chạy với quyền **Administrator**.
+- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.2.exe` và chạy với quyền **Administrator**.
 - Trình cài đặt hỗ trợ tiếng Việt / English / 简体中文, cho phép chọn ngôn ngữ ứng dụng, tự động dừng ứng dụng cũ, dọn sạch phiên bản trước và cập nhật phiên bản mới một cách an toàn.
 
 ### 2. Chạy từ mã nguồn (Dành cho Developer)

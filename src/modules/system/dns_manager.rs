@@ -1,16 +1,169 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use tracing::info;
+use std::time::{Duration, Instant};
+use tracing::{error, info, warn};
 
 static DNS_OVERRIDDEN: AtomicBool = AtomicBool::new(false);
 static MASTER_INTERNET_LOCKED: AtomicBool = AtomicBool::new(false);
+static LAN_ONLY_MODE: AtomicBool = AtomicBool::new(false);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AdapterDnsState {
     Dhcp,
     Static(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DnsController {
+    OtherLoopbackResolver {
+        adapter: String,
+        servers: Vec<String>,
+    },
+    KnownProduct {
+        adapter: String,
+    },
+}
+
+const AGENT_ADAPTER_HINTS: &[&str] = &[
+    "warp",
+    "cloudflare",
+    "nordlynx",
+    "wireguard",
+    "tailscale",
+    "zerotier",
+    "adguard",
+    "mullvad",
+    "protonvpn",
+    "expressvpn",
+    "anyconnect",
+    "forticlient",
+    "zscaler",
+    "kaspersky",
+    "bitdefender",
+    "norton",
+    "sophos",
+    "malwarebytes",
+    "eset",
+    "f-secure",
+    "avast",
+    "avg",
+    "avira",
+    "fortinet",
+    "paloalto",
+];
+
+pub fn classify_dns_servers(adapter: &str, ips: &[String]) -> Option<DnsController> {
+    for ip in ips {
+        let Ok(parsed) = ip.trim().parse::<std::net::IpAddr>() else {
+            continue;
+        };
+        if !parsed.is_loopback() {
+            continue;
+        }
+        let normalized = ip.trim();
+        if normalized == "127.0.0.1" || normalized == "127.0.0.2" {
+            continue;
+        }
+        return Some(DnsController::OtherLoopbackResolver {
+            adapter: adapter.to_string(),
+            servers: ips.to_vec(),
+        });
+    }
+    let lowered = adapter.to_lowercase();
+    if AGENT_ADAPTER_HINTS
+        .iter()
+        .any(|hint| lowered.contains(hint))
+    {
+        return Some(DnsController::KnownProduct {
+            adapter: adapter.to_string(),
+        });
+    }
+    None
+}
+
+pub fn detect_dns_controller_conflict() -> Option<DnsController> {
+    for adapter in get_active_adapters() {
+        let AdapterDnsState::Static(ips) = get_current_adapter_dns_inner(&adapter, true) else {
+            continue;
+        };
+        if let Some(found) = classify_dns_servers(&adapter, &ips) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+pub fn describe_dns_controller(conflict: &DnsController) -> String {
+    match conflict {
+        DnsController::OtherLoopbackResolver { adapter, servers } => format!(
+            "{} {} ({})",
+            crate::modules::i18n::tr4(
+                "Phát hiện xung đột:",
+                "Conflict detected:",
+                "检测到冲突：",
+                "Обнаружен конфликт:"
+            ),
+            adapter,
+            servers.join(", ")
+        ),
+        DnsController::KnownProduct { adapter } => format!(
+            "{} {}",
+            crate::modules::i18n::tr4(
+                "Phát hiện VPN/phần mềm bảo mật:",
+                "Detected VPN / security product:",
+                "检测到 VPN/安全软件：",
+                "Обнаружен VPN / средство защиты:"
+            ),
+            adapter
+        ),
+    }
+}
+
+pub fn set_lan_only_mode(enabled: bool) {
+    LAN_ONLY_MODE.store(enabled, Ordering::SeqCst);
+}
+
+pub fn is_lan_only_mode() -> bool {
+    LAN_ONLY_MODE.load(Ordering::Relaxed)
+}
+
+fn local_resolver_responsive(listen_addr: &str) -> bool {
+    use std::net::UdpSocket;
+    let bind: std::net::IpAddr = match listen_addr.parse() {
+        Ok(ip) => ip,
+        Err(_) => std::net::IpAddr::from([127, 0, 0, 1]),
+    };
+    let target = std::net::SocketAddr::new(bind, 53);
+    let Ok(socket) = UdpSocket::bind("0.0.0.0:0") else {
+        return false;
+    };
+    if socket
+        .set_read_timeout(Some(Duration::from_millis(400)))
+        .is_err()
+    {
+        return false;
+    }
+    let mut query = vec![
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    for label in "shieldghita-liveness-probe".split('.') {
+        query.push(label.len() as u8);
+        query.extend_from_slice(label.as_bytes());
+    }
+    query.push(0x00);
+    query.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+    if socket.send_to(&query, target).is_err() {
+        return false;
+    }
+    let mut buf = [0u8; 512];
+    matches!(socket.recv_from(&mut buf), Ok((size, _)) if size >= 12)
+}
+
+pub fn should_yield(fight_streak: u32, elapsed: Duration) -> bool {
+    fight_streak >= 5 || elapsed >= Duration::from_secs(120)
 }
 
 static ORIGINAL_DNS_SETTINGS: RwLock<Option<HashMap<String, AdapterDnsState>>> = RwLock::new(None);
@@ -365,6 +518,7 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
 
     if success_count > 0 {
         DNS_OVERRIDDEN.store(true, Ordering::SeqCst);
+        persist_override_backup();
         if !failed_adapters.is_empty() {
             return Err(format!(
                 "Partial failure setting DNS to {}: failed on [{}]; last error: {}",
@@ -376,6 +530,89 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("Failed to set DNS: {}", last_err.trim()))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct OverrideBackupFile {
+    ipv4: HashMap<String, AdapterDnsState>,
+    ipv6: HashMap<String, AdapterDnsState>,
+}
+
+fn override_backup_path() -> std::path::PathBuf {
+    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(app_data)
+        .join("ShieldGhita")
+        .join("dns_override_backup.json")
+}
+
+fn persist_override_backup() {
+    let ipv4 = ORIGINAL_DNS_SETTINGS
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone());
+    let ipv6 = ORIGINAL_IPV6_DNS_SETTINGS
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone());
+    let Some((ipv4_map, ipv6_map)) = ipv4.zip(ipv6) else {
+        return;
+    };
+    let path = override_backup_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let payload = serde_json::to_string(&OverrideBackupFile {
+        ipv4: ipv4_map,
+        ipv6: ipv6_map,
+    });
+    let Ok(payload) = payload else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, payload).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+fn clear_override_backup() {
+    let _ = std::fs::remove_file(override_backup_path());
+}
+
+/// Restore the DNS state saved before the last override. Covers hard kills
+/// (Task Manager, crash, power loss) where the in-memory backup is lost and
+/// the system would otherwise keep pointing at a resolver nobody is serving.
+pub fn recover_stale_override_on_startup() -> Option<String> {
+    let path = override_backup_path();
+    let text = std::fs::read_to_string(&path).ok()?;
+    let parsed: OverrideBackupFile = serde_json::from_str(&text).ok()?;
+    if parsed.ipv4.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    {
+        let mut guard = ORIGINAL_DNS_SETTINGS
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = Some(parsed.ipv4);
+        let mut guard6 = ORIGINAL_IPV6_DNS_SETTINGS
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard6 = Some(parsed.ipv6);
+    }
+    let result = restore_system_dns_inner(false);
+    clear_override_backup();
+    match result {
+        Ok(()) => Some(
+            crate::modules::i18n::tr4(
+                "Đã phục hồi DNS gốc từ phiên trước bị ngắt đột ngột.",
+                "Recovered the original DNS from a previous interrupted session.",
+                "已从上次中断的会话恢复原始 DNS。",
+                "Исходные DNS восстановлены после прерванного сеанса.",
+            )
+            .to_string(),
+        ),
+        Err(e) => Some(format!("stale DNS recovery failed: {e}")),
     }
 }
 
@@ -403,6 +640,7 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
     // adapters (VPN, dock NICs that appeared later) wipes intentional static DNS.
     let Some(backup_map) = backup_map else {
         DNS_OVERRIDDEN.store(false, Ordering::SeqCst);
+        clear_override_backup();
         return Ok(());
     };
 
@@ -545,6 +783,7 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
 
     flush_dns_cache();
     DNS_OVERRIDDEN.store(false, Ordering::SeqCst);
+    clear_override_backup();
     info!("Master DNS Controller: System DNS fully restored to original state");
     Ok(())
 }
@@ -600,9 +839,64 @@ fn system_dns_matches(target: &str) -> bool {
     true
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_flags_foreign_loopback_resolver() {
+        let found =
+            classify_dns_servers("Wi-Fi", &["127.0.2.2".to_string(), "127.0.2.3".to_string()]);
+        assert_eq!(
+            found,
+            Some(DnsController::OtherLoopbackResolver {
+                adapter: "Wi-Fi".to_string(),
+                servers: vec!["127.0.2.2".to_string(), "127.0.2.3".to_string()],
+            })
+        );
+        assert!(classify_dns_servers("Ethernet", &["192.0.2.1".to_string()]).is_none());
+    }
+
+    #[test]
+    fn test_classify_ignores_our_own_targets() {
+        assert!(classify_dns_servers("Wi-Fi", &["127.0.0.1".to_string()]).is_none());
+        assert!(classify_dns_servers("Wi-Fi", &["127.0.0.2".to_string()]).is_none());
+    }
+
+    #[test]
+    fn test_classify_detects_known_product_by_adapter_name() {
+        assert_eq!(
+            classify_dns_servers("CloudflareWARP", &["192.0.2.53".to_string()]),
+            Some(DnsController::KnownProduct {
+                adapter: "CloudflareWARP".to_string()
+            })
+        );
+        assert!(classify_dns_servers("Ethernet 2", &["192.0.2.1".to_string()]).is_none());
+    }
+
+    #[test]
+    fn test_should_yield_thresholds() {
+        assert!(!should_yield(0, Duration::from_secs(5)));
+        assert!(!should_yield(4, Duration::from_secs(10)));
+        assert!(should_yield(5, Duration::from_secs(1)));
+        assert!(should_yield(1, Duration::from_secs(120)));
+        assert!(should_yield(1, Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn test_lan_only_mode_toggle() {
+        set_lan_only_mode(false);
+        assert!(!is_lan_only_mode());
+        set_lan_only_mode(true);
+        assert!(is_lan_only_mode());
+        set_lan_only_mode(false);
+    }
+}
+
 pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, listen_addr: String) {
     let mut interval_secs: u64 = 8;
     let mut fight_streak: u32 = 0;
+    let mut fight_started: Option<Instant> = None;
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
         if !(protection_enabled.load(Ordering::Relaxed)
@@ -615,6 +909,7 @@ pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, liste
                     fight_streak
                 );
                 fight_streak = 0;
+                fight_started = None;
             }
             interval_secs = 8;
             continue;
@@ -626,19 +921,81 @@ pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, liste
                     fight_streak
                 );
                 fight_streak = 0;
+                fight_started = None;
             }
             interval_secs = 8;
             continue;
+        }
+        // Never force the system back onto a resolver that cannot answer: check
+        // our own listener first, and restore the original DNS when it is dead
+        // (a dead 127.0.0.1 resolver blacks out the whole machine).
+        {
+            let probe_addr = listen_addr.clone();
+            let alive = tokio::task::spawn_blocking(move || local_resolver_responsive(&probe_addr))
+                .await
+                .unwrap_or(false);
+            if !alive {
+                let restore = tokio::task::spawn_blocking(restore_system_dns)
+                    .await
+                    .unwrap_or_else(|e| Err(format!("join: {e}")));
+                set_lan_only_mode(true);
+                fight_streak = 0;
+                fight_started = None;
+                interval_secs = 8;
+                match restore {
+                    Ok(()) => warn!(
+                        "DNS guard: local resolver stopped answering — original DNS restored, switched to LAN-only mode"
+                    ),
+                    Err(e) => error!(
+                        "DNS guard: local resolver dead and DNS restore failed ({}). Run the emergency restore action.",
+                        e
+                    ),
+                }
+                continue;
+            }
         }
         // netsh/PowerShell are blocking; keep them off the async worker threads.
         let enforcement_addr = listen_addr.clone();
         let result = tokio::task::spawn_blocking(move || set_system_dns(&enforcement_addr))
             .await
             .unwrap_or_else(|e| Err(format!("dns guard task join: {}", e)));
-        if let Err(e) = result {
+        if let Err(e) = &result {
             tracing::warn!("DNS guard: enforcement attempt failed: {}", e);
         }
+        if result.is_ok() {
+            fight_streak = 0;
+            fight_started = None;
+            interval_secs = 8;
+            continue;
+        }
         fight_streak += 1;
+        if fight_started.is_none() {
+            fight_started = Some(Instant::now());
+        }
+        let elapsed = fight_started
+            .map(|started| started.elapsed())
+            .unwrap_or_default();
+        if should_yield(fight_streak, elapsed) {
+            let restore = tokio::task::spawn_blocking(restore_system_dns)
+                .await
+                .unwrap_or_else(|e| Err(format!("join: {e}")));
+            set_lan_only_mode(true);
+            fight_streak = 0;
+            fight_started = None;
+            interval_secs = 8;
+            match restore {
+                Ok(()) => warn!(
+                    "DNS guard: gave up after {} failed enforcement(s) over {}s — original DNS restored, switched to LAN-only mode",
+                    fight_streak,
+                    elapsed.as_secs()
+                ),
+                Err(e) => error!(
+                    "DNS guard: enforcement kept failing and DNS restore failed ({}). Use the emergency restore button.",
+                    e
+                ),
+            }
+            continue;
+        }
         if fight_streak >= 3 {
             tracing::warn!(
                 "DNS guard: external change keeps reverting DNS ({} consecutive fixes). Backing off to reduce churn",

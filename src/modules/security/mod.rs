@@ -9,7 +9,12 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 pub mod file_analyzer;
+pub mod file_quarantine;
 pub mod location_scan;
+pub mod realtime_guard;
+pub mod signatures;
+pub mod vulnscan;
+pub mod win_dpapi;
 pub use file_analyzer::{export_report_txt, pick_file_dialog, scan_file};
 pub use location_scan::{
     estimate_scannable_files, export_threats_csv, pick_folder_dialog, scan_location,

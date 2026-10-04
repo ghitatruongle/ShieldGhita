@@ -19,6 +19,7 @@ use windows::Win32::Security::PSECURITY_DESCRIPTOR;
 
 pub struct WfpBlocker {
     enabled: Arc<AtomicBool>,
+    available: Arc<AtomicBool>,
     #[cfg(windows)]
     engine_handle: std::sync::Mutex<Option<HANDLE>>,
     #[cfg(windows)]
@@ -51,6 +52,7 @@ impl WfpBlocker {
     pub fn new() -> Self {
         Self {
             enabled: Arc::new(AtomicBool::new(false)),
+            available: Arc::new(AtomicBool::new(false)),
             #[cfg(windows)]
             engine_handle: std::sync::Mutex::new(None),
             #[cfg(windows)]
@@ -58,6 +60,26 @@ impl WfpBlocker {
             blocked_ips: std::sync::RwLock::new(Vec::new()),
             blocked_ports: std::sync::RwLock::new(Vec::new()),
         }
+    }
+
+    /// False when the WFP engine is owned by another filtering product (VPN,
+    /// security suite). Callers must surface this instead of pretending the
+    /// IP/port blocking is active.
+    pub fn is_available(&self) -> bool {
+        self.available.load(Ordering::SeqCst)
+    }
+
+    pub fn unavailable_reason() -> String {
+        tracing::warn!(
+            "WFP unavailable: FwpmEngineOpen0 is rejected (error 50) when another VPN or security product owns the filtering engine"
+        );
+        crate::modules::i18n::tr4(
+            "Driver lọc đang bị VPN/phần mềm bảo mật khác chiếm — chặn IP/cổng không khả dụng (mã lỗi 50).",
+            "The filtering engine is owned by another VPN/security product — IP/port blocking unavailable (error 50).",
+            "过滤驱动被其他 VPN/安全软件占用 — IP/端口拦截不可用（错误 50）。",
+            "Фильтрация занята другим VPN/средством защиты — блокировка IP/портов недоступна (ошибка 50).",
+        )
+        .to_string()
     }
 
     #[cfg(windows)]
@@ -70,6 +92,7 @@ impl WfpBlocker {
         unsafe {
             let result = FwpmEngineOpen0(None, 0, None, None, &mut engine_handle);
             if result != 0 {
+                self.available.store(false, Ordering::SeqCst);
                 return Err(format!(
                     "FwpmEngineOpen0 failed with error code: {}",
                     result
@@ -77,12 +100,14 @@ impl WfpBlocker {
             }
         }
         *handle = Some(engine_handle);
+        self.available.store(true, Ordering::SeqCst);
         info!("WFP engine initialized successfully");
         Ok(())
     }
 
     #[cfg(not(windows))]
     pub fn initialize(&self) -> Result<(), String> {
+        self.available.store(false, Ordering::SeqCst);
         Ok(())
     }
 

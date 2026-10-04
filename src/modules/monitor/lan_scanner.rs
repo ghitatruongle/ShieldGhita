@@ -502,6 +502,19 @@ impl LanScanner {
         crate::modules::monitor::oui_db::lookup_vendor(mac)
     }
 
+    /// Phone hotspot / USB tether gateways use vendor-assigned ranges and
+    /// run their own service ports. Flagging those as risky LAN devices is a
+    /// false positive, so they get an informational note instead.
+    pub fn is_tether_gateway(ip: &str) -> bool {
+        let Ok(addr) = ip.parse::<std::net::Ipv4Addr>() else {
+            return false;
+        };
+        let o = addr.octets();
+        o[0] == 172 && o[1] == 20 && o[2] == 10
+            || o[0] == 192 && o[1] == 168 && (o[2] == 42 || o[2] == 43)
+            || o[0] == 100 && (64..=127).contains(&o[1]) && o[2] <= 1
+    }
+
     /// True only when `ip` is the OS-reported default gateway. A bare
     /// `.1` / `.254` suffix is not sufficient — many LANs use .254/.250 or
     /// non-/24 layouts, and mislabeling a printer/NAS as "Router" poisons
@@ -1050,22 +1063,45 @@ impl LanScanner {
                 if dev.port_risk == PortRisk::High.as_str() && !notified.contains(&dev.ip) {
                     notified.insert(dev.ip.clone());
                     let summary = port_scanner::format_ports_summary(&dev.open_ports);
-                    sec.record_incident(
-                        i18n::tr(
-                            "Cổng rủi ro cao đang mở trên thiết bị LAN",
-                            "High-risk ports open on LAN device",
-                            "局域网设备存在高危开放端口",
-                        ),
-                        &dev.ip,
-                        &format!(
-                            "{} — {}{}",
-                            dev.name,
-                            i18n::tr("phát hiện cổng: ", "open ports: ", "发现开放端口: "),
-                            summary
-                        ),
-                        "HIGH",
-                        &dev.port_advice,
-                    );
+                    if Self::is_tether_gateway(&dev.ip) {
+                        sec.record_incident(
+                            i18n::tr(
+                                "Điểm phát sóng di động/USB tether có cổng dịch vụ mở",
+                                "Mobile hotspot / USB tether gateway exposes service ports",
+                                "移动热点/USB 网络共享网关开放了服务端口",
+                            ),
+                            &dev.ip,
+                            &format!(
+                                "{} — {}{}",
+                                dev.name,
+                                i18n::tr("phát hiện cổng: ", "open ports: ", "发现开放端口: "),
+                                summary
+                            ),
+                            "LOW",
+                            i18n::tr(
+                                "Đây là gateway của kết nối di động (điện thoại/USB tether), các cổng này thuộc hệ thống tether chứ không phải thiết bị trong mạng nội bộ. Nên tránh kết nối cơ quan qua tether di động; dùng mạng nội bộ có kiểm soát.",
+                                "This is a mobile/USB-tether gateway: these ports belong to the tether stack, not to a LAN device. Avoid tethering for work networks; use a controlled internal network.",
+                                "这是移动/USB 网络共享网关，这些端口属于共享系统而非内网设备。工作请勿使用移动共享，改用受控内网。",
+                            ),
+                        );
+                    } else {
+                        sec.record_incident(
+                            i18n::tr(
+                                "Cổng rủi ro cao đang mở trên thiết bị LAN",
+                                "High-risk ports open on LAN device",
+                                "局域网设备存在高危开放端口",
+                            ),
+                            &dev.ip,
+                            &format!(
+                                "{} — {}{}",
+                                dev.name,
+                                i18n::tr("phát hiện cổng: ", "open ports: ", "发现开放端口: "),
+                                summary
+                            ),
+                            "HIGH",
+                            &dev.port_advice,
+                        );
+                    }
                 }
             }
         }

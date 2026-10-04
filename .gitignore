@@ -66,6 +66,7 @@ rules.json
 custom_rules.txt
 whitelist.txt
 dns_logs.csv
+dns_*.txt
 *.db
 *.sqlite
 *.sqlite-journal
@@ -91,7 +92,10 @@ local_*.json
 local_*.log
 # Admin installer script (public installer.iss stays tracked):
 installer_admin.iss
-# Admin-only UI files (future admin .slint panels / assets):
+# Admin-only UI files (future admin .slint panels / assets).
+# NOTE: vault/pentest/hardening .slint are SHARED dormant UI (tabs hidden in the
+# public build via is-admin-edition) and ARE tracked on purpose — app_window.slint
+# imports them unconditionally, so ignoring them would break the public CI build.
 ui/admin*.slint
 ui/assets/admin/
 # Admin INTERNAL DOCUMENTATION — feature specs, panel notes, network layouts.
@@ -177,6 +181,7 @@ scripts/*
 
 # --- Local notes / private rules ------------------------------------------------
 QUYTAC
+AGENT.md
 *.local.md
 NOTES.local.md
 

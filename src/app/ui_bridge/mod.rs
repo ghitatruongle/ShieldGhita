@@ -20,12 +20,12 @@ use tray_icon::{
 };
 
 thread_local! {
-    static TRAY_MENU_ITEMS: RefCell<Option<(MenuItem, MenuItem, MenuItem)>> = const { RefCell::new(None) };
+    static TRAY_MENU_ITEMS: RefCell<Option<(MenuItem, MenuItem, MenuItem, MenuItem)>> = const { RefCell::new(None) };
 }
 
 pub fn update_tray_menu_language() {
     TRAY_MENU_ITEMS.with(|cell| {
-        if let Some((ref show, ref toggle, ref quit)) = *cell.borrow() {
+        if let Some((ref show, ref toggle, ref _restore, ref quit)) = *cell.borrow() {
             show.set_text(crate::modules::i18n::tr(
                 "Mở giao diện Shield Ghita",
                 "Open Shield Ghita",
@@ -35,6 +35,11 @@ pub fn update_tray_menu_language() {
                 "Bật / Tắt bảo vệ",
                 "Toggle Protection",
                 "开启 / 关闭防护",
+            ));
+            _restore.set_text(crate::modules::i18n::tr(
+                "Khôi phục mạng ngay",
+                "Restore Network Now",
+                "立即恢复网络",
             ));
             quit.set_text(crate::modules::i18n::tr(
                 "Thoát hoàn toàn",
@@ -83,6 +88,15 @@ pub fn setup_ui_bridge(
     ui.set_arp_spoof_detection(cfg.arp_spoof_detection);
     ui.set_minimize_to_tray_on_minimize(cfg.minimize_to_tray_on_minimize);
     ui.set_start_hidden_in_tray(cfg.start_hidden_in_tray);
+    ui.set_dns_conflict_mode(if cfg.dns_conflict_mode == "override" {
+        1
+    } else {
+        0
+    });
+    ui.set_av_realtime(cfg.av_realtime_enabled);
+    ui.set_av_auto_quarantine(cfg.av_auto_quarantine_critical);
+    ui.set_av_canary_autolock(cfg.av_canary_autolock);
+    ui.set_av_canary_in_folders(cfg.av_canary_in_folders);
 
     #[cfg(feature = "admin")]
     ui.set_is_admin_edition(true);
@@ -105,6 +119,11 @@ pub fn setup_ui_bridge(
         true,
         None,
     );
+    let item_restore = MenuItem::new(
+        crate::modules::i18n::tr("Khôi phục mạng ngay", "Restore Network Now", "立即恢复网络"),
+        true,
+        None,
+    );
     let item_quit = MenuItem::new(
         crate::modules::i18n::tr("Thoát hoàn toàn", "Quit Completely", "彻底退出"),
         true,
@@ -112,10 +131,16 @@ pub fn setup_ui_bridge(
     );
     let _ = tray_menu.append(&item_show);
     let _ = tray_menu.append(&item_toggle);
+    let _ = tray_menu.append(&item_restore);
     let _ = tray_menu.append(&item_quit);
 
     TRAY_MENU_ITEMS.with(|cell| {
-        *cell.borrow_mut() = Some((item_show.clone(), item_toggle.clone(), item_quit.clone()));
+        *cell.borrow_mut() = Some((
+            item_show.clone(),
+            item_toggle.clone(),
+            item_restore.clone(),
+            item_quit.clone(),
+        ));
     });
 
     let tray_icon = match load_official_icon() {
@@ -136,6 +161,7 @@ pub fn setup_ui_bridge(
 
     let show_id = item_show.id().clone();
     let toggle_id = item_toggle.id().clone();
+    let restore_id = item_restore.id().clone();
     let quit_id = item_quit.id().clone();
 
     // reg.exe blocks (~50-200ms); never run it on the Slint event-loop thread.
@@ -175,6 +201,10 @@ pub fn setup_ui_bridge(
     }
     #[cfg(not(feature = "admin"))]
     {
+        ui.on_av_toggle_canary_autolock(|_| {});
+        ui.on_av_toggle_canary_in_folders(|_| {});
+        ui.on_av_unlock(|| {});
+        ui.on_pentest_kill_switch(|| {});
         ui.on_trigger_proximity_scan(|| {});
         ui.on_refresh_admin_data(|| {});
         ui.on_launch_attack(|_, _, _, _, _| {});
@@ -188,13 +218,30 @@ pub fn setup_ui_bridge(
         ui.on_save_camera_credential(|_, _, _| {});
         ui.on_save_camera_snapshot(|_| {});
         ui.on_send_camera_ptz(|_| {});
+        ui.on_send_camera_ptz(|_| {});
+        ui.on_pentest_scan_tls(|| {});
+        ui.on_pentest_password_audit(|| {});
+        ui.on_pentest_export_report(|| {});
+        ui.on_wifi_audit_scan(|| {});
+        ui.on_wifi_audit_weak_psk(|| {});
+        ui.on_harden_audit_persistence(|| {});
+        ui.on_harden_audit_eventlog(|| {});
+        ui.on_harden_audit_usb(|| {});
+        ui.on_harden_selfhash(|| {});
+        ui.on_vault_encrypt_file(|| {});
+        ui.on_vault_decrypt_file(|| {});
+        ui.on_vault_encrypt_folder(|| {});
+        ui.on_vault_decrypt_folder(|| {});
+        ui.on_vault_secure_delete(|| {});
+        ui.on_vault_gen_password(|| {});
+        ui.on_vault_copy_password(|| {});
     }
 
     if !cfg.onboarding_done {
         ui.set_show_onboarding(true);
     }
 
-    let _timer = poller::start(ui, state.clone(), (show_id, toggle_id, quit_id));
+    let _timer = poller::start(ui, state.clone(), (show_id, toggle_id, restore_id, quit_id));
     std::mem::forget(_timer);
 
     spawn_initial_scan(&state);
@@ -349,4 +396,4 @@ fn spawn_initial_scan(state: &Arc<AppState>) {
     });
 }
 
-pub type TrayMenuIds = (MenuId, MenuId, MenuId);
+pub type TrayMenuIds = (MenuId, MenuId, MenuId, MenuId);

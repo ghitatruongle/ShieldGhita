@@ -1,5 +1,7 @@
+pub mod client_policy;
 pub mod disk_store;
 
+use client_policy::{AdBlockControls, ClientMode};
 use disk_store::{DiskBlocklist, FastDomainCache};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -111,6 +113,38 @@ const MAX_REBIND_COOLDOWNS: usize = 1024;
 
 pub type DnsCacheMap = Arc<RwLock<HashMap<(String, u16), (Vec<u8>, Instant, u32)>>>;
 
+/// Identical UDP socket errors (adapter flapping, tether re-association)
+/// arrive in bursts. Log one line per window with a count instead of one
+/// line per datagram.
+fn log_recv_error(err: &std::io::Error) {
+    use std::sync::Mutex as StdMutex;
+    static RECV_ERRORS: StdMutex<Option<(String, u64, Instant)>> = StdMutex::new(None);
+    const WINDOW: Duration = Duration::from_secs(300);
+
+    let text = err.to_string();
+    let now = Instant::now();
+    let mut guard = match RECV_ERRORS.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    match guard.as_mut() {
+        Some((last_text, count, first_seen)) if *last_text == text => {
+            *count += 1;
+            if now.duration_since(*first_seen) >= WINDOW {
+                warn!(
+                    "UDP recv error x{} in the last 5 min: {}",
+                    *count, last_text
+                );
+                *count = 0;
+                *first_seen = now;
+            }
+        }
+        _ => {
+            *guard = Some((text, 1, now));
+        }
+    }
+}
+
 pub struct DnsBlocker {
     disk_store: Arc<RwLock<Option<DiskBlocklist>>>,
     fast_cache: Arc<FastDomainCache>,
@@ -128,6 +162,7 @@ pub struct DnsBlocker {
     response_policy: Arc<RwLock<Option<ResponsePolicyFn>>>,
     pub rules_count: Arc<AtomicUsize>,
     rebind_incident_cooldown: Arc<Mutex<HashMap<(String, String), Instant>>>,
+    pub adblock: Arc<AdBlockControls>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,6 +345,7 @@ impl DnsBlocker {
             response_policy: Arc::new(RwLock::new(None)),
             rules_count: Arc::new(AtomicUsize::new(initial_count)),
             rebind_incident_cooldown: Arc::new(Mutex::new(HashMap::new())),
+            adblock: Arc::new(AdBlockControls::new()),
         }
     }
 
@@ -473,20 +509,54 @@ impl DnsBlocker {
         None
     }
 
-    pub async fn load_blocklists(&self, urls: &[String]) -> Result<usize, String> {
+    pub async fn load_blocklists(
+        &self,
+        urls: &[String],
+        doh_urls: &[String],
+    ) -> Result<usize, String> {
         let fetch_start = Instant::now();
+        let doh = doh_urls.to_vec();
         let _ = self.load_cache();
         let mut set: tokio::task::JoinSet<BlocklistFetch> = tokio::task::JoinSet::new();
 
         for url in urls {
-            let client = self.http_client.clone();
+            let base_client = self.http_client.clone();
             let url = url.clone();
             let etag = self
                 .etag_cache
                 .lock()
                 .map(|g| g.get(&url).cloned())
                 .unwrap_or(None);
+            let doh_for_task = doh.clone();
             set.spawn(async move {
+                // Resolve the feed host through our own DoH-pinned path, then
+                // pin it per-request. Without this the fetch would depend on
+                // the very DNS setting the app itself overwrites (VPN or WARP
+                // in the picture) and every list silently fails.
+                let client = match Self::host_of(&url)
+                    .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+                {
+                    Some(_pinned) => base_client,
+                    None => {
+                        let host = Self::host_of(&url).unwrap_or_default();
+                        match Self::resolve_host_via_upstream(&base_client, &host, &doh_for_task)
+                            .await
+                        {
+                            Some(ip) => {
+                                match reqwest::Client::builder()
+                                    .timeout(Duration::from_secs(20))
+                                    .pool_max_idle_per_host(5)
+                                    .resolve(&host, std::net::SocketAddr::new(ip, 443))
+                                    .build()
+                                {
+                                    Ok(pinned_client) => pinned_client,
+                                    Err(_) => base_client,
+                                }
+                            }
+                            None => base_client,
+                        }
+                    }
+                };
                 let mut req = client.get(&url);
                 if let Some(tag) = &etag {
                     req = req.header("If-None-Match", tag);
@@ -636,8 +706,16 @@ impl DnsBlocker {
 
         let count = domains.len();
         if count > 0 && any_success {
+            let (compacted, redundant) = Self::compact_covered_domains(domains);
+            let count = compacted.len();
             let bin_path = Self::disk_store_path();
-            match DiskBlocklist::build(&bin_path, domains.into_iter().collect()) {
+            info!(
+                "Blocklist compaction: {} domains collapsed to {} blocking suffixes ({} redundant subdomains)",
+                count + redundant,
+                count,
+                redundant
+            );
+            match DiskBlocklist::build(&bin_path, compacted.into_iter().collect()) {
                 Ok(built_count) => {
                     if let Ok(disk) = DiskBlocklist::open(&bin_path) {
                         *self.disk_store.write().unwrap_or_else(|e| e.into_inner()) = Some(disk);
@@ -834,6 +912,33 @@ impl DnsBlocker {
             }
         }
         false
+    }
+
+    fn compact_covered_domains(domains: HashSet<String>) -> (HashSet<String>, usize) {
+        let original = domains.len();
+        let all: HashSet<String> = domains
+            .iter()
+            .map(|d| d.trim_end_matches('.').to_lowercase())
+            .collect();
+        let kept: HashSet<String> = all
+            .iter()
+            .filter(|domain| {
+                let mut rest = domain.as_str();
+                while let Some(dot_pos) = rest.find('.') {
+                    rest = &rest[dot_pos + 1..];
+                    if rest.is_empty() {
+                        break;
+                    }
+                    if all.contains(rest) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .cloned()
+            .collect();
+        let removed = original - kept.len();
+        (kept, removed)
     }
 
     #[allow(dead_code)]
@@ -1298,7 +1403,7 @@ impl DnsBlocker {
             let (len, src) = match socket.recv_from(&mut buf).await {
                 Ok(res) => res,
                 Err(e) => {
-                    warn!("UDP recv error: {}", e);
+                    log_recv_error(&e);
                     continue;
                 }
             };
@@ -1412,7 +1517,17 @@ impl DnsBlocker {
             return;
         }
 
-        if self.should_block(&query_name) {
+        // Strict mode never applies to this machine's own loopback traffic:
+        // blocking every local query would look like a total network outage.
+        let strict_applies = !src.ip().is_loopback();
+        let ad_enforced = !self.adblock.is_paused()
+            && match self.adblock.mode_for_client(&src.ip()) {
+                ClientMode::Trusted => false,
+                ClientMode::Strict => strict_applies,
+                ClientMode::Default => self.should_block(&query_name),
+            };
+        if ad_enforced {
+            self.adblock.record_block(&query_name, &src_ip);
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
             mon.add_log(&query_name, &src_ip, true);
             mon.block_stats.record_block();
@@ -1567,6 +1682,138 @@ impl DnsBlocker {
                 ),
             );
         }
+    }
+
+    pub fn build_a_query(host: &str) -> Option<Vec<u8>> {
+        let host = host.trim().trim_end_matches('.');
+        if host.is_empty() {
+            return None;
+        }
+        let mut query = vec![
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        for label in host.split('.') {
+            if label.is_empty() || label.len() > 63 {
+                return None;
+            }
+            query.push(label.len() as u8);
+            query.extend_from_slice(label.as_bytes());
+        }
+        query.push(0x00);
+        query.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        Some(query)
+    }
+
+    pub fn parse_first_a_record(resp: &[u8]) -> Option<std::net::IpAddr> {
+        if resp.len() < 12 {
+            return None;
+        }
+        let questions = u16::from_be_bytes([resp[4], resp[5]]);
+        let answers = u16::from_be_bytes([resp[6], resp[7]]);
+        let mut cursor = 12usize;
+        for _ in 0..questions {
+            while cursor < resp.len() {
+                let len = resp[cursor] as usize;
+                cursor += 1;
+                if len == 0 {
+                    break;
+                }
+                if len & 0xC0 == 0xC0 {
+                    cursor += 1;
+                    break;
+                }
+                cursor += len;
+            }
+            cursor += 4;
+        }
+        for _ in 0..answers {
+            if cursor >= resp.len() {
+                return None;
+            }
+            let label = resp[cursor];
+            if label & 0xC0 == 0xC0 {
+                cursor += 2;
+            } else {
+                loop {
+                    if cursor >= resp.len() {
+                        return None;
+                    }
+                    let len = resp[cursor] as usize;
+                    cursor += 1;
+                    if len == 0 {
+                        break;
+                    }
+                    cursor += len;
+                }
+            }
+            if cursor + 10 > resp.len() {
+                return None;
+            }
+            let rtype = u16::from_be_bytes([resp[cursor], resp[cursor + 1]]);
+            let rdlen = u16::from_be_bytes([resp[cursor + 8], resp[cursor + 9]]) as usize;
+            cursor += 10;
+            if cursor + rdlen > resp.len() {
+                return None;
+            }
+            if rtype == 1 && rdlen == 4 {
+                let octets = [
+                    resp[cursor],
+                    resp[cursor + 1],
+                    resp[cursor + 2],
+                    resp[cursor + 3],
+                ];
+                return Some(std::net::IpAddr::from(octets));
+            }
+            cursor += rdlen;
+        }
+        None
+    }
+
+    pub fn host_of(url: &str) -> Option<String> {
+        let without_scheme = url.split("://").last().unwrap_or(url);
+        let authority = without_scheme.split('/').next().unwrap_or(without_scheme);
+        let host = authority.rsplit('@').next().unwrap_or(authority);
+        let host = host.split(':').next().unwrap_or(host);
+        if host.is_empty() {
+            None
+        } else {
+            Some(host.to_string())
+        }
+    }
+
+    pub async fn resolve_host_via_upstream(
+        client: &reqwest::Client,
+        host: &str,
+        doh_urls: &[String],
+    ) -> Option<std::net::IpAddr> {
+        let query = Self::build_a_query(host)?;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+        for url in doh_urls {
+            let client = client.clone();
+            let url = url.clone();
+            let query = query.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let resp = tokio::time::timeout(
+                    Duration::from_millis(1500),
+                    client
+                        .post(&url)
+                        .header("content-type", "application/dns-message")
+                        .header("accept", "application/dns-message")
+                        .body(query)
+                        .send(),
+                )
+                .await;
+                if let Ok(Ok(resp)) = resp {
+                    if let Ok(bytes) = resp.bytes().await {
+                        let _ = tx.send(bytes.to_vec()).await;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        let response = rx.recv().await?;
+        Self::parse_first_a_record(&response)
     }
 
     async fn forward_parallel_racing(
@@ -2013,6 +2260,7 @@ mod tests {
             response_policy: Arc::new(RwLock::new(None)),
             rules_count: Arc::new(AtomicUsize::new(0)),
             rebind_incident_cooldown: Arc::new(Mutex::new(HashMap::new())),
+            adblock: Arc::new(AdBlockControls::new()),
         };
         let query = vec![
             0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, b'e',

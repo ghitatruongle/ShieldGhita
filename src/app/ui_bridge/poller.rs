@@ -145,7 +145,7 @@ pub fn restore_window_geom(ui: &crate::AppWindow, cfg: &crate::modules::config::
 }
 
 pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds) -> slint::Timer {
-    let (show_id, toggle_id, quit_id) = menu_ids;
+    let (show_id, toggle_id, restore_id, quit_id) = menu_ids;
     let ui_weak = ui.as_weak();
     let mut last_seen_geom = sample_window_geom(ui);
     let mut geom_dirty_since: Option<Instant> = None;
@@ -184,7 +184,7 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
                 tray_hide_armed = false;
             }
 
-            handle_menu_events(&ui_win, &state, &show_id, &toggle_id, &quit_id);
+            handle_menu_events(&ui_win, &state, &show_id, &toggle_id, &restore_id, &quit_id);
             handle_tray_icon_events(&ui_win);
             handle_minimize_to_tray(&ui_win, &state, &mut tray_hide_armed);
             track_window_geom(&ui_win, &state, &mut last_seen_geom, &mut geom_dirty_since);
@@ -376,6 +376,7 @@ fn handle_menu_events(
     s: &Arc<AppState>,
     show_id: &tray_icon::menu::MenuId,
     toggle_id: &tray_icon::menu::MenuId,
+    restore_id: &tray_icon::menu::MenuId,
     quit_id: &tray_icon::menu::MenuId,
 ) {
     // NOTE: tray menus are polled at 1Hz from the Slint timer (this fn) rather
@@ -396,6 +397,20 @@ fn handle_menu_events(
             let s2 = s.clone();
             std::thread::spawn(move || {
                 crate::app::ui_bridge::handlers::apply_protection(&s2, new_state);
+            });
+        } else if event.id == *restore_id {
+            let s2 = s.clone();
+            std::thread::spawn(move || {
+                let _ = crate::modules::system::dns_manager::restore_system_dns();
+                let _ = crate::modules::system::dns_manager::set_master_internet_lock(false);
+                let _ = s2.wfp_blocker.disable();
+                crate::modules::system::dns_manager::set_lan_only_mode(false);
+                s2.protection_atomic.store(false, Ordering::SeqCst);
+                if let Ok(mut cfg_guard) = s2.config.write() {
+                    cfg_guard.protection_enabled = false;
+                    let _ = cfg_guard.save();
+                }
+                tracing::info!("Emergency network restore triggered from tray");
             });
         } else if event.id == *quit_id {
             save_window_state_now(ui_win, s);

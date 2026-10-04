@@ -1,0 +1,201 @@
+import { Button, ListView, ScrollView } from "std-widgets.slint";
+import { I18n, PentestFindingItem } from "common.slint";
+
+component HardenRow inherits Rectangle {
+    in property <PentestFindingItem> item;
+
+    height: 84px;
+    background: #111827;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: item.severity == "CRITICAL" ? #dc2626 :
+                  item.severity == "HIGH" ? #ea580c :
+                  item.severity == "MEDIUM" ? #d97706 : #334155;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 12px;
+        alignment: center;
+
+        Rectangle {
+            width: 78px;
+            height: 24px;
+            border-radius: 6px;
+            background: item.severity == "CRITICAL" ? #ef444433 :
+                        item.severity == "HIGH" ? #f9731633 :
+                        item.severity == "MEDIUM" ? #f59e0b33 : #3b82f633;
+            border-width: 1px;
+            border-color: item.severity == "CRITICAL" ? #ef4444 :
+                          item.severity == "HIGH" ? #f97316 :
+                          item.severity == "MEDIUM" ? #f59e0b : #3b82f6;
+
+            Text {
+                text: item.severity;
+                font-size: 9px;
+                font-weight: 800;
+                color: #f1f5f9;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: item.detail;
+                font-size: 12px;
+                font-weight: 700;
+                color: #f1f5f9;
+                overflow: elide;
+            }
+
+            Text {
+                text: item.recommendation;
+                font-size: 11px;
+                color: #cbd5e1;
+                overflow: elide;
+                wrap: word-wrap;
+                max-height: 30px;
+            }
+
+            Text {
+                text: "🛠 " + item.category + " • " + item.target;
+                font-size: 10px;
+                color: #86efac;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+export component HardeningTab inherits Rectangle {
+    in-out property <bool> harden-busy: false;
+    in-out property <string> harden-status: "";
+    in-out property <[PentestFindingItem]> harden-findings;
+
+    callback harden-audit-persistence();
+    callback harden-audit-eventlog();
+    callback harden-audit-usb();
+    callback harden-selfhash();
+
+    ScrollView {
+        VerticalLayout {
+            padding: 14px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: center;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+
+                    Text {
+                        text: I18n.t4("🧱 CHỐNG HACK CHUYÊN SÂU", "🧱 DEEP HARDENING", "🧱 深度加固", "🧱 ГЛУБОКОЕ УКРЕПЛЕНИЕ");
+                        font-size: 15px;
+                        font-weight: 800;
+                        color: #fbbf24;
+                    }
+
+                    Text {
+                        text: I18n.t4("Rà điểm thường trú (Run keys, lịch tác vụ, dịch vụ) • Giám sát Event Log (brute-force 4625, dịch vụ mới 7045) • Lịch sử USB • Nguyên vẹn tệp thực thi", "Persistence sweep (Run keys, tasks, services) • Event Log watch (brute-force 4625, new services 7045) • USB history • Executable integrity", "持久化扫描（启动键、计划任务、服务）• 事件日志监控（4625 暴力破解、7045 新服务）• USB 历史 • 可执行文件完整性", "Поиск закрепления (Run-ключи, задачи, службы) • Журнал событий (4625/7045) • История USB • Целостность исполняемого файла");
+                        font-size: 11px;
+                        color: #94a3b8;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: center;
+
+                Button {
+                    text: I18n.t4("🧩 Rà điểm thường trú", "🧩 Persistence sweep", "🧩 持久化扫描", "🧩 Закрепление");
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-audit-persistence(); }
+                }
+
+                Button {
+                    text: I18n.t4("📜 Event Log", "📜 Event Log", "📜 事件日志", "📜 Журнал событий");
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-audit-eventlog(); }
+                }
+
+                Button {
+                    text: I18n.t4("🔌 Lịch sử USB", "🔌 USB history", "🔌 USB 历史", "🔌 История USB");
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-audit-usb(); }
+                }
+
+                Button {
+                    text: I18n.t4("🧬 Kiểm tra nguyên vẹn app", "🧬 App integrity check", "🧬 应用完整性检查", "🧬 Целостность приложения");
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-selfhash(); }
+                }
+            }
+
+            if root.harden-status != "" : Rectangle {
+                height: 40px;
+                background: #0f172a;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #0284c7;
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    alignment: center;
+
+                    Text {
+                        text: root.harden-status;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: #38bdf8;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            if root.harden-findings.length == 0 && !root.harden-busy : Rectangle {
+                vertical-stretch: 1;
+                background: #111827;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #1f2937;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 8px;
+
+                    Text {
+                        text: "🧱";
+                        font-size: 38px;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: I18n.t4("Chọn một kiểm tra phía trên để bắt đầu. Kết quả xếp theo mức độ nghiêm trọng.", "Pick a check above to start. Results sorted by severity.", "选择上方一项检查开始。结果按严重程度排序。", "Выберите проверку выше. Результаты по серьёзности.");
+                        font-size: 12px;
+                        color: #64748b;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            if root.harden-findings.length > 0 : ListView {
+                vertical-stretch: 1;
+                for item in root.harden-findings : HardenRow {
+                    item: item;
+                }
+            }
+        }
+    }
+}

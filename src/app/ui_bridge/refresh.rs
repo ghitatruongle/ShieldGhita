@@ -24,6 +24,8 @@ struct UiTextCache {
     last_update_src: Option<String>,
     status_tag: i8,
     traffic: String,
+    adblock_pause: String,
+    last_lan_only: Option<bool>,
     initialized: bool,
 }
 
@@ -77,6 +79,120 @@ pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
     ui_win.set_threats_blocked_count(sat_i32_usize(s.security_engine.incidents_count()));
     ui_win.set_lan_devices_count(sat_i32_usize(s.monitor.get_lan_device_count()));
     ui_win.set_is_scanning(s.monitor.is_lan_scanning());
+
+    ui_win.set_adblock_total_today(sat_i32_u64(s.blocker.adblock.total_blocked()));
+    let remaining_secs = s.blocker.adblock.pause_remaining_secs();
+    let pause_left = if remaining_secs == 0 {
+        String::new()
+    } else {
+        format!(
+            "⏸ {}: {:02}:{:02}",
+            i18n::tr4("Còn lại", "Remaining", "剩余", "Осталось"),
+            remaining_secs / 60,
+            remaining_secs % 60
+        )
+    };
+    let pause_changed =
+        UI_TEXT_CACHE.with(|c| cached_text_changed(&mut c.borrow_mut().adblock_pause, &pause_left));
+    if pause_changed {
+        ui_win.set_adblock_pause_left(pause_left.into());
+    }
+
+    let lan_only = dns_manager::is_lan_only_mode();
+    let wfp_ok = s.wfp_blocker.is_available();
+    ui_win.set_dns_lan_only(lan_only);
+    ui_win.set_wfp_available(wfp_ok);
+    ui_win.set_network_override_active(
+        dns_manager::is_dns_overridden() || dns_manager::is_master_internet_locked(),
+    );
+    let conflict_changed = UI_TEXT_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.last_lan_only != Some(lan_only) {
+            cache.last_lan_only = Some(lan_only);
+            true
+        } else {
+            false
+        }
+    });
+    if conflict_changed {
+        let text = match dns_manager::detect_dns_controller_conflict() {
+            Some(found) => {
+                let mut text = dns_manager::describe_dns_controller(&found);
+                text.push_str(" — ");
+                text.push_str(i18n::tr4(
+                    "Đang ở chế độ chỉ phục vụ LAN, DNS hệ thống để nguyên cho VPN.",
+                    "Running in LAN-only mode; system DNS left to the VPN.",
+                    "处于仅服务局域网模式，系统 DNS 保留给 VPN。",
+                    "Режим только LAN; системный DNS оставлен VPN.",
+                ));
+                text
+            }
+            None => String::new(),
+        };
+        ui_win.set_dns_conflict_text(text.into());
+    }
+
+    if ui_win.get_active_tab() == 9 {
+        let snap = s.blocker.adblock.snapshot();
+        ui_win.set_adblock_top_domains(slint::ModelRc::new(slint::VecModel::from(
+            snap.top_domains
+                .iter()
+                .map(|item| crate::AdStatItem {
+                    label: item.label.clone().into(),
+                    count: sat_i32_u64(item.count),
+                })
+                .collect::<Vec<_>>(),
+        )));
+        ui_win.set_adblock_top_clients(slint::ModelRc::new(slint::VecModel::from(
+            snap.top_clients
+                .iter()
+                .map(|item| crate::AdStatItem {
+                    label: item.label.clone().into(),
+                    count: sat_i32_u64(item.count),
+                })
+                .collect::<Vec<_>>(),
+        )));
+        ui_win.set_adblock_hourly(slint::ModelRc::new(slint::VecModel::from(
+            snap.hourly
+                .iter()
+                .map(|item| crate::AdStatItem {
+                    label: item.label.clone().into(),
+                    count: sat_i32_u64(item.count),
+                })
+                .collect::<Vec<_>>(),
+        )));
+        ui_win.set_adblock_rules(slint::ModelRc::new(slint::VecModel::from(
+            snap.rules
+                .iter()
+                .map(|(ip, mode)| crate::ClientRuleItem {
+                    ip: ip.clone().into(),
+                    mode: mode.localized_label().into(),
+                    mode_id: mode.id(),
+                })
+                .collect::<Vec<_>>(),
+        )));
+    }
+
+    if ui_win.get_active_tab() == 10 {
+        ui_win.set_av_realtime(s.realtime_guard.is_enabled());
+        ui_win.set_av_auto_quarantine(s.realtime_guard.is_auto_quarantine());
+        ui_win.set_av_lock_active(s.realtime_guard.is_lock_active());
+        ui_win.set_av_signature_count(sat_i32_usize(crate::modules::security::signatures::count()));
+        let entries = crate::modules::security::file_quarantine::list();
+        ui_win.set_av_quarantine_list(slint::ModelRc::new(slint::VecModel::from(
+            entries
+                .iter()
+                .map(|entry| crate::QuarantineItem {
+                    entry_id: entry.id.clone().into(),
+                    original_name: entry.original_name.clone().into(),
+                    original_path: entry.original_path.clone().into(),
+                    reason: entry.reason.clone().into(),
+                    quarantined_at: entry.quarantined_at.clone().into(),
+                    size_kb: sat_i32_u64(entry.size / 1024),
+                })
+                .collect::<Vec<_>>(),
+        )));
+    }
 
     {
         let cfg = s.config.read().unwrap_or_else(|e| e.into_inner());

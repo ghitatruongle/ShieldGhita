@@ -209,3 +209,54 @@ export struct LocationThreatItem {
     category: string,
 }
 
+export struct AdStatItem {
+    label: string,
+    count: int,
+}
+
+export struct ClientRuleItem {
+    ip: string,
+    mode: string,
+    mode-id: int,
+}
+
+export struct VulnFindingItem {
+    severity: string,
+    title: string,
+    detail: string,
+    recommendation: string,
+}
+
+export struct QuarantineItem {
+    entry-id: string,
+    original-name: string,
+    original-path: string,
+    reason: string,
+    quarantined-at: string,
+    size-kb: int,
+}
+
+export struct WifiNetworkItem {
+    ssid: string,
+    auth: string,
+    cipher: string,
+    signal: int,
+    is-weak: bool,
+    note: string,
+}
+
+export struct PentestFindingItem {
+    target: string,
+    category: string,
+    severity: string,
+    detail: string,
+    recommendation: string,
+}
+
+export struct PersistenceItem {
+    source: string,
+    name: string,
+    command: string,
+    is-new: bool,
+}
+

@@ -84,6 +84,26 @@ pub struct AppConfig {
     pub location_scan_extensions: Vec<String>,
     #[serde(default)]
     pub onboarding_done: bool,
+    #[serde(default)]
+    pub adblock_client_rules: Vec<String>,
+    /// "auto" = yield to a detected VPN/security DNS controller (LAN-only
+    /// service, system DNS untouched). "override" = keep forcing 127.0.0.1.
+    #[serde(default = "default_dns_conflict_mode")]
+    pub dns_conflict_mode: String,
+    #[serde(default = "default_false")]
+    pub av_realtime_enabled: bool,
+    #[serde(default = "default_false")]
+    pub av_auto_quarantine_critical: bool,
+    #[serde(default = "default_false")]
+    pub av_canary_autolock: bool,
+    #[serde(default = "default_false")]
+    pub av_canary_in_folders: bool,
+    #[serde(default)]
+    pub av_signature_url: String,
+}
+
+fn default_dns_conflict_mode() -> String {
+    "auto".to_string()
 }
 
 fn default_location_scan_max_files() -> usize {
@@ -208,6 +228,13 @@ impl Default for AppConfig {
             location_scan_max_files: default_location_scan_max_files(),
             location_scan_extensions: Vec::new(),
             onboarding_done: false,
+            adblock_client_rules: Vec::new(),
+            dns_conflict_mode: default_dns_conflict_mode(),
+            av_realtime_enabled: false,
+            av_auto_quarantine_critical: false,
+            av_canary_autolock: false,
+            av_canary_in_folders: false,
+            av_signature_url: String::new(),
         }
     }
 }

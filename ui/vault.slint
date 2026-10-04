@@ -1,0 +1,251 @@
+import { Button, ScrollView, LineEdit } from "std-widgets.slint";
+import { I18n } from "common.slint";
+
+export component VaultTab inherits Rectangle {
+    in-out property <string> vault-password: "";
+    in-out property <string> vault-status: "";
+    in-out property <string> vault-generated: "";
+    in-out property <int> vault-strength: 0;
+    in-out property <string> vault-strength-label: "";
+    in-out property <bool> vault-busy: false;
+
+    callback vault-encrypt-file();
+    callback vault-decrypt-file();
+    callback vault-encrypt-folder();
+    callback vault-decrypt-folder();
+    callback vault-secure-delete();
+    callback vault-gen-password();
+    callback vault-copy-password();
+
+    ScrollView {
+        VerticalLayout {
+            padding: 14px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: center;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+
+                    Text {
+                        text: I18n.t4("🔐 VAULT MÃ HÓA DỮ LIỆU", "🔐 DATA ENCRYPTION VAULT", "🔐 数据加密保险库", "🔐 ХРАНИЛИЩЕ ШИФРОВАНИЯ");
+                        font-size: 15px;
+                        font-weight: 800;
+                        color: #c084fc;
+                    }
+
+                    Text {
+                        text: I18n.t4("AES-256-GCM + Argon2id • Mã hóa xong XÓA GỐC an toàn (ghi đè 3 vòng) • Giải mã không sai một bit • File .sgvault chỉ mở được bằng mật khẩu", "AES-256-GCM + Argon2id • Original securely erased after encryption (3-pass overwrite) • Bit-exact decryption • .sgvault only opens with the password", "AES-256-GCM + Argon2id • 加密后安全删除原文件（3 次覆写）• 解密完全一致 • .sgvault 仅凭密码打开", "AES-256-GCM + Argon2id • Оригинал надёжно стирается после шифрования • Расшифровка без потерь • .sgvault открывается только с паролем");
+                        font-size: 11px;
+                        color: #94a3b8;
+                    }
+                }
+            }
+
+            Rectangle {
+                background: #111827;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #7c3aed;
+                height: 96px;
+
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 6px;
+
+                    Text {
+                        text: I18n.t4("MẬT KHẨU CHỦ (dùng cho mọi thao tác mã hóa/giải mã)", "MASTER PASSWORD (used for all encrypt/decrypt actions)", "主密码（用于所有加密/解密操作）", "МАСТЕР-ПАРОЛЬ (для всех операций)");
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: #94a3b8;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+
+                        LineEdit {
+                            horizontal-stretch: 1;
+                            text <=> root.vault-password;
+                            input-type: password;
+                            placeholder-text: I18n.t4("Nhập mật khẩu chủ (≥12 ký tự)", "Enter master password (≥12 chars)", "输入主密码（≥12 位）", "Введите мастер-пароль (≥12 символов)");
+                        }
+
+                        Button {
+                            text: I18n.t4("🎲 Tạo ngẫu nhiên", "🎲 Generate", "🎲 随机生成", "🎲 Создать");
+                            clicked => { root.vault-gen-password(); }
+                        }
+                    }
+                }
+            }
+
+            if root.vault-generated != "" : Rectangle {
+                background: #1e1b4b;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #8b5cf6;
+                height: 78px;
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 4px;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+
+                        Text {
+                            text: I18n.t4("MẬT KHẨU TẠO:", "GENERATED PASSWORD:", "生成的密码:", "СГЕНЕРИРОВАННЫЙ ПАРОЛЬ:");
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: #a5b4fc;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.vault-generated;
+                            font-size: 14px;
+                            font-family: "Consolas";
+                            font-weight: 800;
+                            color: #e9d5ff;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+
+                        Button {
+                            text: I18n.t4("📋 Copy (tự xóa sau 30s)", "📋 Copy (auto-clears in 30s)", "📋 复制（30 秒后自动清除）", "📋 Копировать (сброс через 30 с)");
+                            clicked => { root.vault-copy-password(); }
+                        }
+
+                        Button {
+                            text: I18n.t4("⬇ Dùng mật khẩu này", "⬇ Use as master", "⬇ 用作主密码", "⬇ Использовать");
+                            clicked => { root.vault-password = root.vault-generated; }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: root.vault-strength-label;
+                            font-size: 11px;
+                            font-weight: 800;
+                            color: root.vault-strength >= 80 ? #34d399 : root.vault-strength >= 55 ? #fbbf24 : #f87171;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            width: 220px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: #1f2937;
+
+                            Rectangle {
+                                x: 0;
+                                width: parent.width * root.vault-strength / 100;
+                                height: 100%;
+                                border-radius: 4px;
+                                background: root.vault-strength >= 80 ? #34d399 : root.vault-strength >= 55 ? #fbbf24 : #f87171;
+                            }
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: center;
+
+                Button {
+                    text: I18n.t4("🔒 Mã hóa TỆP", "🔒 Encrypt FILE", "🔒 加密文件", "🔒 Шифровать ФАЙЛ");
+                    enabled: !root.vault-busy && root.vault-password != "";
+                    clicked => { root.vault-encrypt-file(); }
+                }
+
+                Button {
+                    text: I18n.t4("🔓 Giải mã TỆP", "🔓 Decrypt FILE", "🔓 解密文件", "🔓 Расшифровать ФАЙЛ");
+                    enabled: !root.vault-busy && root.vault-password != "";
+                    clicked => { root.vault-decrypt-file(); }
+                }
+
+                Button {
+                    text: I18n.t4("🗂 Mã hóa THƯ MỤC", "🗂 Encrypt FOLDER", "🗂 加密文件夹", "🗂 Шифровать ПАПКУ");
+                    enabled: !root.vault-busy && root.vault-password != "";
+                    clicked => { root.vault-encrypt-folder(); }
+                }
+
+                Button {
+                    text: I18n.t4("📂 Giải mã THƯ MỤC", "📂 Decrypt FOLDER", "📂 解密文件夹", "📂 Расшифровать ПАПКУ");
+                    enabled: !root.vault-busy && root.vault-password != "";
+                    clicked => { root.vault-decrypt-folder(); }
+                }
+
+                Button {
+                    text: I18n.t4("🔥 Xóa an toàn tệp", "🔥 Secure-delete file", "🔥 安全删除文件", "🔥 Безопасное удаление");
+                    enabled: !root.vault-busy;
+                    clicked => { root.vault-secure-delete(); }
+                }
+            }
+
+            if root.vault-status != "" : Rectangle {
+                height: 40px;
+                background: #0f172a;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #0284c7;
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    alignment: center;
+
+                    Text {
+                        text: root.vault-status;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: #38bdf8;
+                        overflow: elide;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: #0b1220;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #334155;
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 6px;
+
+                    Text {
+                        text: I18n.t4("📖 CÁCH HOẠT ĐỘNG", "📖 HOW IT WORKS", "📖 工作原理", "📖 КАК ЭТО РАБОТАЕТ");
+                        font-size: 12px;
+                        font-weight: 800;
+                        color: #93c5fd;
+                    }
+
+                    Text {
+                        text: I18n.t4(
+                            "1. Mật khẩu chủ được băm Argon2id (64 MB bộ nhớ, chống GPU brute-force) tạo khóa AES-256.\n2. Mỗi tệp dùng salt + nonce ngẫu nhiên riêng — hai tệp giống nhau mã hóa ra khác nhau hoàn toàn.\n3. Toàn vẹn kiểm chứng bằng GCM tag: sửa 1 bit cũng bị từ chối giải mã.\n4. Mã hóa thành công → tệp gốc bị ghi đè 3 vòng (0x00/0xFF/ngẫu nhiên) rồi xóa — không khôi phục được bằng tool thường.\n⚠ QUAN TRỌNG: quên mật khẩu chủ = KHÔNG THỂ khôi phục dữ liệu. Không có backdoor.",
+                            "1. The master password is hashed with Argon2id (64 MB memory, GPU brute-force resistant) into an AES-256 key.\n2. Every file gets its own random salt + nonce — identical files encrypt differently.\n3. GCM tag verifies integrity: even 1 flipped bit is rejected.\n4. After encryption the original is overwritten 3 passes (0x00/0xFF/random) and deleted — unrecoverable by common tools.\n⚠ IMPORTANT: a lost master password means LOST DATA. No backdoor.",
+                            "1. 主密码经 Argon2id 哈希（64 MB 内存，抗 GPU 暴力破解）生成 AES-256 密钥。\n2. 每个文件使用独立随机 salt + nonce — 相同文件加密结果完全不同。\n3. GCM 标签验证完整性：改动 1 位即拒绝解密。\n4. 加密成功后原文件被 3 轮覆写（0x00/0xFF/随机）并删除 — 常规工具无法恢复。\n⚠ 重要：忘记主密码 = 数据无法恢复。没有后门。",
+                            "1. Мастер-пароль хешируется Argon2id (64 МБ памяти, устойчиво к GPU-подбору) в ключ AES-256.\n2. Для каждого файла свой salt + nonce — одинаковые файлы шифруются по-разному.\n3. Тег GCM проверяет целостность: изменение даже 1 бита отклоняется.\n4. После шифрования оригинал перезаписывается 3 прохода и удаляется.\n⚠ ВАЖНО: забытый мастер-пароль = потерянные данные. Бэкдоров нет."
+                        );
+                        font-size: 11px;
+                        color: #cbd5e1;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

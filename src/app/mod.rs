@@ -31,6 +31,7 @@ pub struct AppState {
     pub console_ui_version: AtomicU64,
     pub toast_gen: Arc<AtomicU64>,
     pub location_scan_cancel: Arc<AtomicBool>,
+    pub realtime_guard: Arc<crate::modules::security::realtime_guard::RealtimeGuard>,
     #[cfg(feature = "admin")]
     pub local_manager: Arc<crate::modules::local::LocalManager>,
 }
@@ -76,6 +77,9 @@ impl AppState {
 
         let dns_blocker = Arc::new(DnsBlocker::new());
         dns_blocker.set_custom_rules(&cfg.custom_blocked_domains, &cfg.custom_allowed_domains);
+        dns_blocker
+            .adblock
+            .load_rules_config(&cfg.adblock_client_rules);
 
         let sinkhole = Arc::new(
             SilentSinkhole::new().with_dns_flag(dns_blocker.silent_sinkhole_enabled.clone()),
@@ -105,6 +109,11 @@ impl AppState {
         #[cfg(feature = "admin")]
         local_manager.attach_dns_policy(&dns_blocker);
 
+        let realtime_guard =
+            Arc::new(crate::modules::security::realtime_guard::RealtimeGuard::new());
+        realtime_guard.attach_engine(security_engine.clone());
+        realtime_guard.set_auto_quarantine(cfg.av_auto_quarantine_critical);
+
         let state = Arc::new(Self {
             blocker: dns_blocker,
             wfp_blocker,
@@ -121,6 +130,7 @@ impl AppState {
             console_ui_version: AtomicU64::new(0),
             toast_gen: Arc::new(AtomicU64::new(0)),
             location_scan_cancel: Arc::new(AtomicBool::new(false)),
+            realtime_guard,
             #[cfg(feature = "admin")]
             local_manager,
         });
@@ -137,6 +147,38 @@ impl AppState {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+
+        state
+            .realtime_guard
+            .set_canary_autolock(cfg.av_canary_autolock);
+        state
+            .realtime_guard
+            .set_watch_canary_in_folders(cfg.av_canary_in_folders);
+        if cfg.av_realtime_enabled {
+            state.realtime_guard.set_enabled(true);
+        }
+
+        // Recover a DNS override left behind by a hard kill (Task Manager,
+        // crash, power loss) before we bind our own resolver.
+        if let Some(message) = dns_manager::recover_stale_override_on_startup() {
+            info!("{}", message);
+        }
+
+        // Never fight another DNS owner (Cloudflare WARP, VPN, security suite).
+        // In "auto" mode we yield: keep the resolver for LAN devices only and
+        // leave the machine's system DNS to the other product.
+        let dns_conflict = dns_manager::detect_dns_controller_conflict();
+        let yield_to_lan_only =
+            dns_conflict.is_some() && cfg.dns_conflict_mode.as_str() != "override";
+        dns_manager::set_lan_only_mode(yield_to_lan_only);
+        if let Some(found) = &dns_conflict {
+            info!(
+                "{} — mode={}, lan_only={}",
+                dns_manager::describe_dns_controller(found),
+                cfg.dns_conflict_mode,
+                yield_to_lan_only
+            );
+        }
 
         #[cfg(feature = "admin")]
         {
@@ -186,19 +228,23 @@ impl AppState {
             });
         }
 
-        {
-            let prot = state.protection_atomic.clone();
-            // Watchdog must check the effective bind addr (0.0.0.0 when
-            // network-wide mode is on), not just the loopback config value.
-            let effective_watch_addr = if cfg.network_wide_adblock_enabled {
-                "0.0.0.0".to_string()
-            } else {
-                cfg.dns_listen_addr.clone()
-            };
-            let rt = state.runtime.clone();
-            rt.spawn(async move {
-                dns_manager::start_dns_guard_watchdog(prot, effective_watch_addr).await;
-            });
+        if !yield_to_lan_only {
+            {
+                let prot = state.protection_atomic.clone();
+                // Watchdog must check the effective bind addr (0.0.0.0 when
+                // network-wide mode is on), not just the loopback config value.
+                let effective_watch_addr = if cfg.network_wide_adblock_enabled {
+                    "0.0.0.0".to_string()
+                } else {
+                    cfg.dns_listen_addr.clone()
+                };
+                let rt = state.runtime.clone();
+                rt.spawn(async move {
+                    dns_manager::start_dns_guard_watchdog(prot, effective_watch_addr).await;
+                });
+            }
+        } else {
+            info!("DNS guard watchdog disabled: another DNS controller owns the system (LAN-only mode)");
         }
 
         {
@@ -208,7 +254,7 @@ impl AppState {
             let rt = state.runtime.clone();
             let protection_flag = state.protection_atomic.clone();
 
-            let listen_addr = if cfg.network_wide_adblock_enabled {
+            let listen_addr = if cfg.network_wide_adblock_enabled || yield_to_lan_only {
                 "0.0.0.0".to_string()
             } else {
                 cfg.dns_listen_addr.clone()
@@ -238,10 +284,12 @@ impl AppState {
                 match ready_rx.await {
                     Ok(Ok(())) => {
                         info!("DNS Server successfully bound to {}:{}", listen_addr, listen_port);
-                        if protection {
+                        if protection && !yield_to_lan_only {
                             if let Err(e) = dns_manager::set_system_dns("127.0.0.1") {
                                 tracing::error!("Failed to set master system DNS: {}", e);
                             }
+                        } else if protection {
+                            info!("Protection active in LAN-only mode — system DNS left untouched");
                         }
                     }
                     Ok(Err(e)) => {
@@ -269,7 +317,11 @@ impl AppState {
                     let cfg_guard = config.read().unwrap_or_else(|e| e.into_inner());
                     cfg_guard.blocklist_urls.clone()
                 };
-                match blocker.load_blocklists(&urls).await {
+                let doh_sources = {
+                    let cfg_guard = config.read().unwrap_or_else(|e| e.into_inner());
+                    cfg_guard.upstream_dns.clone()
+                };
+                match blocker.load_blocklists(&urls, &doh_sources).await {
                     Ok(count) => {
                         info!("Master Blocklist loaded: {} domains actively protected", count);
                         if let Ok(mut cfg_guard) = config.write() {
@@ -311,7 +363,11 @@ impl AppState {
                             let cfg_guard = s.config.read().unwrap_or_else(|e| e.into_inner());
                             cfg_guard.blocklist_urls.clone()
                         };
-                        match s.blocker.load_blocklists(&urls).await {
+                        let doh_sources = {
+                            let cfg_guard = s.config.read().unwrap_or_else(|e| e.into_inner());
+                            cfg_guard.upstream_dns.clone()
+                        };
+                        match s.blocker.load_blocklists(&urls, &doh_sources).await {
                             Ok(count) => {
                                 info!("Auto-updated blocklists: {} domains active", count);
                                 if let Ok(mut cfg_guard) = s.config.write() {

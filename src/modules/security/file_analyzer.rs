@@ -665,6 +665,30 @@ pub fn scan_file<P: AsRef<Path>>(path: P) -> Result<FileScanReport, String> {
 
     scan_embedded_base64(&text_content, &mut findings, &mut risk_score);
 
+    if crate::modules::security::signatures::lookup_hash(&sha256_str)
+        || crate::modules::security::signatures::contains_eicar_mark(&buffer)
+    {
+        findings.push(FileFinding {
+            severity: "CRITICAL".to_string(),
+            category: tr4(
+                "Chữ ký mã độc",
+                "Malware signature",
+                "恶意软件签名",
+                "Сигнатура вредоноса",
+            )
+            .to_string(),
+            description: tr4(
+                "Khớp chữ ký đã biết trong CSDL (EICAR / signatures.json) — đây là mẫu kiểm thử hoặc mã độc đã biết",
+                "Matches a known signature in the DB (EICAR / signatures.json) — a known test sample or malware",
+                "命中已知特征库（EICAR / signatures.json）— 已知测试样本或恶意软件",
+                "Совпадение с известной сигнатурой (EICAR / signatures.json) — известный образец или вредонос",
+            )
+            .to_string(),
+            snippet: sha256_str.chars().take(32).collect(),
+        });
+        risk_score = risk_score.saturating_add(80);
+    }
+
     risk_score = risk_score.clamp(0, 100);
 
     let risk_level = if risk_score >= 60 {

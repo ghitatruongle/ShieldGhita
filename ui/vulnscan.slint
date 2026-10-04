@@ -1,0 +1,198 @@
+import { Button, ListView, LineEdit, ScrollView } from "std-widgets.slint";
+import { I18n, VulnFindingItem } from "common.slint";
+
+component FindingRow inherits Rectangle {
+    in property <VulnFindingItem> item;
+
+    height: 92px;
+    background: #111827;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: item.severity == "CRITICAL" ? #dc2626 :
+                  item.severity == "HIGH" ? #ea580c :
+                  item.severity == "MEDIUM" ? #d97706 : #334155;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 12px;
+        alignment: center;
+
+        Rectangle {
+            width: 78px;
+            height: 24px;
+            border-radius: 6px;
+            background: item.severity == "CRITICAL" ? #ef444433 :
+                        item.severity == "HIGH" ? #f9731633 :
+                        item.severity == "MEDIUM" ? #f59e0b33 : #3b82f633;
+            border-width: 1px;
+            border-color: item.severity == "CRITICAL" ? #ef4444 :
+                          item.severity == "HIGH" ? #f97316 :
+                          item.severity == "MEDIUM" ? #f59e0b : #3b82f6;
+
+            Text {
+                text: item.severity;
+                font-size: 9px;
+                font-weight: 800;
+                color: item.severity == "CRITICAL" ? #fca5a5 :
+                       item.severity == "HIGH" ? #fdba74 :
+                       item.severity == "MEDIUM" ? #fde68a : #93c5fd;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: item.title;
+                font-size: 12px;
+                font-weight: 700;
+                color: #f1f5f9;
+                overflow: elide;
+            }
+
+            Text {
+                text: item.detail;
+                font-size: 11px;
+                color: #cbd5e1;
+                overflow: elide;
+                wrap: word-wrap;
+                max-height: 30px;
+            }
+
+            Text {
+                text: "🛠 " + item.recommendation;
+                font-size: 10px;
+                color: #86efac;
+                overflow: elide;
+                wrap: word-wrap;
+                max-height: 28px;
+            }
+        }
+    }
+}
+
+export component VulnScanTab inherits Rectangle {
+    in property <bool> is-busy: false;
+    in property <string> status: "";
+    in property <[VulnFindingItem]> findings;
+    in-out property <string> target-ip: "192.168.1.1";
+
+    callback audit-local();
+    callback audit-lan();
+    callback export-report();
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: center;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: I18n.t4("🔎 KIỂM TOÁN BẢO MẬT & LỖ HỔNG", "🔎 SECURITY & VULNERABILITY AUDIT", "🔎 安全与漏洞审计", "🔎 АУДИТ БЕЗОПАСНОСТИ И УЯЗВИМОСТЕЙ");
+                    font-size: 15px;
+                    font-weight: 800;
+                    color: #60a5fa;
+                }
+
+                Text {
+                    text: I18n.t4("Kiểm tra cấu hình Windows (SMBv1, RDP/NLA, UAC, tường lửa, bản vá, autorun, LSA) + quét cổng rủi ro trên thiết bị LAN • Chỉ đọc, KHÔNG thay đổi hệ thống", "Checks Windows configuration (SMBv1, RDP/NLA, UAC, firewall, patches, autoruns, LSA) + risky ports on LAN devices • Read-only, changes nothing", "检查 Windows 配置（SMBv1、RDP/NLA、UAC、防火墙、补丁、自启动、LSA）+ 局域网设备风险端口 • 只读不改系统", "Проверка конфигурации Windows (SMBv1, RDP/NLA, UAC, брандмауэр, обновления, автозапуск, LSA) + рискованные порты LAN • Только чтение");
+                    font-size: 11px;
+                    color: #94a3b8;
+                }
+            }
+
+            Button {
+                text: root.is-busy ? I18n.t4("⏳ Đang kiểm tra...", "⏳ Auditing...", "⏳ 审计中...", "⏳ Аудит...") : I18n.t4("🖥 Quét máy này", "🖥 Audit this PC", "🖥 审计本机", "🖥 Аудит этого ПК");
+                enabled: !root.is-busy;
+                clicked => { root.audit-local(); }
+            }
+
+            LineEdit {
+                width: 140px;
+                text <=> root.target-ip;
+                placeholder-text: "IP: 192.168.1.1";
+            }
+
+            Button {
+                text: I18n.t4("🌐 Quét thiết bị", "🌐 Audit device", "🌐 审计设备", "🌐 Аудит устройства");
+                enabled: !root.is-busy;
+                clicked => { root.audit-lan(); }
+            }
+
+            Button {
+                text: I18n.t4("💾 Xuất CSV", "💾 Export CSV", "💾 导出 CSV", "💾 CSV");
+                enabled: root.findings.length > 0;
+                clicked => { root.export-report(); }
+            }
+        }
+
+        if root.status != "" : Rectangle {
+            height: 36px;
+            background: #0f172a;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #0284c7;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                alignment: center;
+
+                Text {
+                    text: root.status;
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: #38bdf8;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        if root.findings.length == 0 && !root.is-busy : Rectangle {
+            vertical-stretch: 1;
+            background: #111827;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #1f2937;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 8px;
+
+                Text {
+                    text: "🧭";
+                    font-size: 38px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: I18n.t4("Chưa có kết quả kiểm toán. Bấm 'Quét máy này' hoặc nhập IP thiết bị LAN rồi bấm 'Quét thiết bị'.", "No audit results yet. Click 'Audit this PC' or enter a LAN device IP and click 'Audit device'.", "暂无审计结果。点击“审计本机”或输入局域网设备 IP 后点击“审计设备”。", "Результатов пока нет. Нажмите «Аудит этого ПК» или введите IP устройства LAN.");
+                    font-size: 12px;
+                    color: #64748b;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if root.findings.length > 0 : ListView {
+            vertical-stretch: 1;
+            for item in root.findings : FindingRow {
+                item: item;
+            }
+        }
+    }
+}

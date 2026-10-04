@@ -1,0 +1,484 @@
+import { Button, ScrollView, ListView, LineEdit, ComboBox } from "std-widgets.slint";
+import { I18n, AdStatItem, ClientRuleItem } from "common.slint";
+
+component AdStatRow inherits Rectangle {
+    in property <AdStatItem> item;
+
+    height: 34px;
+    background: #111827;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: #1f2937;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        alignment: center;
+
+        Text {
+            text: item.label;
+            font-size: 11px;
+            font-family: "Consolas";
+            color: #cbd5e1;
+            overflow: elide;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: item.count;
+            font-size: 12px;
+            font-weight: 800;
+            color: #f87171;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component ClientRuleRow inherits Rectangle {
+    in property <ClientRuleItem> rule;
+    callback remove-rule(string);
+
+    height: 34px;
+    background: #111827;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: rule.mode-id == 2 ? #7c3aed : rule.mode-id == 1 ? #059669 : #334155;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 10px;
+        alignment: center;
+
+        Text {
+            text: "💻 " + rule.ip;
+            font-size: 11px;
+            font-family: "Consolas";
+            color: #f1f5f9;
+            overflow: elide;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: rule.mode;
+            font-size: 10px;
+            font-weight: 800;
+            color: rule.mode-id == 2 ? #c4b5fd : rule.mode-id == 1 ? #6ee7b7 : #94a3b8;
+            vertical-alignment: center;
+        }
+
+        Button {
+            text: "✕";
+            clicked => { root.remove-rule(rule.ip); }
+        }
+    }
+}
+
+export component AdBlockStatsTab inherits Rectangle {
+    in property <int> total-today: 0;
+    in property <string> pause-left: "";
+    in property <string> status: "";
+    in property <[AdStatItem]> top-domains;
+    in property <[AdStatItem]> top-clients;
+    in property <[AdStatItem]> hourly;
+    in property <[ClientRuleItem]> rules;
+    in property <string> hosts-text: "";
+    in property <bool> hosts-warning: false;
+    in property <bool> hosts-checking: false;
+    in-out property <string> rule-ip-input: "";
+    in-out property <int> rule-mode: 0;
+
+    callback pause(int);
+    callback resume();
+    callback set-rule();
+    callback remove-rule(string);
+    callback clear-stats();
+    callback export-stats();
+    callback hosts-check();
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: center;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: I18n.t4("📊 THỐNG KÊ CHẶN QUẢNG CÁO", "📊 AD-BLOCK STATISTICS", "📊 广告拦截统计", "📊 СТАТИСТИКА БЛОКИРОВКИ");
+                    font-size: 15px;
+                    font-weight: 800;
+                    color: #22c55e;
+                }
+
+                Text {
+                    text: I18n.t4("Điều khiển chặn theo từng thiết bị LAN • Tạm dừng có hẹn giờ • Thống kê thời gian thực", "Per-device blocking control • Timed pause • Real-time statistics", "按设备控制拦截 • 定时暂停 • 实时统计", "Управление блокировкой по устройствам • Пауза по таймеру • Статистика в реальном времени");
+                    font-size: 11px;
+                    color: #94a3b8;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            height: 64px;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #111827;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #1f2937;
+
+                VerticalLayout {
+                    padding: 8px;
+                    alignment: center;
+
+                    Text {
+                        text: I18n.t4("ĐÃ CHẶN (KỂ TỪ KHI BẬT APP)", "BLOCKED (THIS SESSION)", "已拦截（本次会话）", "ЗАБЛОКИРОВАНО (СЕАНС)");
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: #64748b;
+                    }
+
+                    Text {
+                        text: root.total-today;
+                        font-size: 20px;
+                        font-weight: 800;
+                        color: #22c55e;
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: root.pause-left != "" ? #1e1b4b : #111827;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: root.pause-left != "" ? #6366f1 : #1f2937;
+
+                VerticalLayout {
+                    padding: 8px;
+                    alignment: center;
+
+                    Text {
+                        text: I18n.t4("TRẠNG THÁI TẠM DỪNG", "PAUSE STATE", "暂停状态", "СОСТОЯНИЕ ПАУЗЫ");
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: #64748b;
+                    }
+
+                    Text {
+                        text: root.pause-left == "" ? I18n.t4("Đang chặn bình thường", "Blocking active", "正常拦截中", "Блокировка активна") : root.pause-left;
+                        font-size: 13px;
+                        font-weight: 800;
+                        color: root.pause-left != "" ? #a5b4fc : #34d399;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: center;
+
+            Text {
+                text: I18n.t4("⏸ Tạm dừng chặn:", "⏸ Pause blocking:", "⏸ 暂停拦截:", "⏸ Пауза:");
+                font-size: 12px;
+                color: #cbd5e1;
+                vertical-alignment: center;
+            }
+
+            Button {
+                text: I18n.t4("5 phút", "5 min", "5 分钟", "5 мин");
+                clicked => { root.pause(5); }
+            }
+
+            Button {
+                text: I18n.t4("15 phút", "15 min", "15 分钟", "15 мин");
+                clicked => { root.pause(15); }
+            }
+
+            Button {
+                text: I18n.t4("30 phút", "30 min", "30 分钟", "30 мин");
+                clicked => { root.pause(30); }
+            }
+
+            Button {
+                text: I18n.t4("▶ Tiếp tục", "▶ Resume", "▶ 继续", "▶ Продолжить");
+                clicked => { root.resume(); }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            Button {
+                text: I18n.t4("🧹 Xoá thống kê", "🧹 Clear stats", "🧹 清除统计", "🧹 Очистить");
+                clicked => { root.clear-stats(); }
+            }
+
+            Button {
+                text: I18n.t4("💾 Xuất CSV", "💾 Export CSV", "💾 导出 CSV", "💾 CSV");
+                clicked => { root.export-stats(); }
+            }
+        }
+
+        if root.status != "" : Rectangle {
+            height: 36px;
+            background: #0f172a;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #0284c7;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                alignment: center;
+
+                Text {
+                    text: root.status;
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: #38bdf8;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            vertical-stretch: 2;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #0b1220;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #1f2937;
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 8px;
+
+                    Text {
+                        text: I18n.t4("🔥 TOP TÊN MIỀN BỊ CHẶN", "🔥 TOP BLOCKED DOMAINS", "🔥 拦截最多的域名", "🔥 ТОП ДОМЕНОВ");
+                        font-size: 12px;
+                        font-weight: 800;
+                        color: #fbbf24;
+                    }
+
+                    if root.top-domains.length == 0 : Text {
+                        text: I18n.t4("Chưa có dữ liệu — chờ các truy vấn bị chặn.", "No data yet — waiting for blocked queries.", "暂无数据 — 等待被拦截的查询。", "Данных пока нет.");
+                        font-size: 11px;
+                        color: #64748b;
+                        vertical-alignment: center;
+                        vertical-stretch: 1;
+                        horizontal-alignment: center;
+                    }
+
+                    if root.top-domains.length > 0 : ListView {
+                        vertical-stretch: 1;
+                        for item in root.top-domains : AdStatRow {
+                            item: item;
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #0b1220;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #1f2937;
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 8px;
+
+                    Text {
+                        text: I18n.t4("💻 TOP THIẾT BỊ BỊ CHẶN NHIỀU", "💻 TOP BLOCKED CLIENTS", "💻 拦截最多的设备", "💻 ТОП КЛИЕНТОВ");
+                        font-size: 12px;
+                        font-weight: 800;
+                        color: #a78bfa;
+                    }
+
+                    if root.top-clients.length == 0 : Text {
+                        text: I18n.t4("Chưa có dữ liệu.", "No data yet.", "暂无数据。", "Данных пока нет.");
+                        font-size: 11px;
+                        color: #64748b;
+                        vertical-alignment: center;
+                        vertical-stretch: 1;
+                        horizontal-alignment: center;
+                    }
+
+                    if root.top-clients.length > 0 : ListView {
+                        vertical-stretch: 1;
+                        for item in root.top-clients : AdStatRow {
+                            item: item;
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #0b1220;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #1f2937;
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 8px;
+
+                    Text {
+                        text: I18n.t4("🕐 THEO GIỜ (48H GẦN NHẤT)", "🕐 BY HOUR (LAST 48H)", "🕐 按小时（近48小时）", "🕐 ПО ЧАСАМ (48 Ч)");
+                        font-size: 12px;
+                        font-weight: 800;
+                        color: #38bdf8;
+                    }
+
+                    if root.hourly.length == 0 : Text {
+                        text: I18n.t4("Chưa có dữ liệu.", "No data yet.", "暂无数据。", "Данных пока нет.");
+                        font-size: 11px;
+                        color: #64748b;
+                        vertical-alignment: center;
+                        vertical-stretch: 1;
+                        horizontal-alignment: center;
+                    }
+
+                    if root.hourly.length > 0 : ListView {
+                        vertical-stretch: 1;
+                        for item in root.hourly : AdStatRow {
+                            item: item;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            background: #0b1220;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #1e293b;
+
+            VerticalLayout {
+                padding: 10px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: center;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 2px;
+
+                        Text {
+                            text: I18n.t4("🎛️ CHẾ ĐỘ CHẶN THEO THIẾT BỊ", "🎛️ PER-DEVICE BLOCKING MODE", "🎛️ 按设备拦截模式", "🎛️ РЕЖИМ ПО УСТРОЙСТВАМ");
+                            font-size: 12px;
+                            font-weight: 800;
+                            color: #6ee7b7;
+                        }
+
+                        Text {
+                            text: I18n.t4("Tin cậy = không chặn quảng cáo • Nghiêm ngặt = chặn mọi tên miền (khoá mạng con)", "Trusted = no ad blocking • Strict = block all domains (child lock)", "信任 = 不拦截广告 • 严格 = 拦截所有域名（儿童锁）", "Доверенный = без блокировки • Строгий = блокировать всё (родительский контроль)");
+                            font-size: 10px;
+                            color: #94a3b8;
+                        }
+                    }
+
+                    LineEdit {
+                        width: 150px;
+                        text <=> root.rule-ip-input;
+                        placeholder-text: I18n.t4("IP: 192.168.1.50", "IP: 192.168.1.50", "IP: 192.168.1.50", "IP: 192.168.1.50");
+                    }
+
+                    ComboBox {
+                        width: 170px;
+                        model: [
+                            I18n.t4("Mặc định", "Default", "默认", "Обычный"),
+                            I18n.t4("Tin cậy — bỏ chặn", "Trusted — exempt", "信任 — 放行", "Доверенный"),
+                            I18n.t4("Nghiêm ngặt — chặn hết", "Strict — block all", "严格 — 全拦截", "Строгий — всё"),
+                        ];
+                        current-index <=> root.rule-mode;
+                    }
+
+                    Button {
+                        text: I18n.t4("✚ Áp dụng", "✚ Apply", "✚ 应用", "✚ Применить");
+                        clicked => { root.set-rule(); }
+                    }
+                }
+
+                if root.rules.length == 0 : Text {
+                    text: I18n.t4("Chưa có luật riêng cho thiết bị nào. Nhập IP máy trong LAN rồi chọn chế độ.", "No per-device rules yet. Enter a LAN device IP and pick a mode.", "尚无设备规则。请输入局域网设备 IP 并选择模式。", "Правил пока нет. Введите IP устройства и выберите режим.");
+                    font-size: 11px;
+                    color: #64748b;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    vertical-stretch: 1;
+                }
+
+                if root.rules.length > 0 : ListView {
+                    vertical-stretch: 1;
+                    for r in root.rules : ClientRuleRow {
+                        rule: r;
+                        remove-rule(ip) => { root.remove-rule(ip); }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 92px;
+            background: #0b1220;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #334155;
+
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: center;
+
+                    Text {
+                        text: I18n.t4("🧴 VỆ SINH TỆP HOSTS", "🧴 HOSTS FILE HYGIENE", "🧴 HOSTS 文件检查", "🧴 ФАЙЛ HOSTS");
+                        font-size: 12px;
+                        font-weight: 800;
+                        color: #93c5fd;
+                    }
+
+                    Button {
+                        text: root.hosts-checking ? I18n.t4("⏳ Đang kiểm tra...", "⏳ Checking...", "⏳ 检查中...", "⏳ Проверка...") : I18n.t4("🔎 Kiểm tra hosts", "🔎 Check hosts", "🔎 检查 hosts", "🔎 Проверить hosts");
+                        enabled: !root.hosts-checking;
+                        clicked => { root.hosts-check(); }
+                    }
+                }
+
+                Text {
+                    text: root.hosts-text != "" ? root.hosts-text : I18n.t4("Kiểm tra file hosts hệ thống xem có mục nghiêm trọng ghi đè DNS (cấm quảng cáo bị phá, redirect lừa đảo...).", "Check the system hosts file for DNS-overriding entries (broken ad blocking, phishing redirects...).", "检查系统 hosts 文件是否被篡改（广告拦截被破坏、钓鱼重定向等）。", "Проверка hosts-файла на записи, подменяющие DNS.");
+                    font-size: 11px;
+                    color: root.hosts-warning ? #fbbf24 : #94a3b8;
+                    wrap: word-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}

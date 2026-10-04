@@ -1,14 +1,22 @@
-import { Button, LineEdit, ListView } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, ListView } from "std-widgets.slint";
 import {
     I18n, NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry,
     DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem,
     AttackHistoryItem, CameraItem, BehaviorProfileItem, DnsBenchmarkItem,
     PingResultItem, NetworkHealthReport,
     RamProcessItem, FileScanFindingItem, FileScanResult, LocationThreatItem,
+    AdStatItem, ClientRuleItem, VulnFindingItem, QuarantineItem,
+    WifiNetworkItem, PentestFindingItem, PersistenceItem,
 } from "common.slint";
 import { TabButton, StatCard } from "widgets.slint";
 import { RamMapTab } from "rammap.slint";
 import { FileAnalyzerTab } from "file_analyzer.slint";
+import { AdBlockStatsTab } from "adblock_stats.slint";
+import { AntivirusTab } from "antivirus.slint";
+import { VulnScanTab } from "vulnscan.slint";
+import { VaultTab } from "vault.slint";
+import { PentestTab } from "pentest.slint";
+import { HardeningTab } from "hardening.slint";
 
 export { I18n }
 export { NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry }
@@ -16,6 +24,8 @@ export { DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem 
 export { AttackHistoryItem, CameraItem, BehaviorProfileItem, DnsBenchmarkItem }
 export { PingResultItem, NetworkHealthReport, RamProcessItem, FileScanFindingItem, FileScanResult }
 export { LocationThreatItem }
+export { AdStatItem, ClientRuleItem, VulnFindingItem, QuarantineItem }
+export { WifiNetworkItem, PentestFindingItem, PersistenceItem }
 
 component LanDeviceRow inherits Rectangle {
     in property <NetworkDevice> device;
@@ -388,6 +398,98 @@ export component AppWindow inherits Window {
     callback open-threat-file(string);
     callback copy-threat-path(string);
     callback rescan-threat-file(string);
+
+    in-out property <int> adblock-total-today: 0;
+    in-out property <string> adblock-pause-left: "";
+    in-out property <string> adblock-status: "";
+    in-out property <[AdStatItem]> adblock-top-domains;
+    in-out property <[AdStatItem]> adblock-top-clients;
+    in-out property <[AdStatItem]> adblock-hourly;
+    in-out property <[ClientRuleItem]> adblock-rules;
+    in-out property <string> adblock-rule-ip-input: "";
+    in-out property <int> adblock-rule-mode: 0;
+    in-out property <string> hosts-hygiene-text: "";
+    in-out property <bool> hosts-hygiene-warning: false;
+    in-out property <bool> hosts-checking: false;
+    callback adblock-pause(int);
+    callback adblock-resume();
+    callback adblock-set-rule();
+    callback adblock-remove-rule(string);
+    callback adblock-clear-stats();
+    callback adblock-export-stats();
+    callback hosts-hygiene-check();
+
+    in-out property <bool> av-realtime: false;
+    in-out property <bool> av-auto-quarantine: false;
+    in-out property <string> av-status: "";
+    in-out property <int> av-signature-count: 0;
+    in-out property <[QuarantineItem]> av-quarantine-list;
+    in-out property <bool> av-is-busy: false;
+    callback av-toggle-realtime(bool);
+    callback av-toggle-auto-quarantine(bool);
+    callback av-quarantine-pick();
+    callback av-restore-quarantine(string);
+    callback av-delete-quarantine(string);
+    callback av-open-folder();
+    callback av-update-signatures();
+    in-out property <bool> av-canary-autolock: false;
+    in-out property <bool> av-canary-in-folders: false;
+    in-out property <bool> av-lock-active: false;
+    callback av-toggle-canary-autolock(bool);
+    callback av-toggle-canary-in-folders(bool);
+    callback av-unlock();
+
+    in-out property <bool> vuln-is-busy: false;
+    in-out property <string> vuln-status: "";
+    in-out property <[VulnFindingItem]> vuln-findings;
+    in-out property <string> vuln-target-ip: "192.168.1.1";
+    callback vuln-audit-local();
+    callback vuln-audit-lan();
+    callback vuln-export-report();
+
+    in-out property <bool> network-override-active: false;
+    in-out property <string> network-status-text: "";
+    in-out property <bool> dns-lan-only: false;
+    in-out property <string> dns-conflict-text: "";
+    in-out property <int> dns-conflict-mode: 0;
+    in-out property <bool> wfp-available: false;
+    callback emergency-restore-network();
+    callback dns-conflict-mode-changed(int);
+
+    in-out property <string> vault-password: "";
+    in-out property <string> vault-status: "";
+    in-out property <string> vault-generated: "";
+    in-out property <int> vault-strength: 0;
+    in-out property <string> vault-strength-label: "";
+    in-out property <bool> vault-busy: false;
+    callback vault-encrypt-file();
+    callback vault-decrypt-file();
+    callback vault-encrypt-folder();
+    callback vault-decrypt-folder();
+    callback vault-secure-delete();
+    callback vault-gen-password();
+    callback vault-copy-password();
+
+    in-out property <string> pentest-ip: "";
+    in-out property <string> pentest-ssid: "";
+    in-out property <string> pentest-status: "";
+    in-out property <bool> pentest-busy: false;
+    in-out property <[PentestFindingItem]> pentest-findings;
+    in-out property <[WifiNetworkItem]> pentest-wifi;
+    callback pentest-scan-tls();
+    callback pentest-password-audit();
+    callback pentest-export-report();
+    callback wifi-audit-scan();
+    callback wifi-audit-weak-psk();
+    callback pentest-kill-switch();
+
+    in-out property <bool> harden-busy: false;
+    in-out property <string> harden-status: "";
+    in-out property <[PentestFindingItem]> harden-findings;
+    callback harden-audit-persistence();
+    callback harden-audit-eventlog();
+    callback harden-audit-usb();
+    callback harden-selfhash();
 
     in-out property <bool> attack-modal-open: false;
     in-out property <int> attack-modal-tab: 2;
@@ -839,11 +941,53 @@ export component AppWindow inherits Window {
                 clicked => { root.active-tab = 8; }
             }
 
+            TabButton {
+                text: I18n.t4("📊 Thống Kê", "📊 Statistics", "📊 统计", "📊 Статистика");
+                active: root.active-tab == 9;
+                active-color: #22c55e;
+                clicked => { root.active-tab = 9; }
+            }
+
+            TabButton {
+                text: I18n.t4("🛡 Diệt Virus", "🛡 Antivirus", "🛡 杀毒", "🛡 Антивирус");
+                active: root.active-tab == 10;
+                active-color: #34d399;
+                clicked => { root.active-tab = 10; }
+            }
+
+            TabButton {
+                text: I18n.t4("🔎 Kiểm Toán", "🔎 Audit", "🔎 审计", "🔎 Аудит");
+                active: root.active-tab == 11;
+                active-color: #60a5fa;
+                clicked => { root.active-tab = 11; }
+            }
+
             if root.is-admin-edition : TabButton {
                 text: I18n.t4("👑 Quản trị Admin", "👑 Admin Suite", "👑 管理员套件", "👑 Панель Admin");
                 active: root.active-tab == 5;
                 active-color: #c084fc;
                 clicked => { root.active-tab = 5; }
+            }
+
+            if root.is-admin-edition : TabButton {
+                text: I18n.t4("🔐 Vault", "🔐 Vault", "🔐 保险库", "🔐 Хранилище");
+                active: root.active-tab == 12;
+                active-color: #c084fc;
+                clicked => { root.active-tab = 12; }
+            }
+
+            if root.is-admin-edition : TabButton {
+                text: I18n.t4("🧰 Pentest", "🧰 Pentest", "🧰 渗透测试", "🧰 Пентест");
+                active: root.active-tab == 13;
+                active-color: #f87171;
+                clicked => { root.active-tab = 13; }
+            }
+
+            if root.is-admin-edition : TabButton {
+                text: I18n.t4("🧱 Chống Hack", "🧱 Hardening", "🧱 加固", "🧱 Укрепление");
+                active: root.active-tab == 14;
+                active-color: #fbbf24;
+                clicked => { root.active-tab = 14; }
             }
 
             Rectangle { horizontal-stretch: 1; }
@@ -1531,6 +1675,74 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     padding: 16px;
                     spacing: 12px;
+
+                    Rectangle {
+                        background: root.dns-conflict-text != "" ? #2a0a0a : #111827;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: root.dns-conflict-text != "" ? #ef4444 : #1f2937;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 8px;
+
+                            Text {
+                                text: "🧯 " + I18n.t4("AN TOÀN MẠNG (XUNG ĐỘT DNS / VPN)", "NETWORK SAFETY (DNS / VPN CONFLICT)", "网络安全（DNS/VPN 冲突）", "БЕЗОПАСНОСТЬ СЕТИ (КОНФЛИКТ DNS/VPN)");
+                                font-size: 14px;
+                                font-weight: 700;
+                                color: #f87171;
+                            }
+
+                            if root.dns-conflict-text != "" : Text {
+                                text: root.dns-conflict-text;
+                                font-size: 11px;
+                                color: #fca5a5;
+                                wrap: word-wrap;
+                            }
+
+                            if root.dns-conflict-text == "" : Text {
+                                text: I18n.t4("Chưa phát hiện phần mềm nào chiếm quyền DNS của máy.", "No software currently owns this machine's DNS.", "未检测到占用本机 DNS 的软件。", "Ни одна программа не управляет DNS этой машины.");
+                                font-size: 11px;
+                                color: #86efac;
+                                wrap: word-wrap;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: center;
+
+                                Text {
+                                    text: I18n.t4("Khi phát hiện xung đột:", "On conflict:", "检测到冲突时：", "При конфликте:");
+                                    font-size: 12px;
+                                    color: #cbd5e1;
+                                    vertical-alignment: center;
+                                }
+
+                                ComboBox {
+                                    width: 300px;
+                                    model: [
+                                        I18n.t4("Tự nhường — chỉ chặn cho thiết bị LAN", "Yield — LAN devices only", "自动让路 — 仅拦截局域网设备", "Уступить — только LAN"),
+                                        I18n.t4("Vẫn ghi đè DNS hệ thống", "Still override system DNS", "仍覆盖系统 DNS", "Всё равно переопределять DNS"),
+                                    ];
+                                    current-index <=> root.dns-conflict-mode;
+                                    selected => { root.dns-conflict-mode-changed(root.dns-conflict-mode); }
+                                }
+
+                                if root.network-override-active : Button {
+                                    text: I18n.t4("🆘 Khôi phục mạng ngay", "🆘 Restore network now", "🆘 立即恢复网络", "🆘 Восстановить сеть");
+                                    clicked => { root.emergency-restore-network(); }
+                                }
+                            }
+
+                            Text {
+                                text: I18n.t4("WFP (chặn IP/cổng): ", "WFP (IP/port blocking): ", "WFP（IP/端口拦截）：", "WFP (блокировка IP/портов): ") + (root.wfp-available
+                                    ? I18n.t4("đang khả dụng", "available", "可用", "доступен")
+                                    : I18n.t4("KHÔNG khả dụng — driver lọc bị VPN/phần mềm bảo mật khác chiếm (lỗi 50)", "UNAVAILABLE — filtering engine owned by another VPN/security product (error 50)", "不可用 — 过滤驱动被其他 VPN/安全软件占用（错误 50）", "НЕДОСТУПНО — фильтрация занята другим VPN/средством защиты (ошибка 50)"));
+                                font-size: 11px;
+                                color: root.wfp-available ? #86efac : #fbbf24;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
 
                     Rectangle {
                         background: #111827;
@@ -2646,6 +2858,149 @@ export component AppWindow inherits Window {
                     open-threat-file(p) => { root.open-threat-file(p); }
                     copy-threat-path(p) => { root.copy-threat-path(p); }
                     rescan-threat-file(p) => { root.rescan-threat-file(p); }
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.active-tab == 9;
+
+                AdBlockStatsTab {
+                    total-today: root.adblock-total-today;
+                    pause-left: root.adblock-pause-left;
+                    status: root.adblock-status;
+                    top-domains: root.adblock-top-domains;
+                    top-clients: root.adblock-top-clients;
+                    hourly: root.adblock-hourly;
+                    rules: root.adblock-rules;
+                    hosts-text: root.hosts-hygiene-text;
+                    hosts-warning: root.hosts-hygiene-warning;
+                    hosts-checking: root.hosts-checking;
+                    rule-ip-input <=> root.adblock-rule-ip-input;
+                    rule-mode <=> root.adblock-rule-mode;
+                    pause(m) => { root.adblock-pause(m); }
+                    resume => { root.adblock-resume(); }
+                    set-rule => { root.adblock-set-rule(); }
+                    remove-rule(ip) => { root.adblock-remove-rule(ip); }
+                    clear-stats => { root.adblock-clear-stats(); }
+                    export-stats => { root.adblock-export-stats(); }
+                    hosts-check => { root.hosts-hygiene-check(); }
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.active-tab == 10;
+
+                AntivirusTab {
+                    av-realtime <=> root.av-realtime;
+                    av-auto-quarantine <=> root.av-auto-quarantine;
+                    av-status: root.av-status;
+                    signature-count: root.av-signature-count;
+                    quarantine-list: root.av-quarantine-list;
+                    is-busy: root.av-is-busy;
+                    toggle-realtime(on) => { root.av-toggle-realtime(on); }
+                    toggle-auto-quarantine(on) => { root.av-toggle-auto-quarantine(on); }
+                    quarantine-pick => { root.av-quarantine-pick(); }
+                    restore-entry(id) => { root.av-restore-quarantine(id); }
+                    delete-entry(id) => { root.av-delete-quarantine(id); }
+                    open-folder => { root.av-open-folder(); }
+                    update-signatures => { root.av-update-signatures(); }
+                    canary-autolock <=> root.av-canary-autolock;
+                    canary-in-folders <=> root.av-canary-in-folders;
+                    lock-active: root.av-lock-active;
+                    toggle-canary-autolock(on) => { root.av-toggle-canary-autolock(on); }
+                    toggle-canary-in-folders(on) => { root.av-toggle-canary-in-folders(on); }
+                    unlock => { root.av-unlock(); }
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.active-tab == 11;
+
+                VulnScanTab {
+                    is-busy: root.vuln-is-busy;
+                    status: root.vuln-status;
+                    findings: root.vuln-findings;
+                    target-ip <=> root.vuln-target-ip;
+                    audit-local => { root.vuln-audit-local(); }
+                    audit-lan => { root.vuln-audit-lan(); }
+                    export-report => { root.vuln-export-report(); }
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.is-admin-edition && root.active-tab == 12;
+
+                VaultTab {
+                    vault-password <=> root.vault-password;
+                    vault-status: root.vault-status;
+                    vault-generated: root.vault-generated;
+                    vault-strength: root.vault-strength;
+                    vault-strength-label: root.vault-strength-label;
+                    vault-busy: root.vault-busy;
+                    vault-encrypt-file => { root.vault-encrypt-file(); }
+                    vault-decrypt-file => { root.vault-decrypt-file(); }
+                    vault-encrypt-folder => { root.vault-encrypt-folder(); }
+                    vault-decrypt-folder => { root.vault-decrypt-folder(); }
+                    vault-secure-delete => { root.vault-secure-delete(); }
+                    vault-gen-password => { root.vault-gen-password(); }
+                    vault-copy-password => { root.vault-copy-password(); }
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.is-admin-edition && root.active-tab == 13;
+
+                PentestTab {
+                    pentest-ip <=> root.pentest-ip;
+                    pentest-ssid <=> root.pentest-ssid;
+                    pentest-status: root.pentest-status;
+                    pentest-busy: root.pentest-busy;
+                    pentest-findings: root.pentest-findings;
+                    pentest-wifi: root.pentest-wifi;
+                    pentest-scan-tls => { root.pentest-scan-tls(); }
+                    pentest-password-audit => { root.pentest-password-audit(); }
+                    pentest-export-report => { root.pentest-export-report(); }
+                    wifi-audit-scan => { root.wifi-audit-scan(); }
+                    wifi-audit-weak-psk => { root.wifi-audit-weak-psk(); }
+                    kill-switch => { root.pentest-kill-switch(); }
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.is-admin-edition && root.active-tab == 14;
+
+                HardeningTab {
+                    harden-busy: root.harden-busy;
+                    harden-status: root.harden-status;
+                    harden-findings: root.harden-findings;
+                    harden-audit-persistence => { root.harden-audit-persistence(); }
+                    harden-audit-eventlog => { root.harden-audit-eventlog(); }
+                    harden-audit-usb => { root.harden-audit-usb(); }
+                    harden-selfhash => { root.harden-selfhash(); }
                 }
             }
         }

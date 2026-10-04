@@ -1,10 +1,10 @@
 [package]
 name = "shield_ghita"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 [features]
 default = []
-admin = ["dep:rcgen", "dep:tokio-rustls"]
+admin = ["dep:rcgen", "dep:tokio-rustls", "dep:argon2"]
 [dependencies]
 slint = { version = "1.8", features = ["raw-window-handle-06"] }
 # Needed to extract the Win32 HWND from slint::Window so the pick-file dialog
@@ -27,6 +27,8 @@ md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"
 getrandom = "0.3"
+aes-gcm = "0.10"
+argon2 = { version = "0.5", optional = true }
 # Admin Edition panel HTTPS only (feature-gated: never compiled into public builds).
 # ring provider matches the one reqwest/hyper-rustls already use in this tree.
 rcgen = { version = "0.13", optional = true, default-features = false, features = ["ring"] }
@@ -38,14 +40,17 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_NetworkManagement_WindowsFilteringPlatform",
+    "Win32_NetworkManagement_WiFi",
     "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Cryptography",
     "Win32_System_Console",
+    "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Registry",
     "Win32_System_Rpc",
     "Win32_System_Services",
+    "Win32_Storage_FileSystem",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

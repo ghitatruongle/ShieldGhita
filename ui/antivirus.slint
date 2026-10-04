@@ -1,0 +1,300 @@
+import { Button, ListView, CheckBox, ScrollView } from "std-widgets.slint";
+import { I18n, QuarantineItem } from "common.slint";
+
+component QuarantineRow inherits Rectangle {
+    in property <QuarantineItem> entry;
+    callback restore-entry(string);
+    callback delete-entry(string);
+
+    height: 62px;
+    background: #111827;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: #334155;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 10px;
+        spacing: 10px;
+        alignment: center;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: "🔒 " + entry.original-name;
+                font-size: 12px;
+                font-weight: 700;
+                color: #f1f5f9;
+                overflow: elide;
+            }
+
+            Text {
+                text: entry.original-path;
+                font-size: 10px;
+                font-family: "Consolas";
+                color: #64748b;
+                overflow: elide;
+            }
+
+            Text {
+                text: entry.reason + " • " + entry.quarantined-at + " • " + entry.size-kb + " KB";
+                font-size: 10px;
+                color: #94a3b8;
+                overflow: elide;
+            }
+        }
+
+        Button {
+            text: I18n.t4("↩ Khôi phục", "↩ Restore", "↩ 恢复", "↩ Восстановить");
+            clicked => { root.restore-entry(entry.entry-id); }
+        }
+
+        Button {
+            text: I18n.t4("🔥 Xóa hẳn", "🔥 Delete", "🔥 删除", "🔥 Удалить");
+            clicked => { root.delete-entry(entry.entry-id); }
+        }
+    }
+}
+
+export component AntivirusTab inherits Rectangle {
+    in-out property <bool> av-realtime: false;
+    in-out property <bool> av-auto-quarantine: false;
+    in property <string> av-status: "";
+    in property <int> signature-count: 0;
+    in property <[QuarantineItem]> quarantine-list;
+    in property <bool> is-busy: false;
+    in-out property <bool> canary-autolock: false;
+    in-out property <bool> canary-in-folders: false;
+    in property <bool> lock-active: false;
+
+    callback toggle-canary-autolock(bool);
+    callback toggle-canary-in-folders(bool);
+    callback unlock();
+
+    callback toggle-realtime(bool);
+    callback toggle-auto-quarantine(bool);
+    callback quarantine-pick();
+    callback restore-entry(string);
+    callback delete-entry(string);
+    callback open-folder();
+    callback update-signatures();
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: center;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: I18n.t4("🛡 DIỆT VIRUS & CÁCH LY", "🛡 ANTIVIRUS & QUARANTINE", "🛡 杀毒与隔离", "🛡 АНТИВИРУС И КАРАНТИН");
+                    font-size: 15px;
+                    font-weight: 800;
+                    color: #34d399;
+                }
+
+                Text {
+                    text: I18n.t4("Bảo vệ thời gian thực • Canh ransomware (tệp mồi + khóa mạng khẩn cấp) • Cách ly mã hóa AES-256, KHÔNG xóa dữ liệu người dùng khi khôi phục", "Real-time guard • Ransomware canary + emergency lock • AES-256 encrypted quarantine, restore never destroys user data", "实时防护 • 勒索软件金丝雀+紧急断网 • AES-256 加密隔离，恢复不破坏数据", "Защита в реальном времени • Канарейка шифровальщика + аварийная блокировка • Карантин с AES-256");
+                    font-size: 11px;
+                    color: #94a3b8;
+                }
+            }
+
+            Button {
+                text: I18n.t4("⬇ Cập nhật chữ ký", "⬇ Update signatures", "⬇ 更新特征库", "⬇ Обновить сигнатуры");
+                enabled: !root.is-busy;
+                clicked => { root.update-signatures(); }
+            }
+
+            Button {
+                text: I18n.t4("📂 Thư mục cách ly", "📂 Quarantine folder", "📂 隔离文件夹", "📂 Папка карантина");
+                clicked => { root.open-folder(); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: center;
+
+            CheckBox {
+                text: I18n.t4("Bảo vệ thời gian thực (Downloads, Desktop, USB)", "Real-time Guard (Downloads, Desktop, USB)", "实时防护（下载、桌面、USB）", "Защита в реальном времени (Downloads, Desktop, USB)");
+                checked <=> root.av-realtime;
+                toggled => { root.toggle-realtime(root.av-realtime); }
+            }
+
+            CheckBox {
+                text: I18n.t4("Tự cách ly tệp nguy hiểm (CRITICAL)", "Auto-quarantine CRITICAL files", "自动隔离高危文件", "Авто-карантин CRITICAL файлов");
+                checked <=> root.av-auto-quarantine;
+                toggled => { root.toggle-auto-quarantine(root.av-auto-quarantine); }
+            }
+
+            CheckBox {
+                text: I18n.t4("Tự khoá mạng khi tệp mồi bị đụng (tự mở sau 5 phút)", "Auto-lock when the canary is tampered (auto-release after 5 min)", "金丝雀被篡改时自动锁网（5 分钟后自动解除）", "Автоблокировка при вмешательстве в приманку (снятие через 5 мин)");
+                checked <=> root.canary-autolock;
+                toggled => { root.toggle-canary-autolock(root.canary-autolock); }
+            }
+
+            CheckBox {
+                text: I18n.t4("Đặt tệp mồi trong thư mục theo dõi", "Place canary inside watched folders", "在受监控文件夹放置诱饵文件", "Размещать приманку в отслеживаемых папках");
+                checked <=> root.canary-in-folders;
+                toggled => { root.toggle-canary-in-folders(root.canary-in-folders); }
+            }
+        }
+
+        if root.lock-active : Rectangle {
+            height: 56px;
+            background: #450a0a;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #ef4444;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 12px;
+                alignment: center;
+
+                Text {
+                    text: I18n.t4("⛔ Mạng đang bị KHOÁ do tệp mồi bị can thiệp — tự mở sau 5 phút", "⛔ Network is LOCKED by a canary tamper — auto-releases in 5 minutes", "⛔ 网络已因金丝雀被篡改而锁定 — 5 分钟后自动解除", "⛔ Сеть заблокирована из-за приманки — снимется через 5 минут");
+                    font-size: 12px;
+                    font-weight: 800;
+                    color: #fca5a5;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+
+                Button {
+                    text: I18n.t4("🔓 Mở khoá ngay", "🔓 Unlock now", "🔓 立即解除", "🔓 Разблокировать");
+                    clicked => { root.unlock(); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            height: 58px;
+            alignment: center;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #111827;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #1f2937;
+
+                VerticalLayout {
+                    padding: 8px;
+                    alignment: center;
+
+                    Text {
+                        text: I18n.t4("CHỮ KÝ ĐANG HOẠT ĐỘNG", "ACTIVE SIGNATURES", "生效特征数", "АКТИВНЫХ СИГНАТУР");
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: #64748b;
+                    }
+
+                    Text {
+                        text: root.signature-count;
+                        font-size: 18px;
+                        font-weight: 800;
+                        color: #38bdf8;
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 2;
+                background: #111827;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #1f2937;
+
+                VerticalLayout {
+                    padding: 8px;
+                    alignment: center;
+
+                    Button {
+                        text: root.is-busy ? I18n.t4("⏳ Đang xử lý...", "⏳ Working...", "⏳ 处理中...", "⏳ Обработка...") : I18n.t4("🔒 Cách ly tệp thủ công", "🔒 Quarantine a file manually", "🔒 手动隔离文件", "🔒 Изолировать файл вручную");
+                        enabled: !root.is-busy;
+                        clicked => { root.quarantine-pick(); }
+                    }
+                }
+            }
+        }
+
+        if root.av-status != "" : Rectangle {
+            height: 36px;
+            background: #0f172a;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #0284c7;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                alignment: center;
+
+                Text {
+                    text: root.av-status;
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: #38bdf8;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Text {
+            text: I18n.t4("🔒 DANH SÁCH CÁCH LY (mã hóa AES-256, khôi phục nguyên vẹn)", "🔒 QUARANTINE LIST (AES-256 encrypted, restorable)", "🔒 隔离列表（AES-256 加密，可恢复）", "🔒 КАРАНТИН (AES-256, восстанавливается)");
+            font-size: 12px;
+            font-weight: 700;
+            color: #cbd5e1;
+        }
+
+        if root.quarantine-list.length == 0 : Rectangle {
+            vertical-stretch: 1;
+            background: #111827;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #1f2937;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 8px;
+
+                Text {
+                    text: "✨";
+                    font-size: 34px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: I18n.t4("Chưa có tệp nào trong cách ly. Quét vị trí hoặc để Bảo vệ Thời gian thực tự bắt tệp nguy hiểm.", "Quarantine is empty. Use Location Scan or let Real-time Guard catch malicious files.", "隔离区为空。使用位置扫描或让实时防护捕获恶意文件。", "Карантин пуст. Используйте сканирование или защиту в реальном времени.");
+                    font-size: 12px;
+                    color: #64748b;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if root.quarantine-list.length > 0 : ListView {
+            vertical-stretch: 1;
+            for entry in root.quarantine-list : QuarantineRow {
+                entry: entry;
+                restore-entry(id) => { root.restore-entry(id); }
+                delete-entry(id) => { root.delete-entry(id); }
+            }
+        }
+    }
+}
