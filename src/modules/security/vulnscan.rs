@@ -707,7 +707,7 @@ pub fn export_findings_csv(findings: &[VulnFinding]) -> Result<String, String> {
             csv_escape(&f.recommendation),
         ));
     }
-    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+    let app_data = crate::modules::paths::data_base();
     let path = std::path::PathBuf::from(app_data)
         .join("ShieldGhita")
         .join(format!(

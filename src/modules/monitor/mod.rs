@@ -54,7 +54,7 @@ pub struct NetworkMonitor {
 
 impl NetworkMonitor {
     pub fn new(max_logs: usize, sec_engine: Arc<crate::modules::security::SecurityEngine>) -> Self {
-        let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        let app_data = crate::modules::paths::data_base();
         let log_dir = PathBuf::from(app_data).join("ShieldGhita");
         let _ = fs::create_dir_all(&log_dir);
         let log_file_path = log_dir.join("dns_log.json");
@@ -257,7 +257,7 @@ impl NetworkMonitor {
                 l.is_blocked
             ));
         }
-        let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        let app_data = crate::modules::paths::data_base();
         let export_path = PathBuf::from(app_data).join("ShieldGhita").join(format!(
             "dns_log_export_{}.csv",
             Local::now().format("%Y%m%d_%H%M%S")

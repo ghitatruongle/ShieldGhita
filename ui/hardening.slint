@@ -81,6 +81,8 @@ export component HardeningTab inherits Rectangle {
     callback harden-audit-eventlog();
     callback harden-audit-usb();
     callback harden-selfhash();
+    callback harden-fix(string);
+    callback harden-rollback(string);
 
     ScrollView {
         VerticalLayout {
@@ -138,6 +140,70 @@ export component HardeningTab inherits Rectangle {
                     enabled: !root.harden-busy;
                     clicked => { root.harden-selfhash(); }
                 }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: center;
+
+                Text {
+                    text: I18n.t4("🔧 Khắc phục:", "🔧 Fix:", "🔧 修复：", "🔧 Исправить:");
+                    font-size: 12px;
+                    font-weight: 800;
+                    color: #6ee7b7;
+                    vertical-alignment: center;
+                }
+
+                Button {
+                    text: "SMBv1";
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-fix("smbv1"); }
+                }
+                Button {
+                    text: "RDP NLA";
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-fix("rdp_nla"); }
+                }
+                Button {
+                    text: "LSA";
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-fix("lsa_ppl"); }
+                }
+                Button {
+                    text: "UAC";
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-fix("uac_enable"); }
+                }
+                Button {
+                    text: I18n.t4("Tắt AutoRun", "AutoRun off", "关闭AutoRun", "Автозапуск выкл");
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-fix("autorun_off"); }
+                }
+                Button {
+                    text: I18n.t4("Chặn ẩn danh", "Block anonymous", "阻止匿名", "Аноним выкл");
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-fix("restrict_anon"); }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: center;
+
+                Text {
+                    text: I18n.t4("↩ Hoàn tác:", "↩ Undo:", "↩ 撤销：", "↩ Отменить:");
+                    font-size: 12px;
+                    font-weight: 800;
+                    color: #fbbf24;
+                    vertical-alignment: center;
+                }
+
+                Button { text: "SMBv1"; enabled: !root.harden-busy; clicked => { root.harden-rollback("smbv1"); } }
+                Button { text: "RDP NLA"; enabled: !root.harden-busy; clicked => { root.harden-rollback("rdp_nla"); } }
+                Button { text: "LSA"; enabled: !root.harden-busy; clicked => { root.harden-rollback("lsa_ppl"); } }
+                Button { text: "UAC"; enabled: !root.harden-busy; clicked => { root.harden-rollback("uac_enable"); } }
+                Button { text: "AutoRun"; enabled: !root.harden-busy; clicked => { root.harden-rollback("autorun_off"); } }
+                Button { text: "Anonymous"; enabled: !root.harden-busy; clicked => { root.harden-rollback("restrict_anon"); } }
             }
 
             if root.harden-status != "" : Rectangle {

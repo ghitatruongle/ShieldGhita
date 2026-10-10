@@ -1,3 +1,4 @@
+pub mod control_plane;
 pub mod hotkey;
 pub mod ui_bridge;
 
@@ -14,6 +15,8 @@ use chrono::Local;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tracing::info;
+
+static LOCAL_SERVICES_STARTED: AtomicBool = AtomicBool::new(false);
 
 pub struct AppState {
     pub blocker: Arc<DnsBlocker>,
@@ -53,7 +56,11 @@ impl AppState {
 
         let t1 = std::time::Instant::now();
         let wfp_blocker = Arc::new(WfpBlocker::new());
-        if let Err(e) = wfp_blocker.initialize() {
+        if crate::modules::service::remote_mode() {
+            tracing::info!(
+                "Remote mode: WFP owned by ShieldGhitaCore service — local WFP init skipped"
+            );
+        } else if let Err(e) = wfp_blocker.initialize() {
             tracing::warn!("WFP initialization non-critical notice: {}", e);
         }
         wfp_blocker.set_blocked_ips(cfg.wfp_blocked_ips.clone());
@@ -61,7 +68,7 @@ impl AppState {
         tracing::info!("Startup sub [wfp-init]: {} ms", t1.elapsed().as_millis());
 
         let mut self_def = SelfDefense::new();
-        if cfg.protection_enabled {
+        if cfg.protection_enabled && !crate::modules::service::remote_mode() {
             if let Err(e) = self_def.enable() {
                 tracing::warn!("Self-defense enable non-critical notice: {}", e);
             }
@@ -136,12 +143,22 @@ impl AppState {
         });
 
         let t4 = std::time::Instant::now();
-        Self::start_background_services(&state);
+        if crate::modules::service::remote_mode() {
+            tracing::info!(
+                "Remote mode: protection owned by ShieldGhitaCore service — local background services skipped"
+            );
+        } else {
+            Self::start_background_services(&state);
+        }
         tracing::info!("Startup sub [bg-services]: {} ms", t4.elapsed().as_millis());
         Ok(state)
     }
 
-    fn start_background_services(state: &Arc<Self>) {
+    pub fn start_background_services(state: &Arc<Self>) {
+        if LOCAL_SERVICES_STARTED.swap(true, Ordering::SeqCst) {
+            info!("Local background services already started — skipping duplicate start");
+            return;
+        }
         let cfg = state
             .config
             .read()
@@ -383,4 +400,37 @@ impl AppState {
             });
         }
     }
+}
+
+pub fn switch_to_local_mode(state: &Arc<AppState>) -> Result<(), String> {
+    use crate::modules::service::install::CoreServiceState;
+    match crate::modules::service::install::query_state() {
+        CoreServiceState::Running | CoreServiceState::StartPending | CoreServiceState::Paused => {
+            return Err(
+                "Service ShieldGhitaCore vẫn đang chạy — dừng service trước khi chuyển Local."
+                    .to_string(),
+            );
+        }
+        _ => {}
+    }
+    crate::modules::service::set_remote_mode(false);
+    AppState::start_background_services(state);
+    #[cfg(feature = "admin")]
+    {
+        let panel_enabled = state
+            .config
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .admin_panel_enabled;
+        if panel_enabled && !crate::modules::panel::panel_started() {
+            crate::modules::panel::mark_panel_started();
+            let panel_state = state.clone();
+            state
+                .runtime
+                .spawn(async move { crate::modules::panel::PanelServer::serve(panel_state).await });
+            info!("Admin panel started after switching to local mode");
+        }
+    }
+    info!("Switched UI back to local protection mode");
+    Ok(())
 }

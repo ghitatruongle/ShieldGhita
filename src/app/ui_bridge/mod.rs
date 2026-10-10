@@ -189,14 +189,19 @@ pub fn setup_ui_bridge(
     #[cfg(feature = "admin")]
     admin::register(ui, &state);
     #[cfg(feature = "admin")]
-    if cfg.admin_panel_enabled {
+    if cfg.admin_panel_enabled
+        && !crate::modules::service::remote_mode()
+        && !crate::modules::panel::panel_started()
+    {
+        crate::modules::panel::mark_panel_started();
         let panel_state = state.clone();
         state
             .runtime
             .spawn(async move { crate::modules::panel::PanelServer::serve(panel_state).await });
-    } else {
+    } else if cfg!(feature = "admin") {
         tracing::info!(
-            "Admin panel disabled (admin_panel_enabled=false in config.toml) — restart to apply"
+            "Admin panel not started from UI (remote_mode={} or admin_panel_enabled=false)",
+            crate::modules::service::remote_mode()
         );
     }
     #[cfg(not(feature = "admin"))]
@@ -228,6 +233,8 @@ pub fn setup_ui_bridge(
         ui.on_harden_audit_eventlog(|| {});
         ui.on_harden_audit_usb(|| {});
         ui.on_harden_selfhash(|| {});
+        ui.on_harden_fix(|_| {});
+        ui.on_harden_rollback(|_| {});
         ui.on_vault_encrypt_file(|| {});
         ui.on_vault_decrypt_file(|| {});
         ui.on_vault_encrypt_folder(|| {});

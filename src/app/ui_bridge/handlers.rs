@@ -16,6 +16,13 @@ fn register_quarantine_callback(
 ) {
     let weak = ui.as_weak();
     ui.on_toggle_device_quarantine(move |ip, quarantine| {
+        if remote_send(crate::modules::service::protocol::CoreRequest::Quarantine {
+            ip: ip.to_string(),
+            on: quarantine,
+        }) {
+            refresh();
+            return;
+        }
         let result = if quarantine {
             engine.quarantine_ip(ip.as_str())
         } else {
@@ -55,7 +62,50 @@ fn bytes_to_mb_string(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
 }
 
+fn remote_config_patch(field: &str, value: bool) -> bool {
+    if !crate::modules::service::remote_mode() {
+        return false;
+    }
+    let request = crate::modules::service::protocol::CoreRequest::ConfigPatch {
+        field: field.to_string(),
+        value,
+    };
+    if let Err(e) =
+        crate::app::control_plane::CoreClient::send(request, std::time::Duration::from_secs(5))
+    {
+        tracing::error!("Service config patch {field} failed: {e}");
+    }
+    true
+}
+
+fn remote_send(request: crate::modules::service::protocol::CoreRequest) -> bool {
+    if !crate::modules::service::remote_mode() {
+        return false;
+    }
+    if let Err(e) =
+        crate::app::control_plane::CoreClient::send(request, std::time::Duration::from_secs(5))
+    {
+        tracing::error!("Service action failed: {e}");
+    }
+    true
+}
+
 pub fn apply_protection(s: &Arc<AppState>, enabled: bool) {
+    if crate::modules::service::remote_mode() {
+        let request = crate::modules::service::protocol::CoreRequest::Protection { on: enabled };
+        match crate::app::control_plane::CoreClient::call(
+            request,
+            std::time::Duration::from_secs(5),
+        ) {
+            Ok(_) => info!(
+                "Protection {} delegated to ShieldGhitaCore service",
+                enabled
+            ),
+            Err(e) => tracing::error!("Service protection call failed: {}", e),
+        }
+        s.protection_atomic.store(enabled, Ordering::SeqCst);
+        return;
+    }
     let _sequence_guard = APPLY_PROTECTION_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -266,13 +316,234 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
     });
 
     ui.on_toggle_master_lock(move |locked| {
+        if crate::modules::service::remote_mode() {
+            let request = crate::modules::service::protocol::CoreRequest::Lock { on: locked };
+            if let Err(e) = crate::app::control_plane::CoreClient::call(
+                request,
+                std::time::Duration::from_secs(5),
+            ) {
+                tracing::error!("Service master-lock call failed: {}", e);
+            }
+            return;
+        }
         if let Err(e) = dns_manager::set_master_internet_lock(locked) {
             tracing::error!("Failed to toggle master internet lock: {}", e);
         }
     });
 
+    fn service_state_text() -> String {
+        let state = crate::modules::service::install::query_state();
+        use crate::modules::service::install::CoreServiceState::*;
+        let base = match state {
+            NotInstalled => crate::modules::i18n::tr4(
+                "⚪ Chưa cài — bảo vệ chạy cùng app",
+                "⚪ Not installed — protection runs with the app",
+                "⚪ 未安装 — 随应用运行",
+                "⚪ Не установлена — защита вместе с приложением",
+            ),
+            Running => crate::modules::i18n::tr4(
+                "🟢 Đang chạy — bảo vệ sống sót qua đăng xuất",
+                "🟢 Running — protection survives logoff",
+                "🟢 运行中 — 保护在注销后仍持续",
+                "🟢 Работает — защита переживает выход",
+            ),
+            Stopped => crate::modules::i18n::tr4(
+                "⚪ Đã cài — đang dừng",
+                "⚪ Installed — stopped",
+                "⚪ 已安装 — 已停止",
+                "⚪ Установлена — остановлена",
+            ),
+            StartPending => "🟡 Start pending...",
+            StopPending => "🟡 Stop pending...",
+            Paused => "🟡 Paused",
+            Unknown => "❓ Unknown",
+        };
+        if crate::modules::service::remote_mode() {
+            format!(
+                "{base} • {}",
+                crate::modules::i18n::tr4(
+                    "UI đang điều khiển qua service",
+                    "UI controls via service",
+                    "UI 通过服务控制",
+                    "UI управляет через службу"
+                )
+            )
+        } else {
+            base.to_string()
+        }
+    }
+
+    fn spawn_service_action(
+        state: &Arc<AppState>,
+        ui: &slint::Weak<crate::AppWindow>,
+        busy: &'static str,
+        action: impl FnOnce() -> Result<String, String> + Send + 'static,
+    ) {
+        if let Some(u) = ui.upgrade() {
+            u.set_service_status(busy.into());
+        }
+        let runtime = state.runtime.clone();
+        let ui_weak = ui.clone();
+        runtime.spawn(async move {
+            let result = tokio::task::spawn_blocking(action)
+                .await
+                .unwrap_or_else(|e| Err(format!("task: {e}")));
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(u) = ui_weak.upgrade() {
+                    match result {
+                        Ok(msg) => u.set_service_status(msg.into()),
+                        Err(e) => u.set_service_status(format!("❌ {e}").into()),
+                    }
+                }
+            });
+        });
+    }
+
+    {
+        let s_sv = state.clone();
+        let ui_sv = ui.as_weak();
+        ui.on_service_install(move || {
+            spawn_service_action(
+                &s_sv,
+                &ui_sv,
+                "⏳ Installing ShieldGhitaCore service...",
+                || crate::modules::service::install::install(true),
+            );
+        });
+    }
+    {
+        let s_sv = state.clone();
+        let ui_sv = ui.as_weak();
+        ui.on_service_stop(move || {
+            spawn_service_action(
+                &s_sv,
+                &ui_sv,
+                "⏳ Stopping service...",
+                crate::modules::service::install::stop,
+            );
+        });
+    }
+    {
+        let s_sv = state.clone();
+        let ui_sv = ui.as_weak();
+        ui.on_service_uninstall(move || {
+            spawn_service_action(
+                &s_sv,
+                &ui_sv,
+                "⏳ Uninstalling service...",
+                crate::modules::service::install::uninstall,
+            );
+        });
+    }
+    {
+        let s_sr = state.clone();
+        let ui_sr = ui.as_weak();
+        ui.on_service_refresh(move || {
+            if let Some(u) = ui_sr.upgrade() {
+                u.set_service_status(
+                    crate::modules::i18n::tr4(
+                        "⏳ Đang kiểm tra service...",
+                        "⏳ Checking service...",
+                        "⏳ 正在检查服务...",
+                        "⏳ Проверка службы...",
+                    )
+                    .into(),
+                );
+            }
+            let ui_weak = ui_sr.clone();
+            s_sr.runtime.spawn(async move {
+                let diag = tokio::task::spawn_blocking(|| {
+                    let t0 = std::time::Instant::now();
+                    let ipc = crate::app::control_plane::CoreClient::handshake(
+                        std::time::Duration::from_secs(3),
+                    );
+                    let ms = t0.elapsed().as_millis();
+                    let mut lines: Vec<String> = Vec::new();
+                    match ipc {
+                        Ok(()) => lines.push(format!("IPC ✓ ({} ms)", ms)),
+                        Err(e) => lines.push(format!("IPC ✗ ({} ms): {}", ms, e)),
+                    }
+                    let data_dir = crate::modules::paths::data_dir();
+                    lines.push(format!("Data: {}", data_dir.display()));
+                    lines.push(format!(
+                        "Migration: {}",
+                        if data_dir.join(".migrated_programdata").exists() {
+                            "✓ ProgramData"
+                        } else {
+                            "chưa chuyển / APPDATA"
+                        }
+                    ));
+                    let errors = crate::app::control_plane::last_ipc_errors();
+                    if !errors.is_empty() {
+                        lines.push(format!("Lỗi gần nhất: {}", errors.join(" | ")));
+                    }
+                    lines.join("  •  ")
+                })
+                .await
+                .unwrap_or_default();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(u) = ui_weak.upgrade() {
+                        u.set_service_status(
+                            format!("{}  •  {}", service_state_text(), diag).into(),
+                        );
+                    }
+                });
+            });
+        });
+        if let Some(u) = ui.as_weak().upgrade() {
+            u.set_service_status(service_state_text().into());
+        }
+    }
+    {
+        let s_sl = state.clone();
+        let ui_sl = ui.as_weak();
+        ui.on_service_switch_local(move || {
+            if let Some(u) = ui_sl.upgrade() {
+                u.set_service_status(
+                    crate::modules::i18n::tr4(
+                        "⏳ Đang chuyển về chế độ Local...",
+                        "⏳ Switching to local mode...",
+                        "⏳ 正在切换到本地模式...",
+                        "⏳ Переключение на локальный режим...",
+                    )
+                    .into(),
+                );
+            }
+            let ui_weak = ui_sl.clone();
+            let s2 = s_sl.clone();
+            s_sl.runtime.spawn(async move {
+                let result =
+                    tokio::task::spawn_blocking(move || crate::app::switch_to_local_mode(&s2))
+                        .await
+                        .unwrap_or_else(|e| Err(format!("task: {e}")));
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(u) = ui_weak.upgrade() {
+                        match result {
+                            Ok(()) => {
+                                u.set_service_down(false);
+                                u.set_service_status(
+                                    crate::modules::i18n::tr4(
+                                        "🟢 Đã chuyển về chế độ Local — bảo vệ chạy trong app.",
+                                        "🟢 Switched to Local mode — protection runs in-app.",
+                                        "🟢 已切换到本地模式 — 保护在应用内运行。",
+                                        "🟢 Локальный режим — защита в приложении.",
+                                    )
+                                    .into(),
+                                );
+                            }
+                            Err(e) => u.set_service_status(format!("❌ {e}").into()),
+                        }
+                    }
+                });
+            });
+        });
+    }
+
     let s = state.clone();
     ui.on_toggle_silent_sinkhole(move |enabled| {
+        if remote_send(crate::modules::service::protocol::CoreRequest::Sinkhole { on: enabled }) {
+            return;
+        }
         s.blocker.set_silent_sinkhole(enabled);
         info!(
             "Silent Sinkhole Mode changed: {}",
@@ -282,6 +553,10 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s = state.clone();
     ui.on_toggle_network_wide_adblock(move |enabled| {
+        if remote_send(crate::modules::service::protocol::CoreRequest::NetworkWide { on: enabled })
+        {
+            return;
+        }
         if let Ok(mut cfg_guard) = s.config.write() {
             cfg_guard.network_wide_adblock_enabled = enabled;
             let _ = cfg_guard.save();
@@ -299,6 +574,9 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s = state.clone();
     ui.on_toggle_attack_detection(move |enabled| {
+        if remote_config_patch("attack_detection", enabled) {
+            return;
+        }
         if let Ok(mut cfg_guard) = s.config.write() {
             cfg_guard.attack_detection_enabled = enabled;
             let _ = cfg_guard.save();
@@ -308,6 +586,9 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s = state.clone();
     ui.on_toggle_auto_block_attacks(move |enabled| {
+        if remote_config_patch("auto_block", enabled) {
+            return;
+        }
         if let Ok(mut cfg_guard) = s.config.write() {
             cfg_guard.auto_block_attacks = enabled;
             let _ = cfg_guard.save();
@@ -317,6 +598,9 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s = state.clone();
     ui.on_toggle_arp_spoof_detection(move |enabled| {
+        if remote_config_patch("arp_spoof", enabled) {
+            return;
+        }
         if let Ok(mut cfg_guard) = s.config.write() {
             cfg_guard.arp_spoof_detection = enabled;
             let _ = cfg_guard.save();
@@ -1813,6 +2097,25 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         let Some(mode) = crate::modules::dns::client_policy::ClientMode::from_id(mode_id) else {
             return;
         };
+        if crate::modules::service::remote_mode() {
+            let ok = remote_send(crate::modules::service::protocol::CoreRequest::Policy {
+                ip: ip_str.clone(),
+                mode: mode_id,
+                remove: false,
+            });
+            if let Some(u) = ui_ab.upgrade() {
+                let label = mode.localized_label();
+                u.set_adblock_status(
+                    if ok {
+                        format!("✅ {label}: {ip_str}")
+                    } else {
+                        format!("❌ {label}: {ip_str}")
+                    }
+                    .into(),
+                );
+            }
+            return;
+        }
         let own_lan_ip = dns_manager::get_lan_ip_address();
         let targets_self = parsed.is_loopback()
             || (!own_lan_ip.is_empty() && own_lan_ip == ip_str);
@@ -1857,6 +2160,13 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
     let ui_ab = ui.as_weak();
     ui.on_adblock_remove_rule(move |ip_text| {
         let ip_str = ip_text.trim().to_string();
+        if remote_send(crate::modules::service::protocol::CoreRequest::Policy {
+            ip: ip_str.clone(),
+            mode: 0,
+            remove: true,
+        }) {
+            return;
+        }
         if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
             s_ab.blocker.adblock.remove_client_rule(&ip);
         }
@@ -2006,6 +2316,9 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s_av = state.clone();
     ui.on_av_toggle_realtime(move |enabled| {
+        if remote_config_patch("av_realtime", enabled) {
+            return;
+        }
         s_av.realtime_guard.set_enabled(enabled);
         if let Ok(mut cfg_guard) = s_av.config.write() {
             cfg_guard.av_realtime_enabled = enabled;
@@ -2016,6 +2329,9 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s_av = state.clone();
     ui.on_av_toggle_auto_quarantine(move |enabled| {
+        if remote_config_patch("av_auto_quarantine", enabled) {
+            return;
+        }
         s_av.realtime_guard.set_auto_quarantine(enabled);
         if let Ok(mut cfg_guard) = s_av.config.write() {
             cfg_guard.av_auto_quarantine_critical = enabled;
@@ -2156,6 +2472,9 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s_can = state.clone();
     ui.on_av_toggle_canary_autolock(move |enabled| {
+        if remote_config_patch("av_canary_autolock", enabled) {
+            return;
+        }
         s_can.realtime_guard.set_canary_autolock(enabled);
         if let Ok(mut cfg_guard) = s_can.config.write() {
             cfg_guard.av_canary_autolock = enabled;
@@ -2165,6 +2484,9 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s_can = state.clone();
     ui.on_av_toggle_canary_in_folders(move |enabled| {
+        if remote_config_patch("av_canary_in_folders", enabled) {
+            return;
+        }
         s_can.realtime_guard.set_watch_canary_in_folders(enabled);
         if let Ok(mut cfg_guard) = s_can.config.write() {
             cfg_guard.av_canary_in_folders = enabled;

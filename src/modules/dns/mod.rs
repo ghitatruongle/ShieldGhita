@@ -357,17 +357,17 @@ impl DnsBlocker {
     }
 
     fn disk_store_path() -> PathBuf {
-        let d = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+        let d = crate::modules::paths::data_base();
         PathBuf::from(d).join("ShieldGhita").join("blocklist.bin")
     }
 
     fn cache_path() -> PathBuf {
-        let d = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+        let d = crate::modules::paths::data_base();
         PathBuf::from(d).join("ShieldGhita").join("blocklist.cache")
     }
 
     fn etag_store_path() -> PathBuf {
-        let d = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+        let d = crate::modules::paths::data_base();
         PathBuf::from(d)
             .join("ShieldGhita")
             .join("blocklist_etags.json")

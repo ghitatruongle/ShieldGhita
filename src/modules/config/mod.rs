@@ -137,7 +137,6 @@ fn default_blocklist_urls() -> Vec<String> {
         "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
         "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt".to_string(),
         "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts".to_string(),
-        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt".to_string(),
     ]
 }
 
@@ -194,8 +193,6 @@ impl Default for AppConfig {
                 "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt"
                     .to_string(),
                 "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts".to_string(),
-                "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt"
-                    .to_string(),
             ],
             custom_blocked_domains: Vec::new(),
             custom_allowed_domains: Vec::new(),
@@ -241,7 +238,7 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
-        let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        let app_data = crate::modules::paths::data_base();
         PathBuf::from(app_data)
             .join("ShieldGhita")
             .join("config.toml")

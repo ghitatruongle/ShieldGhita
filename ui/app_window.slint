@@ -490,6 +490,8 @@ export component AppWindow inherits Window {
     callback harden-audit-eventlog();
     callback harden-audit-usb();
     callback harden-selfhash();
+    callback harden-fix(string);
+    callback harden-rollback(string);
 
     in-out property <bool> attack-modal-open: false;
     in-out property <int> attack-modal-tab: 2;
@@ -565,6 +567,13 @@ export component AppWindow inherits Window {
     callback toggle-autostart(bool);
     callback toggle-minimize-to-tray(bool);
     callback toggle-notifications(bool);
+    in-out property <string> service-status: "";
+    in-out property <bool> service-down: false;
+    callback service-install();
+    callback service-stop();
+    callback service-uninstall();
+    callback service-refresh();
+    callback service-switch-local();
     callback change-language(string);
     callback refresh-devices();
     callback refresh-connections();
@@ -1946,6 +1955,48 @@ export component AppWindow inherits Window {
                                 font-size: 10px;
                                 color: #64748b;
                             }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 2;
+                                    spacing: 2px;
+
+                                    Text {
+                                        text: "🧩 " + (I18n.t("Service Mode — ShieldGhitaCore", "Service Mode — ShieldGhitaCore", "服务模式 — ShieldGhitaCore"));
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        color: #38bdf8;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: root.service-status;
+                                        font-size: 10px;
+                                        color: #94a3b8;
+                                        overflow: elide;
+                                        wrap: word-wrap;
+                                    }
+                                }
+
+                                Button {
+                                    text: I18n.t("⚙ Cài & Bật", "⚙ Install & Start", "⚙ 安装并启动");
+                                    clicked => { root.service-install(); }
+                                }
+                                Button {
+                                    text: I18n.t("⏸ Dừng", "⏸ Stop", "⏸ 停止");
+                                    clicked => { root.service-stop(); }
+                                }
+                                Button {
+                                    text: I18n.t("🗑 Gỡ", "🗑 Uninstall", "🗑 卸载");
+                                    clicked => { root.service-uninstall(); }
+                                }
+                                Button {
+                                    text: "🔄";
+                                    clicked => { root.service-refresh(); }
+                                }
+                            }
                         }
                     }
 
@@ -1994,7 +2045,7 @@ export component AppWindow inherits Window {
                     spacing: 14px;
 
                     Text {
-                        text: I18n.t("🌐 Web Panel (điện thoại/máy khác trong mạng): ", "🌐 Web Panel (phone/other device on this LAN): ", "🌐 网页面板（局域网内手机/其他设备）: ") + "http://" + root.host-lan-ip + ":2525";
+                        text: I18n.t("🌐 Web Panel (điện thoại/máy khác trong mạng): ", "🌐 Web Panel (phone/other device on this LAN): ", "🌐 网页面板（局域网内手机/其他设备）: ") + "https://" + root.host-lan-ip + ":2525";
                         font-size: 11px;
                         font-weight: 700;
                         color: #34d399;
@@ -3001,7 +3052,40 @@ export component AppWindow inherits Window {
                     harden-audit-eventlog => { root.harden-audit-eventlog(); }
                     harden-audit-usb => { root.harden-audit-usb(); }
                     harden-selfhash => { root.harden-selfhash(); }
+                    harden-fix(s) => { root.harden-fix(s); }
+                    harden-rollback(s) => { root.harden-rollback(s); }
                 }
+            }
+        }
+    }
+
+    if root.service-down : Rectangle {
+        z: 145;
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: 56px;
+        background: #450a0a;
+
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 12px;
+            spacing: 12px;
+            alignment: center;
+
+            Text {
+                text: I18n.t("⚠ Service ShieldGhitaCore đã DỪNG — chế độ remote không có bảo vệ.", "⚠ ShieldGhitaCore service is STOPPED — remote mode has no protection.", "⚠ ShieldGhitaCore 服务已停止 — 远程模式无保护。");
+                font-size: 12px;
+                font-weight: 700;
+                color: #fca5a5;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Button {
+                text: I18n.t("▶ Chạy Local ngay", "▶ Switch to Local now", "▶ 立即本地运行");
+                clicked => { root.service-switch-local(); }
             }
         }
     }

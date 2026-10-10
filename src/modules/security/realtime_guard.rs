@@ -480,9 +480,7 @@ impl Default for RealtimeGuard {
 }
 
 fn app_canary_path() -> std::path::PathBuf {
-    std::env::var("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+    crate::modules::paths::data_dir()
         .join("ShieldGhita")
         .join("canary")
         .join(APP_CANARY_NAME)

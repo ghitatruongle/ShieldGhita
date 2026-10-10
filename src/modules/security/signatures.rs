@@ -18,7 +18,7 @@ fn builtin_hashes() -> HashSet<String> {
 }
 
 fn signature_store_path() -> PathBuf {
-    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+    let app_data = crate::modules::paths::data_base();
     PathBuf::from(app_data)
         .join("ShieldGhita")
         .join("signatures.json")

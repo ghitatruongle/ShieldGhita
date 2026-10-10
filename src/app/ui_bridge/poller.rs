@@ -121,7 +121,7 @@ pub fn restore_window_geom(ui: &crate::AppWindow, cfg: &crate::modules::config::
         ));
     }
 
-    if cfg.window_x != -1 && cfg.window_y != -1 {
+    if cfg.window_x != -1 && cfg.window_y != -1 && !(cfg.window_x == 0 && cfg.window_y == 0) {
         let scale = win.scale_factor();
         let mut x = cfg.window_x as f32;
         let mut y = cfg.window_y as f32;
@@ -136,6 +136,13 @@ pub fn restore_window_geom(ui: &crate::AppWindow, cfg: &crate::modules::config::
             y = (y * scale).clamp(min_y, max_y) / scale;
         }
         win.set_position(slint::LogicalPosition::new(x, y));
+    } else if let Some((vx, vy, vw, vh)) = virtual_desktop_px() {
+        let phys_w = cfg.window_width as f32 * win.scale_factor();
+        let phys_h = cfg.window_height as f32 * win.scale_factor();
+        let x = vx as f32 + ((vw as f32 - phys_w) / 2.0).max(0.0);
+        let y = vy as f32 + ((vh as f32 - phys_h) / 2.0).max(0.0);
+        let scale = win.scale_factor();
+        win.set_position(slint::LogicalPosition::new(x / scale, y / scale));
     }
 
     if cfg.window_maximized {
@@ -162,6 +169,8 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
     let mut prev_net: std::collections::HashMap<String, (u64, u64)> =
         std::collections::HashMap::new();
     let mut prev_net_t: Option<Instant> = None;
+    let mut remote_tick: u32 = 0;
+    let known_lists_hash = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
     let timer = slint::Timer::default();
     timer.start(
@@ -202,7 +211,62 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
             }
 
             if visible_now {
-                super::refresh::refresh_ui_state(&ui_win, &state);
+                if crate::modules::service::remote_mode() {
+                    remote_tick = remote_tick.wrapping_add(1);
+                    if remote_tick.is_multiple_of(5) {
+                        let ui_bg = ui_weak.clone();
+                        state.runtime.spawn(async move {
+                            let state_now = tokio::task::spawn_blocking(
+                                crate::modules::service::install::query_state,
+                            )
+                            .await
+                            .unwrap_or(crate::modules::service::install::CoreServiceState::Unknown);
+                            let down = matches!(
+                                state_now,
+                                crate::modules::service::install::CoreServiceState::NotInstalled
+                                    | crate::modules::service::install::CoreServiceState::Stopped
+                            );
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(u) = ui_bg.upgrade() {
+                                    u.set_service_down(down);
+                                    u.set_host_lan_ip(
+                                        crate::modules::system::dns_manager::get_lan_ip_address()
+                                            .into(),
+                                    );
+                                }
+                            });
+                        });
+                    }
+                    if !ui_win.get_service_down() {
+                        let tab = ui_win.get_active_tab();
+                        let ui_bg = ui_weak.clone();
+                        let s_bg = state.clone();
+                        let known = known_lists_hash.clone();
+                        state.runtime.spawn(async move {
+                            let fetched = {
+                                let known_val = known.load(Ordering::SeqCst);
+                                tokio::task::spawn_blocking(move || {
+                                    crate::app::control_plane::CoreClient::snapshot(
+                                        tab,
+                                        known_val,
+                                        std::time::Duration::from_secs(3),
+                                    )
+                                })
+                                .await
+                                .unwrap_or_else(|e| Err(format!("task: {e}")))
+                            };
+                            let applied = slint::invoke_from_event_loop(move || {
+                                if let (Ok(snap), Some(u)) = (fetched, ui_bg.upgrade()) {
+                                    known.store(snap.lists_hash, Ordering::SeqCst);
+                                    super::refresh::apply_remote_snapshot(&u, &s_bg, &snap);
+                                }
+                            });
+                            let _ = applied;
+                        });
+                    }
+                } else {
+                    super::refresh::refresh_ui_state(&ui_win, &state);
+                }
             }
 
             if visible_now {
@@ -499,6 +563,9 @@ fn track_window_geom(
         geom.h = last_seen.h;
         geom.x = last_seen.x;
         geom.y = last_seen.y;
+    }
+    if geom.x == 0 && geom.y == 0 && !geom.maximized {
+        return;
     }
 
     if geom != *last_seen {

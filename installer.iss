@@ -1,5 +1,5 @@
 #define MyAppName "Shield Ghita"
-#define MyAppVersion "0.1.2"
+#define MyAppVersion "0.1.3"
 #define MyAppPublisher "ShieldGhita"
 #define MyAppExeName "shield_ghita.exe"
 
@@ -58,6 +58,10 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+Filename: "sc.exe"; Parameters: "stop ShieldGhitaCore"; Flags: runhidden; RunOnceId: "StopCore"
+Filename: "sc.exe"; Parameters: "delete ShieldGhitaCore"; Flags: runhidden; RunOnceId: "DelCore"
+
 [Code]
 function MapAppLanguage(): String;
 var
@@ -70,6 +74,33 @@ begin
     Result := 'zh'
   else
     Result := 'en';
+end;
+
+var
+  CoreWasRunning: Boolean;
+
+function QueryCoreStateContains(State: String): Boolean;
+var
+  EC: Integer;
+begin
+  Exec('cmd.exe', '/C sc query ShieldGhitaCore | find /I "' + State + '"', '', SW_HIDE, ewWaitUntilTerminated, EC);
+  Result := (EC = 0);
+end;
+
+procedure StopCoreServiceAndWait();
+var
+  EC: Integer;
+  I: Integer;
+begin
+  if not QueryCoreStateContains('RUNNING') then
+    Exit;
+  Exec('sc.exe', 'stop ShieldGhitaCore', '', SW_HIDE, ewWaitUntilTerminated, EC);
+  for I := 1 to 15 do
+  begin
+    if not QueryCoreStateContains('RUNNING') then
+      Break;
+    Sleep(1000);
+  end;
 end;
 
 procedure KillRunningInstances();
@@ -139,6 +170,9 @@ begin
   if CurStep = ssInstall then
   begin
     KillRunningInstances();
+    CoreWasRunning := QueryCoreStateContains('RUNNING');
+    if CoreWasRunning then
+      StopCoreServiceAndWait();
     BackupUserData();
     DeleteFile(ExpandConstant('{app}\{#MyAppExeName}'));
     DeleteFile(ExpandConstant('{app}\local_behavior.json'));
@@ -150,6 +184,8 @@ begin
   begin
     KillRunningInstances();
     RegWriteStringValue(HKCU, 'Software\ShieldGhita', 'Language', MapAppLanguage());
+    if CoreWasRunning then
+      Exec('sc.exe', 'start ShieldGhitaCore', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
   end;
 end;
 

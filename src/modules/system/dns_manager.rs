@@ -276,6 +276,17 @@ fn is_valid_physical_adapter(name: &str) -> bool {
         && !lower.contains("bluetooth")
         && !lower.contains("local area connection*")
         && !lower.contains("pseudo")
+        && !lower.contains("warp")
+        && !lower.contains("cloudflare")
+        && !lower.contains("tailscale")
+        && !lower.contains("zerotier")
+        && !lower.contains("openvpn")
+        && !lower.contains("wireguard")
+        && !lower.contains("hyper-v")
+        && !lower.contains("wsl")
+        && !lower.contains("tap")
+        && !lower.contains("tunnel")
+        && !lower.contains("vpn")
         && !lower.is_empty()
 }
 
@@ -1006,12 +1017,53 @@ pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, liste
     }
 }
 
+static GATEWAY_IP_CACHE: std::sync::RwLock<Option<(std::time::Instant, String)>> =
+    std::sync::RwLock::new(None);
+const GATEWAY_IP_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub fn get_lan_ip_address() -> String {
-    if let Some(ip) = crate::modules::monitor::lan_scanner::LanScanner::get_local_outbound_ip() {
-        ip.to_string()
-    } else {
-        "127.0.0.1".to_string()
+    if let Ok(cache) = GATEWAY_IP_CACHE.read() {
+        if let Some((at, ip)) = cache.as_ref() {
+            if at.elapsed() < GATEWAY_IP_CACHE_TTL {
+                return ip.clone();
+            }
+        }
     }
+    let ip = get_primary_gateway_adapter_ip()
+        .or_else(|| {
+            crate::modules::monitor::lan_scanner::LanScanner::get_local_outbound_ip()
+                .map(|ip| ip.to_string())
+        })
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    if let Ok(mut cache) = GATEWAY_IP_CACHE.write() {
+        *cache = Some((std::time::Instant::now(), ip.clone()));
+    }
+    ip
+}
+
+fn get_primary_gateway_adapter_ip() -> Option<String> {
+    let output = silent_command("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | ForEach-Object { $ip = Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue; if ($ip) { Write-Output ($_.InterfaceAlias + '|' + $ip.IPAddress) } }",
+        ])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let Some((alias, ip)) = line.split_once('|') else {
+            continue;
+        };
+        if !is_valid_physical_adapter(alias) {
+            continue;
+        }
+        let ip = ip.trim();
+        if ip.parse::<std::net::Ipv4Addr>().is_ok() {
+            return Some(ip.to_string());
+        }
+    }
+    None
 }
 
 pub fn configure_lan_dns_firewall(enable: bool) {

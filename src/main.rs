@@ -37,10 +37,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let fmt_layer = tracing_subscriber::fmt::layer();
 
-    let logs_dir =
-        std::path::PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string()))
-            .join("ShieldGhita")
-            .join("logs");
+    modules::paths::migrate_legacy_appdata();
+    let logs_dir = modules::paths::data_dir().join("logs");
     let file_appender = tracing_appender::rolling::daily(&logs_dir, "shield_ghita.log");
     let (file_writer, log_guard) = tracing_appender::non_blocking(file_appender);
     let file_layer = tracing_subscriber::fmt::layer()
@@ -71,6 +69,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Starting Shield Ghita v{} Master Controller...",
         env!("CARGO_PKG_VERSION")
     );
+
+    if std::env::args().any(|arg| arg == "--service") {
+        let _ = phase_at;
+        return modules::service::run_service_mode();
+    }
+
+    let core_service_running = modules::service::install::query_state()
+        == modules::service::install::CoreServiceState::Running;
+    if core_service_running {
+        info!(
+            "ShieldGhitaCore service is RUNNING — UI attaches to service (no local protection stack)"
+        );
+        modules::service::set_remote_mode(true);
+    }
 
     if !dns_manager::is_elevated() {
         tracing::warn!("Shield Ghita running without elevated Administrator token. Run as Administrator for full DNS & Firewall proxy enforcement.");
@@ -124,6 +136,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     slint::run_event_loop_until_quit()?;
 
+    if modules::service::remote_mode() {
+        info!("UI closed — ShieldGhitaCore service keeps protection running");
+        return Ok(());
+    }
     // Graceful teardown: disable WFP / self-defense and restore system DNS
     // so quitting never leaves the host with residual filters or DNS override.
     app::ui_bridge::handlers::apply_protection(&state, false);
