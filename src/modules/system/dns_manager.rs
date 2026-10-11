@@ -850,173 +850,6 @@ fn system_dns_matches(target: &str) -> bool {
     true
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_classify_flags_foreign_loopback_resolver() {
-        let found =
-            classify_dns_servers("Wi-Fi", &["127.0.2.2".to_string(), "127.0.2.3".to_string()]);
-        assert_eq!(
-            found,
-            Some(DnsController::OtherLoopbackResolver {
-                adapter: "Wi-Fi".to_string(),
-                servers: vec!["127.0.2.2".to_string(), "127.0.2.3".to_string()],
-            })
-        );
-        assert!(classify_dns_servers("Ethernet", &["192.0.2.1".to_string()]).is_none());
-    }
-
-    #[test]
-    fn test_classify_ignores_our_own_targets() {
-        assert!(classify_dns_servers("Wi-Fi", &["127.0.0.1".to_string()]).is_none());
-        assert!(classify_dns_servers("Wi-Fi", &["127.0.0.2".to_string()]).is_none());
-    }
-
-    #[test]
-    fn test_classify_detects_known_product_by_adapter_name() {
-        assert_eq!(
-            classify_dns_servers("CloudflareWARP", &["192.0.2.53".to_string()]),
-            Some(DnsController::KnownProduct {
-                adapter: "CloudflareWARP".to_string()
-            })
-        );
-        assert!(classify_dns_servers("Ethernet 2", &["192.0.2.1".to_string()]).is_none());
-    }
-
-    #[test]
-    fn test_should_yield_thresholds() {
-        assert!(!should_yield(0, Duration::from_secs(5)));
-        assert!(!should_yield(4, Duration::from_secs(10)));
-        assert!(should_yield(5, Duration::from_secs(1)));
-        assert!(should_yield(1, Duration::from_secs(120)));
-        assert!(should_yield(1, Duration::from_secs(300)));
-    }
-
-    #[test]
-    fn test_lan_only_mode_toggle() {
-        set_lan_only_mode(false);
-        assert!(!is_lan_only_mode());
-        set_lan_only_mode(true);
-        assert!(is_lan_only_mode());
-        set_lan_only_mode(false);
-    }
-}
-
-pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, listen_addr: String) {
-    let mut interval_secs: u64 = 8;
-    let mut fight_streak: u32 = 0;
-    let mut fight_started: Option<Instant> = None;
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
-        if !(protection_enabled.load(Ordering::Relaxed)
-            && !MASTER_INTERNET_LOCKED.load(Ordering::Relaxed)
-            && DNS_OVERRIDDEN.load(Ordering::Relaxed))
-        {
-            if fight_streak > 0 {
-                info!(
-                    "DNS guard: protection off, releasing enforcement (was fighting {} cycles)",
-                    fight_streak
-                );
-                fight_streak = 0;
-                fight_started = None;
-            }
-            interval_secs = 8;
-            continue;
-        }
-        if system_dns_matches(&listen_addr) {
-            if fight_streak > 0 {
-                info!(
-                    "DNS guard: system DNS stable again after {} fight cycle(s)",
-                    fight_streak
-                );
-                fight_streak = 0;
-                fight_started = None;
-            }
-            interval_secs = 8;
-            continue;
-        }
-        // Never force the system back onto a resolver that cannot answer: check
-        // our own listener first, and restore the original DNS when it is dead
-        // (a dead 127.0.0.1 resolver blacks out the whole machine).
-        {
-            let probe_addr = listen_addr.clone();
-            let alive = tokio::task::spawn_blocking(move || local_resolver_responsive(&probe_addr))
-                .await
-                .unwrap_or(false);
-            if !alive {
-                let restore = tokio::task::spawn_blocking(restore_system_dns)
-                    .await
-                    .unwrap_or_else(|e| Err(format!("join: {e}")));
-                set_lan_only_mode(true);
-                fight_streak = 0;
-                fight_started = None;
-                interval_secs = 8;
-                match restore {
-                    Ok(()) => warn!(
-                        "DNS guard: local resolver stopped answering — original DNS restored, switched to LAN-only mode"
-                    ),
-                    Err(e) => error!(
-                        "DNS guard: local resolver dead and DNS restore failed ({}). Run the emergency restore action.",
-                        e
-                    ),
-                }
-                continue;
-            }
-        }
-        // netsh/PowerShell are blocking; keep them off the async worker threads.
-        let enforcement_addr = listen_addr.clone();
-        let result = tokio::task::spawn_blocking(move || set_system_dns(&enforcement_addr))
-            .await
-            .unwrap_or_else(|e| Err(format!("dns guard task join: {}", e)));
-        if let Err(e) = &result {
-            tracing::warn!("DNS guard: enforcement attempt failed: {}", e);
-        }
-        if result.is_ok() {
-            fight_streak = 0;
-            fight_started = None;
-            interval_secs = 8;
-            continue;
-        }
-        fight_streak += 1;
-        if fight_started.is_none() {
-            fight_started = Some(Instant::now());
-        }
-        let elapsed = fight_started
-            .map(|started| started.elapsed())
-            .unwrap_or_default();
-        if should_yield(fight_streak, elapsed) {
-            let restore = tokio::task::spawn_blocking(restore_system_dns)
-                .await
-                .unwrap_or_else(|e| Err(format!("join: {e}")));
-            set_lan_only_mode(true);
-            fight_streak = 0;
-            fight_started = None;
-            interval_secs = 8;
-            match restore {
-                Ok(()) => warn!(
-                    "DNS guard: gave up after {} failed enforcement(s) over {}s — original DNS restored, switched to LAN-only mode",
-                    fight_streak,
-                    elapsed.as_secs()
-                ),
-                Err(e) => error!(
-                    "DNS guard: enforcement kept failing and DNS restore failed ({}). Use the emergency restore button.",
-                    e
-                ),
-            }
-            continue;
-        }
-        if fight_streak >= 3 {
-            tracing::warn!(
-                "DNS guard: external change keeps reverting DNS ({} consecutive fixes). Backing off to reduce churn",
-                fight_streak
-            );
-            interval_secs = (interval_secs * 2).min(300);
-        }
-    }
-}
-
 static GATEWAY_IP_CACHE: std::sync::RwLock<Option<(std::time::Instant, String)>> =
     std::sync::RwLock::new(None);
 const GATEWAY_IP_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
@@ -1148,5 +981,172 @@ pub fn register_safety_cleanup() {
             windows::Win32::Foundation::BOOL(1)
         }
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
+    }
+}
+
+pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, listen_addr: String) {
+    let mut interval_secs: u64 = 8;
+    let mut fight_streak: u32 = 0;
+    let mut fight_started: Option<Instant> = None;
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
+        if !(protection_enabled.load(Ordering::Relaxed)
+            && !MASTER_INTERNET_LOCKED.load(Ordering::Relaxed)
+            && DNS_OVERRIDDEN.load(Ordering::Relaxed))
+        {
+            if fight_streak > 0 {
+                info!(
+                    "DNS guard: protection off, releasing enforcement (was fighting {} cycles)",
+                    fight_streak
+                );
+                fight_streak = 0;
+                fight_started = None;
+            }
+            interval_secs = 8;
+            continue;
+        }
+        if system_dns_matches(&listen_addr) {
+            if fight_streak > 0 {
+                info!(
+                    "DNS guard: system DNS stable again after {} fight cycle(s)",
+                    fight_streak
+                );
+                fight_streak = 0;
+                fight_started = None;
+            }
+            interval_secs = 8;
+            continue;
+        }
+        // Never force the system back onto a resolver that cannot answer: check
+        // our own listener first, and restore the original DNS when it is dead
+        // (a dead 127.0.0.1 resolver blacks out the whole machine).
+        {
+            let probe_addr = listen_addr.clone();
+            let alive = tokio::task::spawn_blocking(move || local_resolver_responsive(&probe_addr))
+                .await
+                .unwrap_or(false);
+            if !alive {
+                let restore = tokio::task::spawn_blocking(restore_system_dns)
+                    .await
+                    .unwrap_or_else(|e| Err(format!("join: {e}")));
+                set_lan_only_mode(true);
+                fight_streak = 0;
+                fight_started = None;
+                interval_secs = 8;
+                match restore {
+                    Ok(()) => warn!(
+                        "DNS guard: local resolver stopped answering — original DNS restored, switched to LAN-only mode"
+                    ),
+                    Err(e) => error!(
+                        "DNS guard: local resolver dead and DNS restore failed ({}). Run the emergency restore action.",
+                        e
+                    ),
+                }
+                continue;
+            }
+        }
+        // netsh/PowerShell are blocking; keep them off the async worker threads.
+        let enforcement_addr = listen_addr.clone();
+        let result = tokio::task::spawn_blocking(move || set_system_dns(&enforcement_addr))
+            .await
+            .unwrap_or_else(|e| Err(format!("dns guard task join: {}", e)));
+        if let Err(e) = &result {
+            tracing::warn!("DNS guard: enforcement attempt failed: {}", e);
+        }
+        if result.is_ok() {
+            fight_streak = 0;
+            fight_started = None;
+            interval_secs = 8;
+            continue;
+        }
+        fight_streak += 1;
+        if fight_started.is_none() {
+            fight_started = Some(Instant::now());
+        }
+        let elapsed = fight_started
+            .map(|started| started.elapsed())
+            .unwrap_or_default();
+        if should_yield(fight_streak, elapsed) {
+            let restore = tokio::task::spawn_blocking(restore_system_dns)
+                .await
+                .unwrap_or_else(|e| Err(format!("join: {e}")));
+            set_lan_only_mode(true);
+            fight_streak = 0;
+            fight_started = None;
+            interval_secs = 8;
+            match restore {
+                Ok(()) => warn!(
+                    "DNS guard: gave up after {} failed enforcement(s) over {}s — original DNS restored, switched to LAN-only mode",
+                    fight_streak,
+                    elapsed.as_secs()
+                ),
+                Err(e) => error!(
+                    "DNS guard: enforcement kept failing and DNS restore failed ({}). Use the emergency restore button.",
+                    e
+                ),
+            }
+            continue;
+        }
+        if fight_streak >= 3 {
+            tracing::warn!(
+                "DNS guard: external change keeps reverting DNS ({} consecutive fixes). Backing off to reduce churn",
+                fight_streak
+            );
+            interval_secs = (interval_secs * 2).min(300);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_flags_foreign_loopback_resolver() {
+        let found =
+            classify_dns_servers("Wi-Fi", &["127.0.2.2".to_string(), "127.0.2.3".to_string()]);
+        assert_eq!(
+            found,
+            Some(DnsController::OtherLoopbackResolver {
+                adapter: "Wi-Fi".to_string(),
+                servers: vec!["127.0.2.2".to_string(), "127.0.2.3".to_string()],
+            })
+        );
+        assert!(classify_dns_servers("Ethernet", &["192.0.2.1".to_string()]).is_none());
+    }
+
+    #[test]
+    fn test_classify_ignores_our_own_targets() {
+        assert!(classify_dns_servers("Wi-Fi", &["127.0.0.1".to_string()]).is_none());
+        assert!(classify_dns_servers("Wi-Fi", &["127.0.0.2".to_string()]).is_none());
+    }
+
+    #[test]
+    fn test_classify_detects_known_product_by_adapter_name() {
+        assert_eq!(
+            classify_dns_servers("CloudflareWARP", &["192.0.2.53".to_string()]),
+            Some(DnsController::KnownProduct {
+                adapter: "CloudflareWARP".to_string()
+            })
+        );
+        assert!(classify_dns_servers("Ethernet 2", &["192.0.2.1".to_string()]).is_none());
+    }
+
+    #[test]
+    fn test_should_yield_thresholds() {
+        assert!(!should_yield(0, Duration::from_secs(5)));
+        assert!(!should_yield(4, Duration::from_secs(10)));
+        assert!(should_yield(5, Duration::from_secs(1)));
+        assert!(should_yield(1, Duration::from_secs(120)));
+        assert!(should_yield(1, Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn test_lan_only_mode_toggle() {
+        set_lan_only_mode(false);
+        assert!(!is_lan_only_mode());
+        set_lan_only_mode(true);
+        assert!(is_lan_only_mode());
+        set_lan_only_mode(false);
     }
 }
