@@ -289,11 +289,9 @@ impl SecurityEngine {
             timestamps.retain(|t| now.duration_since(*t) < Duration::from_secs(2));
             timestamps.push(now);
             if timestamps.len() > hard_limit {
-                // Keep recent 10 for forensics instead of clearing everything.
-                let len = timestamps.len();
-                if len > 10 {
-                    timestamps.drain(..len - 10);
-                }
+                // Keep the window saturated so a sustained flood trips the
+                // limiter on every further query, not once per limit-10.
+                timestamps.truncate(hard_limit);
                 exceeded = true;
             }
         }
@@ -894,11 +892,9 @@ impl SecurityEngine {
 
             if query_count_last_sec > limit as usize {
                 is_flooding = true;
-                // Keep recent 10 for forensics instead of clearing everything.
-                let len = timestamps.len();
-                if len > 10 {
-                    timestamps.drain(..len - 10);
-                }
+                // Keep the window saturated so a sustained flood keeps
+                // tripping instead of re-arming after limit-10 queries.
+                timestamps.truncate(limit as usize);
             }
         }
 
@@ -1245,6 +1241,9 @@ impl SecurityEngine {
                         .iter()
                         .any(|(_, t)| now.duration_since(*t) < PORT_SCAN_WINDOW)
                 });
+                if hist.len() > 512 {
+                    hist.clear();
+                }
             }
             let probes = hist.entry(remote_ip.to_string()).or_default();
             probes.retain(|(_, t)| now.duration_since(*t) < PORT_SCAN_WINDOW);
@@ -1371,7 +1370,7 @@ impl SecurityEngine {
                 csv_escape(&inc.mitigation),
             ));
         }
-        let app_data = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        let app_data = crate::modules::paths::data_base();
         let path = std::path::PathBuf::from(app_data)
             .join("ShieldGhita")
             .join(format!(

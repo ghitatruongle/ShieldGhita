@@ -26,6 +26,7 @@ struct UiTextCache {
     status_tag: i8,
     traffic: String,
     adblock_pause: String,
+    feed_status: String,
     last_lan_only: Option<bool>,
     initialized: bool,
 }
@@ -306,6 +307,11 @@ fn refresh_config_and_texts(
         };
         ui_win.set_last_update_text(text.into());
     }
+
+    if !crate::modules::service::remote_mode() {
+        ui_win.set_blocklist_feed_status(s.blocker.feed_status_summary().into());
+        ui_win.set_blocklist_feed_failed(s.blocker.feed_status_summary().contains("FAILED"));
+    }
 }
 
 pub fn apply_remote_snapshot(
@@ -335,6 +341,13 @@ pub fn apply_remote_snapshot(
     ui_win.set_lan_devices_count(sat_i32_u64(snap.lan_devices_count));
     ui_win.set_is_scanning(snap.is_scanning);
     ui_win.set_adblock_total_today(sat_i32_u64(snap.adblock_total_today));
+    UI_TEXT_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cached_text_changed(&mut cache.feed_status, &snap.feed_status) {
+            ui_win.set_blocklist_feed_status(snap.feed_status.as_str().into());
+            ui_win.set_blocklist_feed_failed(snap.feed_status.contains("FAILED"));
+        }
+    });
     UI_TEXT_CACHE.with(|c| {
         let pause_left = if snap.pause_remaining_secs == 0 {
             String::new()

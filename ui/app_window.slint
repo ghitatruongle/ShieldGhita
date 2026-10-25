@@ -319,6 +319,8 @@ export component AppWindow inherits Window {
     in-out property <bool> autostart-enabled: true;
     in-out property <bool> minimize-to-tray-enabled: true;
     in-out property <string> last-update-text: "Chưa cập nhật";
+    in-out property <string> blocklist-feed-status: "";
+    in-out property <bool> blocklist-feed-failed: false;
     in-out property <string> live-traffic-rate: "0 KB/s";
     in-out property <bool> minimize-to-tray-on-minimize: true;
     in-out property <bool> start-hidden-in-tray: false;
@@ -570,6 +572,7 @@ export component AppWindow inherits Window {
     in-out property <string> service-status: "";
     in-out property <bool> service-down: false;
     callback service-install();
+    callback service-start();
     callback service-stop();
     callback service-uninstall();
     callback service-refresh();
@@ -1989,6 +1992,10 @@ export component AppWindow inherits Window {
                                     clicked => { root.service-stop(); }
                                 }
                                 Button {
+                                    text: I18n.t("▶ Chạy", "▶ Start", "▶ 启动");
+                                    clicked => { root.service-start(); }
+                                }
+                                Button {
                                     text: I18n.t("🗑 Gỡ", "🗑 Uninstall", "🗑 卸载");
                                     clicked => { root.service-uninstall(); }
                                 }
@@ -2016,6 +2023,12 @@ export component AppWindow inherits Window {
                                 Text { text: "• Engine: Rust 2021 + Slint UI + Win32 WFP"; font-size: 12px; color: #94a3b8; }
                                 Rectangle { horizontal-stretch: 1; }
                                 Text { text: root.last-update-text; font-size: 12px; font-weight: 700; color: #22c55e; }
+                                Text {
+                                    text: root.blocklist-feed-status;
+                                    font-size: 11px;
+                                    color: root.blocklist-feed-failed ? #f87171 : #94a3b8;
+                                    overflow: elide;
+                                }
                                 Button {
                                     text: I18n.t("🌐 Bản mới nhất", "🌐 Latest Release", "🌐 最新版本");
                                     clicked => { root.open-latest-release(); }

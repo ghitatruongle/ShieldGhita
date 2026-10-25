@@ -228,7 +228,14 @@ pub fn start(ui: &crate::AppWindow, state: Arc<AppState>, menu_ids: TrayMenuIds)
                             );
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(u) = ui_bg.upgrade() {
+                                    let was_down = u.get_service_down();
                                     u.set_service_down(down);
+                                    if was_down != down {
+                                        u.set_service_status(
+                                            super::handlers::service_state_text_for(state_now)
+                                                .into(),
+                                        );
+                                    }
                                     u.set_host_lan_ip(
                                         crate::modules::system::dns_manager::get_lan_ip_address()
                                             .into(),
@@ -479,11 +486,15 @@ fn handle_menu_events(
         } else if event.id == *quit_id {
             save_window_state_now(ui_win, s);
             // Tear down WFP / self-defense before restoring DNS and exiting.
+            // In remote mode the ShieldGhitaCore service owns protection —
+            // quitting the UI must not switch it off.
             let s2 = s.clone();
             // Quit path needs synchronous teardown before exit; run on this
             // thread (timer tick) then quit the event loop so main() can run
             // its graceful cleanup. Fall back to hard exit if loop already gone.
-            crate::app::ui_bridge::handlers::apply_protection(&s2, false);
+            if !crate::modules::service::remote_mode() {
+                crate::app::ui_bridge::handlers::apply_protection(&s2, false);
+            }
             slint::quit_event_loop().unwrap_or_else(|_| std::process::exit(0));
         }
     }

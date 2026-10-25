@@ -278,8 +278,12 @@ pub fn setup_ui_bridge(
 
         // Full teardown: WFP + self-defense + DNS restore, then quit the
         // event loop so main() runs its graceful cleanup. Hard exit only as
-        // a fallback if the loop is already gone.
-        crate::app::ui_bridge::handlers::apply_protection(&state_close, false);
+        // a fallback if the loop is already gone. In remote mode the
+        // ShieldGhitaCore service owns the protection stack — closing the
+        // UI must not switch it off.
+        if !crate::modules::service::remote_mode() {
+            crate::app::ui_bridge::handlers::apply_protection(&state_close, false);
+        }
         slint::quit_event_loop().unwrap_or_else(|_| std::process::exit(0));
         slint::CloseRequestResponse::HideWindow
     });

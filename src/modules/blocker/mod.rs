@@ -90,7 +90,13 @@ impl WfpBlocker {
         }
         let mut engine_handle = HANDLE::default();
         unsafe {
-            let result = FwpmEngineOpen0(None, 0, None, None, &mut engine_handle);
+            let session =
+                windows::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_SESSION0 {
+                    flags:
+                        windows::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_SESSION_FLAG_DYNAMIC,
+                    ..Default::default()
+                };
+            let result = FwpmEngineOpen0(None, 0, None, Some(&session), &mut engine_handle);
             if result != 0 {
                 self.available.store(false, Ordering::SeqCst);
                 return Err(format!(

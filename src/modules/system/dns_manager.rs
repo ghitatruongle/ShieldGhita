@@ -651,7 +651,6 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
     // adapters (VPN, dock NICs that appeared later) wipes intentional static DNS.
     let Some(backup_map) = backup_map else {
         DNS_OVERRIDDEN.store(false, Ordering::SeqCst);
-        clear_override_backup();
         return Ok(());
     };
 
@@ -662,6 +661,18 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
         orig6_guard.take()
     };
 
+    let mut failures: Vec<String> = Vec::new();
+    let run_step =
+        |program: &str, args: Vec<&str>, op: &str, adapter: &str, failures: &mut Vec<String>| {
+            let output = silent_command(program).args(args).output();
+            let ok = matches!(&output, Ok(o) if o.status.success());
+            if !ok {
+                let detail = output.map(|o| o.status.code().unwrap_or(-1)).unwrap_or(-1);
+                tracing::warn!("DNS restore step failed: {op} on {adapter} (exit {detail})");
+                failures.push(format!("{op}:{adapter}"));
+            }
+        };
+
     for adapter in &adapters {
         let Some(original_state) = backup_map.get(adapter).cloned() else {
             continue;
@@ -671,27 +682,36 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
 
         match original_state {
             AdapterDnsState::Dhcp => {
-                let _ = silent_command("netsh")
-                    .args([
+                run_step(
+                    "netsh",
+                    vec![
                         "interface",
                         "ip",
                         "set",
                         "dns",
                         &format!("name=\"{}\"", adapter),
                         "dhcp",
-                    ])
-                    .output();
-                let _ = silent_command("powershell")
-                    .args([
+                    ],
+                    "v4-dhcp",
+                    adapter,
+                    &mut failures,
+                );
+                run_step(
+                    "powershell",
+                    vec![
                         "-NoProfile", "-Command",
                         &format!("Set-DnsClientServerAddress -InterfaceAlias '{}' -ResetServerAddresses -ErrorAction SilentlyContinue", clean_adapter)
-                    ])
-                    .output();
+                    ],
+                    "v4-dhcp-ps",
+                    adapter,
+                    &mut failures,
+                );
             }
             AdapterDnsState::Static(ref ips) => {
                 if let Some(first_ip) = ips.first() {
-                    let _ = silent_command("netsh")
-                        .args([
+                    run_step(
+                        "netsh",
+                        vec![
                             "interface",
                             "ip",
                             "set",
@@ -700,12 +720,16 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
                             "static",
                             first_ip,
                             "primary",
-                        ])
-                        .output();
+                        ],
+                        "v4-static",
+                        adapter,
+                        &mut failures,
+                    );
 
                     for (idx, next_ip) in ips.iter().skip(1).enumerate() {
-                        let _ = silent_command("netsh")
-                            .args([
+                        run_step(
+                            "netsh",
+                            vec![
                                 "interface",
                                 "ip",
                                 "add",
@@ -713,20 +737,27 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
                                 &format!("name=\"{}\"", adapter),
                                 next_ip,
                                 &format!("index={}", idx + 2),
-                            ])
-                            .output();
+                            ],
+                            "v4-static-add",
+                            adapter,
+                            &mut failures,
+                        );
                     }
                 } else {
-                    let _ = silent_command("netsh")
-                        .args([
+                    run_step(
+                        "netsh",
+                        vec![
                             "interface",
                             "ip",
                             "set",
                             "dns",
                             &format!("name=\"{}\"", adapter),
                             "dhcp",
-                        ])
-                        .output();
+                        ],
+                        "v4-dhcp-empty",
+                        adapter,
+                        &mut failures,
+                    );
                 }
             }
         }
@@ -736,21 +767,26 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
             if let Some(state6) = map6.get(adapter) {
                 match state6 {
                     AdapterDnsState::Dhcp => {
-                        let _ = silent_command("netsh")
-                            .args([
+                        run_step(
+                            "netsh",
+                            vec![
                                 "interface",
                                 "ipv6",
                                 "set",
                                 "dns",
                                 &format!("name=\"{}\"", adapter),
                                 "dhcp",
-                            ])
-                            .output();
+                            ],
+                            "v6-dhcp",
+                            adapter,
+                            &mut failures,
+                        );
                     }
                     AdapterDnsState::Static(ips6) => {
                         if let Some(first6) = ips6.first() {
-                            let _ = silent_command("netsh")
-                                .args([
+                            run_step(
+                                "netsh",
+                                vec![
                                     "interface",
                                     "ipv6",
                                     "set",
@@ -759,11 +795,15 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
                                     "static",
                                     first6,
                                     "primary",
-                                ])
-                                .output();
+                                ],
+                                "v6-static",
+                                adapter,
+                                &mut failures,
+                            );
                             for (idx, next6) in ips6.iter().skip(1).enumerate() {
-                                let _ = silent_command("netsh")
-                                    .args([
+                                run_step(
+                                    "netsh",
+                                    vec![
                                         "interface",
                                         "ipv6",
                                         "add",
@@ -771,20 +811,27 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
                                         &format!("name=\"{}\"", adapter),
                                         next6,
                                         &format!("index={}", idx + 2),
-                                    ])
-                                    .output();
+                                    ],
+                                    "v6-static-add",
+                                    adapter,
+                                    &mut failures,
+                                );
                             }
                         } else {
-                            let _ = silent_command("netsh")
-                                .args([
+                            run_step(
+                                "netsh",
+                                vec![
                                     "interface",
                                     "ipv6",
                                     "set",
                                     "dns",
                                     &format!("name=\"{}\"", adapter),
                                     "dhcp",
-                                ])
-                                .output();
+                                ],
+                                "v6-dhcp-empty",
+                                adapter,
+                                &mut failures,
+                            );
                         }
                     }
                 }
@@ -793,10 +840,19 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
     }
 
     flush_dns_cache();
-    DNS_OVERRIDDEN.store(false, Ordering::SeqCst);
-    clear_override_backup();
-    info!("Master DNS Controller: System DNS fully restored to original state");
-    Ok(())
+    if failures.is_empty() {
+        DNS_OVERRIDDEN.store(false, Ordering::SeqCst);
+        clear_override_backup();
+        info!("Master DNS Controller: System DNS fully restored to original state");
+        Ok(())
+    } else {
+        tracing::error!(
+            "DNS restore incomplete ({} step(s) failed): {} — backup kept for retry",
+            failures.len(),
+            failures.join(", ")
+        );
+        Err(format!("restore incomplete: {}", failures.join(", ")))
+    }
 }
 
 pub fn set_master_internet_lock(locked: bool) -> Result<(), String> {

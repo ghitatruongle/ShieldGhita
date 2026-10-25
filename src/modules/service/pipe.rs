@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::windows::named_pipe::ServerOptions;
 use tracing::{error, info, warn};
 
 pub const PIPE_NAME: &str = r"\\.\pipe\ShieldGhitaCore";
@@ -102,10 +101,7 @@ pub async fn serve(state: Arc<AppState>) {
             return;
         }
     };
-    let mut server = match ServerOptions::new()
-        .first_pipe_instance(true)
-        .create(PIPE_NAME)
-    {
+    let mut server = match create_server(true) {
         Ok(server) => server,
         Err(e) => {
             warn!("Core IPC: cannot create pipe {PIPE_NAME} — {e}");
@@ -120,7 +116,7 @@ pub async fn serve(state: Arc<AppState>) {
             continue;
         }
         let mut client = server;
-        match ServerOptions::new().create(PIPE_NAME) {
+        match create_server(false) {
             Ok(next) => server = next,
             Err(e) => {
                 error!("Core IPC: cannot recreate pipe instance — stopping IPC: {e}");
@@ -133,6 +129,77 @@ pub async fn serve(state: Arc<AppState>) {
             let _ = handle_client(&mut client, state, token).await;
         });
     }
+}
+
+#[cfg(windows)]
+fn pipe_security_attributes() -> Option<windows::Win32::Security::SECURITY_ATTRIBUTES> {
+    use windows::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows::Win32::Security::SECURITY_ATTRIBUTES;
+    static PIPE_SD: OnceLock<usize> = OnceLock::new();
+    let sd = PIPE_SD.get_or_init(|| unsafe {
+        let mut psd = windows::Win32::Security::PSECURITY_DESCRIPTOR(std::ptr::null_mut());
+        let sddl = windows::core::HSTRING::from("D:P(A;;FA;;;SY)(A;;FA;;;BA)");
+        if ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            &sddl,
+            SDDL_REVISION_1,
+            &mut psd,
+            None,
+        )
+        .is_err()
+        {
+            return 0;
+        }
+        psd.0 as usize
+    });
+    if *sd == 0 {
+        return None;
+    }
+    Some(SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: *sd as *mut core::ffi::c_void,
+        bInheritHandle: false.into(),
+    })
+}
+
+#[cfg(windows)]
+fn create_server(
+    first_instance: bool,
+) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
+    };
+    use windows::Win32::System::Pipes::{
+        CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+        PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    };
+    let mut open_mode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED;
+    if first_instance {
+        open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
+    }
+    let name_utf16: Vec<u16> = PIPE_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+    let sa = pipe_security_attributes();
+    let sa_ptr = sa
+        .as_ref()
+        .map(|s| s as *const windows::Win32::Security::SECURITY_ATTRIBUTES)
+        .unwrap_or(std::ptr::null());
+    let handle = unsafe {
+        CreateNamedPipeW(
+            windows::core::PCWSTR(name_utf16.as_ptr()),
+            open_mode,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES,
+            65536,
+            65536,
+            0,
+            Some(sa_ptr),
+        )
+    };
+    if handle.is_invalid() {
+        return Err(std::io::Error::last_os_error());
+    }
+    unsafe { tokio::net::windows::named_pipe::NamedPipeServer::from_raw_handle(handle.0 as _) }
 }
 
 async fn handle_client(
@@ -219,6 +286,38 @@ async fn dispatch(state: &Arc<AppState>, request: CoreRequest) -> CoreResponse {
             let result = apply_config_patch(state, &field, value);
             info!("Core IPC: config patch {field}={value} → {:?}", result);
             result_to_response(result)
+        }
+        CoreRequest::CustomRule { domain, allow, add } => {
+            let result = apply_custom_rule(state, &domain, allow, add);
+            info!(
+                "Core IPC: custom-rule {domain} allow={allow} add={add} → {:?}",
+                result
+            );
+            result_to_response(result)
+        }
+        CoreRequest::UpdateBlocklists => {
+            let owned = state.clone();
+            tokio::spawn(async move {
+                let (urls, doh_sources) = {
+                    let cfg_guard = owned.config.read().unwrap_or_else(|e| e.into_inner());
+                    (
+                        cfg_guard.blocklist_urls.clone(),
+                        cfg_guard.upstream_dns.clone(),
+                    )
+                };
+                match owned.blocker.load_blocklists(&urls, &doh_sources).await {
+                    Ok(count) => {
+                        info!("Core IPC: blocklists updated: {count} domains active");
+                        if let Ok(mut cfg_guard) = owned.config.write() {
+                            cfg_guard.last_blocklist_update =
+                                Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                            let _ = cfg_guard.save();
+                        }
+                    }
+                    Err(e) => error!("Core IPC: blocklist update failed: {e}"),
+                }
+            });
+            CoreResponse::Ok
         }
         CoreRequest::Rescan => {
             do_rescan(state).await;
@@ -420,6 +519,39 @@ fn apply_attack(
     _minutes: i64,
 ) -> Result<(), &'static str> {
     Err("not_available")
+}
+
+fn apply_custom_rule(
+    state: &AppState,
+    domain_raw: &str,
+    allow: bool,
+    add: bool,
+) -> Result<(), &'static str> {
+    let normalized =
+        crate::modules::dns::DnsBlocker::validate_domain(domain_raw).map_err(|_| "bad_domain")?;
+    let outcome = match (allow, add) {
+        (false, true) => state.blocker.add_custom_domain(&normalized),
+        (false, false) => state.blocker.remove_custom_domain(&normalized),
+        (true, true) => state.blocker.add_allowed_domain(&normalized),
+        (true, false) => state.blocker.remove_allowed_domain(&normalized),
+    };
+    outcome.map_err(|_| "rule_failed")?;
+    if let Ok(mut cfg_guard) = state.config.write() {
+        let list = if allow {
+            &mut cfg_guard.custom_allowed_domains
+        } else {
+            &mut cfg_guard.custom_blocked_domains
+        };
+        if add {
+            if !list.contains(&normalized) {
+                list.push(normalized);
+            }
+        } else {
+            list.retain(|d| d != &normalized);
+        }
+        let _ = cfg_guard.save();
+    }
+    Ok(())
 }
 
 fn apply_config_patch(state: &AppState, field: &str, value: bool) -> Result<(), &'static str> {

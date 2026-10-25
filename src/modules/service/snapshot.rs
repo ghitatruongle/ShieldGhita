@@ -47,6 +47,7 @@ pub fn build(state: &AppState, tab: i32, known_hash: u64) -> CoreSnapshot {
             || crate::modules::system::dns_manager::is_master_internet_locked(),
         uptime_secs: super::pipe::service_start_time().elapsed().as_secs(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        feed_status: state.blocker.feed_status_summary(),
         ..Default::default()
     };
     let (cpu, mem) = state.monitor.get_system_metrics();

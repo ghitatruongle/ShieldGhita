@@ -30,20 +30,24 @@ pub fn migrate_legacy_appdata() {
         return;
     }
     let _ = std::fs::create_dir_all(&new_dir);
+    let mut migrated = true;
     if let Ok(legacy) = std::env::var("APPDATA").map(PathBuf::from) {
         let legacy_dir = legacy.join("ShieldGhita");
         if legacy_dir != new_dir {
-            migrate_children(&legacy_dir, &new_dir);
+            migrated = migrate_children(&legacy_dir, &new_dir);
         }
     }
-    let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let _ = std::fs::write(&marker, stamp);
+    if migrated {
+        let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let _ = std::fs::write(&marker, stamp);
+    }
 }
 
-fn migrate_children(legacy_dir: &Path, new_dir: &Path) {
+fn migrate_children(legacy_dir: &Path, new_dir: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(legacy_dir) else {
-        return;
+        return true;
     };
+    let mut ok = true;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if STAY_IN_APPDATA.iter().any(|skip| skip == &name) {
@@ -53,23 +57,36 @@ fn migrate_children(legacy_dir: &Path, new_dir: &Path) {
         if target.exists() {
             continue;
         }
-        copy_recursive(&entry.path(), &target);
+        if !copy_recursive(&entry.path(), &target) {
+            ok = false;
+        }
     }
+    ok
 }
 
-fn copy_recursive(from: &Path, to: &Path) {
+fn copy_recursive(from: &Path, to: &Path) -> bool {
+    // Never follow symlinks or junctions: legacy data is plain files, and a
+    // cyclic reparse point would recurse without bound.
+    if let Ok(meta) = std::fs::symlink_metadata(from) {
+        if meta.file_type().is_symlink() {
+            return true;
+        }
+    }
     if from.is_dir() {
         if std::fs::create_dir_all(to).is_err() {
-            return;
+            return false;
         }
+        let mut ok = true;
         if let Ok(children) = std::fs::read_dir(from) {
             for child in children.flatten() {
-                copy_recursive(&child.path(), &to.join(child.file_name()));
+                if !copy_recursive(&child.path(), &to.join(child.file_name())) {
+                    ok = false;
+                }
             }
         }
-    } else {
-        let _ = std::fs::copy(from, to);
+        return ok;
     }
+    std::fs::copy(from, to).is_ok()
 }
 
 #[cfg(test)]

@@ -210,6 +210,9 @@ impl AdBlockControls {
             if let Ok(mut clients) = self.blocked_clients.lock() {
                 clients.clear();
             }
+            if let Ok(mut domains) = self.blocked_domains.lock() {
+                domains.clear();
+            }
         }
         self.total_blocked.fetch_add(1, Ordering::Relaxed);
 

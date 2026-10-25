@@ -155,6 +155,7 @@ pub struct DnsBlocker {
     dns_cache: DnsCacheMap,
     http_client: reqwest::Client,
     etag_cache: Arc<Mutex<HashMap<String, String>>>,
+    feed_status: Arc<Mutex<HashMap<String, String>>>,
     pub total_queries: Arc<AtomicU64>,
     pub blocked_count: Arc<AtomicU64>,
     pub silent_sinkhole_enabled: Arc<AtomicBool>,
@@ -338,6 +339,7 @@ impl DnsBlocker {
             etag_cache: Arc::new(Mutex::new(Self::read_etag_map_from(
                 &Self::etag_store_path(),
             ))),
+            feed_status: Arc::new(Mutex::new(HashMap::new())),
             total_queries: Arc::new(AtomicU64::new(0)),
             blocked_count: Arc::new(AtomicU64::new(0)),
             silent_sinkhole_enabled: Arc::new(AtomicBool::new(true)),
@@ -354,6 +356,37 @@ impl DnsBlocker {
         let custom = self.custom_blocked.read().map(|b| b.len()).unwrap_or(0);
         let builtin = self.builtin_domains.read().map(|b| b.len()).unwrap_or(0);
         base.max(builtin) + custom
+    }
+
+    fn record_feed_status(status: &Arc<Mutex<HashMap<String, String>>>, url: &str, state: &str) {
+        if let Ok(mut guard) = status.lock() {
+            guard.insert(url.to_string(), state.to_string());
+        }
+    }
+
+    pub fn feed_status_summary(&self) -> String {
+        let guard = match self.feed_status.lock() {
+            Ok(g) => g,
+            Err(_) => return String::new(),
+        };
+        if guard.is_empty() {
+            return String::new();
+        }
+        let mut ok = 0usize;
+        let mut failed: Vec<String> = Vec::new();
+        for (url, state) in guard.iter() {
+            match state.as_str() {
+                "ok" | "unchanged" => ok += 1,
+                "failed" => failed.push(Self::host_of(url).unwrap_or_else(|| url.clone())),
+                _ => {}
+            }
+        }
+        let total = guard.len();
+        if failed.is_empty() {
+            format!("{}/{} feeds OK", ok, total)
+        } else {
+            format!("{}/{} feeds OK, FAILED: {}", ok, total, failed.join(", "))
+        }
     }
 
     fn disk_store_path() -> PathBuf {
@@ -624,11 +657,12 @@ impl DnsBlocker {
             match res {
                 Ok(Ok((url, None, _))) => {
                     unchanged += 1;
-                    let _ = url;
+                    Self::record_feed_status(&self.feed_status, &url, "unchanged");
                 }
                 Ok(Ok((url, Some(text), etag))) => {
                     any_success = true;
                     fetched += 1;
+                    Self::record_feed_status(&self.feed_status, &url, "ok");
                     if let Some(tag) = etag {
                         new_etags.insert(url.clone(), tag);
                     } else {
@@ -650,6 +684,7 @@ impl DnsBlocker {
                     // only its ETag is invalidated, keeping fetched tags.
                     if let Some(matched) = urls.iter().find(|u| e.starts_with(u.as_str())) {
                         failed_urls.push(matched.clone());
+                        Self::record_feed_status(&self.feed_status, matched, "failed");
                     }
                     warn!("Failed to fetch blocklist: {}", e);
                 }
@@ -2253,6 +2288,7 @@ mod tests {
             dns_cache: Arc::new(RwLock::new(HashMap::new())),
             http_client: reqwest::Client::new(),
             etag_cache: Arc::new(Mutex::new(HashMap::new())),
+            feed_status: Arc::new(Mutex::new(HashMap::new())),
             total_queries: Arc::new(AtomicU64::new(0)),
             blocked_count: Arc::new(AtomicU64::new(0)),
             silent_sinkhole_enabled: Arc::new(AtomicBool::new(true)),

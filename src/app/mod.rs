@@ -204,26 +204,23 @@ impl AppState {
             let local = state.local_manager.clone();
             let mon = state.monitor.clone();
             state.runtime.spawn(async move {
-                let mut seen = 0usize;
+                let mut seen_version = mon.logs_version.load(std::sync::atomic::Ordering::Relaxed);
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let version = mon.logs_version.load(std::sync::atomic::Ordering::Relaxed);
+                    if version == seen_version {
+                        continue;
+                    }
                     let logs = mon.get_logs();
-                    // get_logs() is newest-first (push_front): logs[..delta]
-                    // holds the new entries, iterate rev() for chronological
-                    // behavior profiling.
-                    if logs.len() > seen {
-                        let delta = logs.len() - seen;
-                        for entry in logs[..delta].iter().rev() {
-                            local.record_dns_event(
-                                &entry.source_ip,
-                                &entry.domain,
-                                entry.is_blocked,
-                                false,
-                            );
-                        }
-                        seen = logs.len();
-                    } else if logs.len() < seen {
-                        seen = logs.len();
+                    let delta = (version.saturating_sub(seen_version) as usize).min(logs.len());
+                    seen_version = version;
+                    for entry in logs[..delta].iter().rev() {
+                        local.record_dns_event(
+                            &entry.source_ip,
+                            &entry.domain,
+                            entry.is_blocked,
+                            false,
+                        );
                     }
                 }
             });

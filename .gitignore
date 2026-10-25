@@ -209,3 +209,6 @@ lcov.info
 cobertura.xml
 tarpaulin-report.html
 junit.xml
+
+/target_admin/
+/target_preview/

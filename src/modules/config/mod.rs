@@ -137,6 +137,7 @@ fn default_blocklist_urls() -> Vec<String> {
         "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
         "https://raw.githubusercontent.com/anudeepND/blacklist/master/adservers.txt".to_string(),
         "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts".to_string(),
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/pro.txt".to_string(),
     ]
 }
 

@@ -403,10 +403,12 @@ fn enable_privilege(name: &str) -> bool {
             }],
         };
         let adjusted = ok && AdjustTokenPrivileges(token, false, Some(&tp), 0, None, None).is_ok();
+        // Capture last error BEFORE any other Win32 call can replace it.
+        let last_err = GetLastError();
         let _ = CloseHandle(token);
         // AdjustTokenPrivileges reports success even when the privilege was
         // not actually granted — GetLastError must be ERROR_SUCCESS.
-        adjusted && GetLastError() == ERROR_SUCCESS
+        adjusted && last_err == ERROR_SUCCESS
     }
 }
 

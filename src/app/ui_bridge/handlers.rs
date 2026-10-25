@@ -304,6 +304,54 @@ fn fa_render_error(ui_inst: &crate::AppWindow, err_msg: &str, reset_result: bool
     }
 }
 
+pub fn service_state_text() -> String {
+    let state = crate::modules::service::install::query_state();
+    service_state_text_for(state)
+}
+
+pub(crate) fn service_state_text_for(
+    state: crate::modules::service::install::CoreServiceState,
+) -> String {
+    use crate::modules::service::install::CoreServiceState::*;
+    let base = match state {
+        NotInstalled => crate::modules::i18n::tr4(
+            "⚪ Chưa cài — bảo vệ chạy cùng app",
+            "⚪ Not installed — protection runs with the app",
+            "⚪ 未安装 — 随应用运行",
+            "⚪ Не установлена — защита вместе с приложением",
+        ),
+        Running => crate::modules::i18n::tr4(
+            "🟢 Đang chạy — bảo vệ sống sót qua đăng xuất",
+            "🟢 Running — protection survives logoff",
+            "🟢 运行中 — 保护在注销后仍持续",
+            "🟢 Работает — защита переживает выход",
+        ),
+        Stopped => crate::modules::i18n::tr4(
+            "⚪ Đã cài — đang dừng",
+            "⚪ Installed — stopped",
+            "⚪ 已安装 — 已停止",
+            "⚪ Установлена — остановлена",
+        ),
+        StartPending => "🟡 Start pending...",
+        StopPending => "🟡 Stop pending...",
+        Paused => "🟡 Paused",
+        Unknown => "❓ Unknown",
+    };
+    if crate::modules::service::remote_mode() {
+        format!(
+            "{base} • {}",
+            crate::modules::i18n::tr4(
+                "UI đang điều khiển qua service",
+                "UI controls via service",
+                "UI 通过服务控制",
+                "UI управляет через службу"
+            )
+        )
+    } else {
+        base.to_string()
+    }
+}
+
 pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
     let s = state.clone();
     ui.on_toggle_protection(move |enabled| {
@@ -330,48 +378,6 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             tracing::error!("Failed to toggle master internet lock: {}", e);
         }
     });
-
-    fn service_state_text() -> String {
-        let state = crate::modules::service::install::query_state();
-        use crate::modules::service::install::CoreServiceState::*;
-        let base = match state {
-            NotInstalled => crate::modules::i18n::tr4(
-                "⚪ Chưa cài — bảo vệ chạy cùng app",
-                "⚪ Not installed — protection runs with the app",
-                "⚪ 未安装 — 随应用运行",
-                "⚪ Не установлена — защита вместе с приложением",
-            ),
-            Running => crate::modules::i18n::tr4(
-                "🟢 Đang chạy — bảo vệ sống sót qua đăng xuất",
-                "🟢 Running — protection survives logoff",
-                "🟢 运行中 — 保护在注销后仍持续",
-                "🟢 Работает — защита переживает выход",
-            ),
-            Stopped => crate::modules::i18n::tr4(
-                "⚪ Đã cài — đang dừng",
-                "⚪ Installed — stopped",
-                "⚪ 已安装 — 已停止",
-                "⚪ Установлена — остановлена",
-            ),
-            StartPending => "🟡 Start pending...",
-            StopPending => "🟡 Stop pending...",
-            Paused => "🟡 Paused",
-            Unknown => "❓ Unknown",
-        };
-        if crate::modules::service::remote_mode() {
-            format!(
-                "{base} • {}",
-                crate::modules::i18n::tr4(
-                    "UI đang điều khiển qua service",
-                    "UI controls via service",
-                    "UI 通过服务控制",
-                    "UI управляет через службу"
-                )
-            )
-        } else {
-            base.to_string()
-        }
-    }
 
     fn spawn_service_action(
         state: &Arc<AppState>,
@@ -420,6 +426,18 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 &ui_sv,
                 "⏳ Stopping service...",
                 crate::modules::service::install::stop,
+            );
+        });
+    }
+    {
+        let s_sv = state.clone();
+        let ui_sv = ui.as_weak();
+        ui.on_service_start(move || {
+            spawn_service_action(
+                &s_sv,
+                &ui_sv,
+                "⏳ Starting ShieldGhitaCore service...",
+                crate::modules::service::install::start,
             );
         });
     }
@@ -775,11 +793,19 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 return;
             }
         };
-        if let Err(e) = s.blocker.add_custom_domain(&normalized) {
+        if crate::modules::service::remote_mode() {
+            remote_send(crate::modules::service::protocol::CoreRequest::CustomRule {
+                domain: normalized.clone(),
+                allow: false,
+                add: true,
+            });
+            info!("Added custom block rule via service: {}", normalized);
+        } else if let Err(e) = s.blocker.add_custom_domain(&normalized) {
             tracing::error!("Failed to add custom rule: {}", e);
             return;
+        } else {
+            info!("Added custom block rule: {}", normalized);
         }
-        info!("Added custom block rule: {}", normalized);
         if let Ok(mut cfg_guard) = s.config.write() {
             if !cfg_guard.custom_blocked_domains.contains(&normalized) {
                 cfg_guard.custom_blocked_domains.push(normalized);
@@ -799,7 +825,13 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         if normalized.is_empty() {
             return;
         }
-        if let Err(e) = s.blocker.remove_custom_domain(&normalized) {
+        if crate::modules::service::remote_mode() {
+            remote_send(crate::modules::service::protocol::CoreRequest::CustomRule {
+                domain: normalized.clone(),
+                allow: false,
+                add: false,
+            });
+        } else if let Err(e) = s.blocker.remove_custom_domain(&normalized) {
             tracing::error!("Failed to remove custom rule: {}", e);
         }
         if let Ok(mut cfg_guard) = s.config.write() {
@@ -832,11 +864,20 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                 return;
             }
         };
-        if let Err(e) = s.blocker.add_allowed_domain(&normalized) {
-            tracing::error!("Failed to add whitelist rule: {}", e);
-            return;
+        if crate::modules::service::remote_mode() {
+            remote_send(crate::modules::service::protocol::CoreRequest::CustomRule {
+                domain: normalized.clone(),
+                allow: true,
+                add: true,
+            });
+            info!("Added whitelist rule via service: {}", normalized);
+        } else {
+            if let Err(e) = s.blocker.add_allowed_domain(&normalized) {
+                tracing::error!("Failed to add whitelist rule: {}", e);
+                return;
+            }
+            info!("Added whitelist rule: {}", normalized);
         }
-        info!("Added whitelist rule: {}", normalized);
         if let Ok(mut cfg_guard) = s.config.write() {
             if !cfg_guard.custom_allowed_domains.contains(&normalized) {
                 cfg_guard.custom_allowed_domains.push(normalized);
@@ -855,7 +896,13 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         if normalized.is_empty() {
             return;
         }
-        if let Err(e) = s.blocker.remove_allowed_domain(&normalized) {
+        if crate::modules::service::remote_mode() {
+            remote_send(crate::modules::service::protocol::CoreRequest::CustomRule {
+                domain: normalized.clone(),
+                allow: true,
+                add: false,
+            });
+        } else if let Err(e) = s.blocker.remove_allowed_domain(&normalized) {
             tracing::error!("Failed to remove whitelist rule: {}", e);
         }
         if let Ok(mut cfg_guard) = s.config.write() {
@@ -869,6 +916,22 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
 
     let s = state.clone();
     ui.on_update_blocklist(move || {
+        if crate::modules::service::remote_mode() {
+            if let Err(e) = crate::app::control_plane::CoreClient::send(
+                crate::modules::service::protocol::CoreRequest::UpdateBlocklists,
+                std::time::Duration::from_secs(10),
+            ) {
+                tracing::error!("Service blocklist update request failed: {}", e);
+                return;
+            }
+            info!("Blocklist update requested via service");
+            if let Ok(mut cfg_guard) = s.config.write() {
+                cfg_guard.last_blocklist_update =
+                    Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                let _ = cfg_guard.save();
+            }
+            return;
+        }
         let state_clone = s.clone();
         s.runtime.spawn(async move {
             let urls = {

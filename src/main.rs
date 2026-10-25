@@ -90,12 +90,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dns_manager::register_safety_cleanup();
     phase_log!("dns-safety");
 
-    let state = AppState::new(log_buffer)?;
-    phase_log!("app-state");
-
     let ui = AppWindow::new()?;
     phase_log!("slint-window");
 
+    // Gate single-instance BEFORE the protection stack starts, so a second
+    // launch exits without ever owning WFP filters or the DNS listener.
     let _single_instance_guard = match modules::system::SingleInstanceGuard::try_acquire(
         ui.as_weak(),
     ) {
@@ -106,6 +105,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     phase_log!("single-instance");
+
+    let state = AppState::new(log_buffer)?;
+    phase_log!("app-state");
 
     let args: Vec<String> = std::env::args().collect();
     let is_autostart = args
@@ -134,15 +136,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         app::ui_bridge::poller::WINDOW_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
     }
-    slint::run_event_loop_until_quit()?;
+    let loop_result = slint::run_event_loop_until_quit();
 
     if modules::service::remote_mode() {
         info!("UI closed — ShieldGhitaCore service keeps protection running");
-        return Ok(());
+        return loop_result.map_err(Into::into);
     }
     // Graceful teardown: disable WFP / self-defense and restore system DNS
-    // so quitting never leaves the host with residual filters or DNS override.
+    // so quitting never leaves the host with residual filters or DNS
+    // override — also when the event loop returned an error.
     app::ui_bridge::handlers::apply_protection(&state, false);
     let _ = dns_manager::restore_system_dns();
-    Ok(())
+    loop_result.map_err(Into::into)
 }

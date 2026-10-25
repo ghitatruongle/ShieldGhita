@@ -42,6 +42,12 @@ pub enum CoreRequest {
         field: String,
         value: bool,
     },
+    CustomRule {
+        domain: String,
+        allow: bool,
+        add: bool,
+    },
+    UpdateBlocklists,
     Rescan,
     Attack {
         ip: String,
@@ -284,6 +290,7 @@ pub struct CoreSnapshot {
     pub uptime_secs: u64,
     pub lists_hash: u64,
     pub version: String,
+    pub feed_status: String,
     pub devices: Option<Vec<SnapshotDevice>>,
     pub incidents: Option<Vec<SnapshotIncident>>,
     pub connections: Option<Vec<SnapshotConn>>,
@@ -351,6 +358,12 @@ mod tests {
                 field: "attack_detection".into(),
                 value: true,
             },
+            CoreRequest::CustomRule {
+                domain: "ads.example.com".into(),
+                allow: false,
+                add: true,
+            },
+            CoreRequest::UpdateBlocklists,
         ];
         for req in cases {
             let json = serde_json::to_vec(&req).unwrap();

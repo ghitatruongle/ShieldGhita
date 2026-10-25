@@ -218,6 +218,9 @@ impl RealtimeGuard {
                     false
                 }
                 Some(expected) if expected != digest => {
+                    if let Ok(mut hashes) = self.canary_hashes.lock() {
+                        hashes.insert(canary.clone(), digest);
+                    }
                     self.emit_incident(
                         "CANARY_TAMPER",
                         &canary.to_string_lossy(),
@@ -467,8 +470,15 @@ impl RealtimeGuard {
     }
 
     fn engage_master_lock(&self) {
-        if let Err(e) = crate::modules::system::dns_manager::set_master_internet_lock(true) {
-            tracing::warn!("Ransomware auto-lock failed: {e}");
+        if self.lock_active.load(Ordering::SeqCst) {
+            return;
+        }
+        match crate::modules::system::dns_manager::set_master_internet_lock(true) {
+            Ok(()) => {
+                self.locked_at_ms.store(now_millis(), Ordering::SeqCst);
+                self.lock_active.store(true, Ordering::SeqCst);
+            }
+            Err(e) => tracing::warn!("Ransomware auto-lock failed: {e}"),
         }
     }
 }

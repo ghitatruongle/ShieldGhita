@@ -3,10 +3,13 @@ use crate::modules::service::protocol::{
     encode_frame, CoreRequest, CoreResponse, CoreSnapshot, MAX_FRAME_BYTES,
 };
 use std::io::{ErrorKind, Read, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
 static IPC_ERRORS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static INFLIGHT_IPC_CALLS: AtomicUsize = AtomicUsize::new(0);
+const MAX_INFLIGHT_IPC_CALLS: usize = 8;
 
 fn record_error(message: String) {
     if let Ok(mut errors) = IPC_ERRORS.lock() {
@@ -107,9 +110,16 @@ fn call_inner(request: CoreRequest) -> Result<CoreResponse, String> {
 
 impl CoreClient {
     pub fn call(request: CoreRequest, timeout: Duration) -> Result<CoreResponse, String> {
+        if INFLIGHT_IPC_CALLS.load(Ordering::SeqCst) >= MAX_INFLIGHT_IPC_CALLS {
+            record_error("ipc busy: hung calls hit the inflight cap".to_string());
+            return Err("ipc busy: service not responding".to_string());
+        }
+        INFLIGHT_IPC_CALLS.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(call_inner(request));
+            let result = call_inner(request);
+            INFLIGHT_IPC_CALLS.fetch_sub(1, Ordering::SeqCst);
+            let _ = tx.send(result);
         });
         match rx.recv_timeout(timeout) {
             Ok(result) => result,

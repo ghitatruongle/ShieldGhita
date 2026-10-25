@@ -13,6 +13,7 @@ const PROGRESS_NOTIFY_EVERY: usize = 16;
 const PROGRESS_MIN_INTERVAL_MS: u128 = 20;
 const RUNNING_PROGRESS_CAP: f32 = 0.95;
 const FILES_PER_PENDING_DIR_ESTIMATE: usize = 12;
+const WALK_BUDGET: usize = 50_000;
 
 #[derive(Debug, Default)]
 struct ProgressThrottle {
@@ -236,7 +237,7 @@ where
             report.cancelled = true;
             break;
         }
-        if report.files_scanned >= options.max_files {
+        if report.files_scanned >= options.max_files || visited.len() > WALK_BUDGET {
             report.budget_reached = true;
             break;
         }
@@ -432,7 +433,6 @@ pub fn estimate_scannable_files(root: &Path, options: &LocationScanOptions) -> u
     visited.insert(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
     let mut walked = 0usize;
-    const WALK_BUDGET: usize = 50_000;
     while let Some(dir) = stack.pop() {
         if walked >= WALK_BUDGET {
             break;

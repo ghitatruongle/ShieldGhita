@@ -1,5 +1,5 @@
 #define MyAppName "Shield Ghita"
-#define MyAppVersion "0.1.3"
+#define MyAppVersion "0.1.4-preview"
 #define MyAppPublisher "ShieldGhita"
 #define MyAppExeName "shield_ghita.exe"
 
