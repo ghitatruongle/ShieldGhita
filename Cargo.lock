@@ -4612,6 +4612,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5357,7 +5363,7 @@ dependencies = [
 
 [[package]]
 name = "shield_ghita"
-version = "0.1.4-preview"
+version = "0.1.4"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -5367,6 +5373,7 @@ dependencies = [
  "i-slint-backend-testing",
  "image",
  "md-5",
+ "qrcode",
  "raw-window-handle",
  "rcgen",
  "reqwest",
@@ -5938,7 +5945,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

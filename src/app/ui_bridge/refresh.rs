@@ -4,7 +4,7 @@ use crate::modules::service::protocol::CoreSnapshot;
 use crate::modules::system::dns_manager;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::cell::RefCell;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 fn sat_i32_usize(v: usize) -> i32 {
@@ -34,6 +34,26 @@ struct UiTextCache {
 thread_local! {
     static UI_TEXT_CACHE: RefCell<UiTextCache> =
         RefCell::new(UiTextCache { status_tag: -1, ..UiTextCache::default() });
+}
+
+/// FNV-1a fingerprints of the content feeding the 1 Hz model rebuilds. A tick
+/// where nothing changed skips the Slint VecModel swap (and the ListView
+/// relayout that comes with it) instead of churning the UI every second.
+static LAST_DEVICES_FP: AtomicU64 = AtomicU64::new(0);
+static LAST_INCIDENTS_FP: AtomicU64 = AtomicU64::new(0);
+static LAST_CONNS_FP: AtomicU64 = AtomicU64::new(0);
+static LAST_GROUPED_FP: AtomicU64 = AtomicU64::new(0);
+
+fn fnv64(h: &mut u64, bytes: &[u8]) {
+    for &b in bytes {
+        *h ^= b as u64;
+        *h = h.wrapping_mul(0x100000001b3);
+    }
+}
+
+fn fnv64_str(h: &mut u64, s: &str) {
+    fnv64(h, s.as_bytes());
+    fnv64(h, b"|");
 }
 
 fn cached_text_changed(slot: &mut String, incoming: &str) -> bool {
@@ -250,6 +270,7 @@ fn refresh_config_and_texts(
     ui_win.set_arp_spoof_detection(cfg.arp_spoof_detection);
     ui_win.set_minimize_to_tray_on_minimize(cfg.minimize_to_tray_on_minimize);
     ui_win.set_start_hidden_in_tray(cfg.start_hidden_in_tray);
+    ui_win.set_admin_panel_enabled(cfg.admin_panel_enabled);
 
     let status_tag: i8 = if is_locked {
         0
@@ -692,8 +713,36 @@ fn apply_remote_av_tab(ui_win: &crate::AppWindow, snap: &CoreSnapshot) {
 fn refresh_security_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
     if ui_win.get_lan_subview_mode() != 1 {
         let devices = s.monitor.get_lan_devices();
+        let mut dev_fp: u64 = 0xcbf29ce484222325;
+        for m in devices.iter() {
+            fnv64_str(&mut dev_fp, &m.name);
+            fnv64_str(&mut dev_fp, &m.ip);
+            fnv64_str(&mut dev_fp, &m.mac);
+            fnv64_str(&mut dev_fp, &m.vendor);
+            fnv64_str(&mut dev_fp, &m.device_type);
+            fnv64(&mut dev_fp, &[m.is_online as u8]);
+            fnv64(&mut dev_fp, &m.latency_ms.to_le_bytes());
+            fnv64_str(&mut dev_fp, &m.traffic);
+            fnv64(&mut dev_fp, &m.total_queries.to_le_bytes());
+            fnv64(&mut dev_fp, &m.blocked_queries.to_le_bytes());
+            fnv64(&mut dev_fp, &m.threats_detected.to_le_bytes());
+            fnv64_str(&mut dev_fp, &m.last_domain);
+            fnv64_str(&mut dev_fp, &m.last_active);
+            fnv64_str(&mut dev_fp, &m.risk_level);
+            fnv64_str(&mut dev_fp, &m.os_name);
+            fnv64_str(&mut dev_fp, &m.custom_alias);
+            fnv64_str(&mut dev_fp, &m.bandwidth_rate);
+            fnv64_str(
+                &mut dev_fp,
+                &crate::modules::monitor::port_scanner::format_ports_summary(&m.open_ports),
+            );
+            fnv64(
+                &mut dev_fp,
+                &[s.security_engine.is_quarantined(&m.ip) as u8],
+            );
+        }
         let device_models: Vec<crate::NetworkDevice> = devices
-            .into_iter()
+            .iter()
             .map(|d| {
                 let open_ports =
                     crate::modules::monitor::port_scanner::format_ports_summary(&d.open_ports);
@@ -703,37 +752,39 @@ fn refresh_security_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
                     || d.mac.contains("Cục bộ")
                     || d.mac.contains("本地");
                 crate::NetworkDevice {
-                    name: d.name.into(),
-                    ip: d.ip.into(),
-                    mac: d.mac.into(),
-                    vendor: d.vendor.into(),
-                    device_type: d.device_type.into(),
+                    name: d.name.clone().into(),
+                    ip: d.ip.clone().into(),
+                    mac: d.mac.clone().into(),
+                    vendor: d.vendor.clone().into(),
+                    device_type: d.device_type.clone().into(),
                     is_online: d.is_online,
                     latency: if d.latency_ms < 0 {
                         "-".into()
                     } else {
                         format!("{} ms", d.latency_ms).into()
                     },
-                    traffic: d.traffic.into(),
+                    traffic: d.traffic.clone().into(),
                     total_queries: sat_i32_u64(d.total_queries),
                     blocked_queries: sat_i32_u64(d.blocked_queries),
                     threats_detected: sat_i32_u64(d.threats_detected),
-                    last_domain: d.last_domain.into(),
-                    last_active: d.last_active.into(),
-                    risk_level: d.risk_level.into(),
+                    last_domain: d.last_domain.clone().into(),
+                    last_active: d.last_active.clone().into(),
+                    risk_level: d.risk_level.clone().into(),
                     open_ports: open_ports.into(),
-                    port_risk: d.port_risk.into(),
-                    port_advice: d.port_advice.into(),
+                    port_risk: d.port_risk.clone().into(),
+                    port_advice: d.port_advice.clone().into(),
                     confidence: d.confidence,
-                    custom_alias: d.custom_alias.into(),
-                    os_name: d.os_name.into(),
+                    custom_alias: d.custom_alias.clone().into(),
+                    os_name: d.os_name.clone().into(),
                     is_quarantined,
-                    bandwidth_rate: d.bandwidth_rate.into(),
+                    bandwidth_rate: d.bandwidth_rate.clone().into(),
                     is_local,
                 }
             })
             .collect();
-        ui_win.set_devices(ModelRc::new(VecModel::from(device_models)));
+        if LAST_DEVICES_FP.swap(dev_fp, Ordering::Relaxed) != dev_fp {
+            ui_win.set_devices(ModelRc::new(VecModel::from(device_models)));
+        }
     } else {
         let query = ui_win.get_incident_search().to_string();
         let incidents = if query.trim().is_empty() {
@@ -753,7 +804,19 @@ fn refresh_security_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
                 mitigation: inc.mitigation.into(),
             })
             .collect();
-        ui_win.set_security_incidents(ModelRc::new(VecModel::from(incident_models)));
+        let mut inc_fp: u64 = 0xcbf29ce484222325;
+        fnv64_str(&mut inc_fp, &query);
+        for inc in &incident_models {
+            fnv64(&mut inc_fp, &inc.id.to_le_bytes());
+            fnv64_str(&mut inc_fp, &inc.time);
+            fnv64_str(&mut inc_fp, &inc.incident_type);
+            fnv64_str(&mut inc_fp, &inc.source_ip);
+            fnv64_str(&mut inc_fp, &inc.details);
+            fnv64_str(&mut inc_fp, &inc.severity);
+        }
+        if LAST_INCIDENTS_FP.swap(inc_fp, Ordering::Relaxed) != inc_fp {
+            ui_win.set_security_incidents(ModelRc::new(VecModel::from(incident_models)));
+        }
     }
 }
 
@@ -774,7 +837,19 @@ fn refresh_monitor_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
                         is_safe: g.is_safe,
                     })
                     .collect();
-                ui_win.set_grouped_connections(ModelRc::new(VecModel::from(grp_conn_models)));
+                let mut grp_fp: u64 = 0xcbf29ce484222325;
+                for g in &grp_conn_models {
+                    fnv64_str(&mut grp_fp, &g.process_name);
+                    fnv64(&mut grp_fp, &g.pid.to_le_bytes());
+                    fnv64(&mut grp_fp, &g.connection_count.to_le_bytes());
+                    fnv64_str(&mut grp_fp, &g.destinations_summary);
+                    fnv64_str(&mut grp_fp, &g.protocol_summary);
+                    fnv64_str(&mut grp_fp, &g.state_summary);
+                    fnv64(&mut grp_fp, &[g.is_safe as u8]);
+                }
+                if LAST_GROUPED_FP.swap(grp_fp, Ordering::Relaxed) != grp_fp {
+                    ui_win.set_grouped_connections(ModelRc::new(VecModel::from(grp_conn_models)));
+                }
             } else {
                 let conns = s.monitor.get_active_connections();
                 let conn_models: Vec<crate::ActiveConnection> = conns
@@ -789,7 +864,19 @@ fn refresh_monitor_tab(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
                         is_safe: c.is_safe,
                     })
                     .collect();
-                ui_win.set_connections(ModelRc::new(VecModel::from(conn_models)));
+                let mut conn_fp: u64 = 0xcbf29ce484222325;
+                for c in &conn_models {
+                    fnv64_str(&mut conn_fp, &c.process_name);
+                    fnv64(&mut conn_fp, &c.pid.to_le_bytes());
+                    fnv64_str(&mut conn_fp, &c.local_addr);
+                    fnv64_str(&mut conn_fp, &c.remote_addr);
+                    fnv64_str(&mut conn_fp, &c.protocol);
+                    fnv64_str(&mut conn_fp, &c.state);
+                    fnv64(&mut conn_fp, &[c.is_safe as u8]);
+                }
+                if LAST_CONNS_FP.swap(conn_fp, Ordering::Relaxed) != conn_fp {
+                    ui_win.set_connections(ModelRc::new(VecModel::from(conn_models)));
+                }
             }
         }
         1 => {

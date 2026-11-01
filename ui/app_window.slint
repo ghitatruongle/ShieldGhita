@@ -1,4 +1,4 @@
-import { Button, ComboBox, LineEdit, ListView } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
 import {
     I18n, NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry,
     DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem,
@@ -288,7 +288,7 @@ export component AppWindow inherits Window {
     in-out property <string> toast-title: "";
     in-out property <bool> toast-is-threat: false;
 
-    in-out property <string> status-text: "🟢 Đang bảo vệ tối cao";
+    in-out property <string> status-text: I18n.t4("🟢 Đang bảo vệ tối cao", "🟢 Maximum shield active", "🟢 最高防护运行中", "🟢 Максимальная защита активна");
     in-out property <int> blocked-count: 0;
     in-out property <int> blocked-today: 0;
     in-out property <int> blocked-week: 0;
@@ -318,7 +318,7 @@ export component AppWindow inherits Window {
 
     in-out property <bool> autostart-enabled: true;
     in-out property <bool> minimize-to-tray-enabled: true;
-    in-out property <string> last-update-text: "Chưa cập nhật";
+    in-out property <string> last-update-text: I18n.t4("Chưa cập nhật", "Not updated yet", "尚未更新", "Ещё не обновлялось");
     in-out property <string> blocklist-feed-status: "";
     in-out property <bool> blocklist-feed-failed: false;
     in-out property <string> live-traffic-rate: "0 KB/s";
@@ -344,6 +344,8 @@ export component AppWindow inherits Window {
 
     in-out property <int> active-tab: 0;
     in-out property <bool> is-admin-edition: false;
+    in-out property <image> panel-qr-image;
+    in-out property <bool> admin-panel-enabled: true;
     in-out property <[ProximityDeviceItem]> proximity-devices;
     in-out property <[BehaviorProfileItem]> behavior-profiles;
     in-out property <int> admin-subview-mode: 0;
@@ -569,6 +571,7 @@ export component AppWindow inherits Window {
     callback toggle-autostart(bool);
     callback toggle-minimize-to-tray(bool);
     callback toggle-notifications(bool);
+    callback toggle-admin-panel(bool);
     in-out property <string> service-status: "";
     in-out property <bool> service-down: false;
     callback service-install();
@@ -1684,6 +1687,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 4;
+                // ScrollView: Settings stacks ~14 fixed cards — the column
+                // clipped below the fold at min-height 640.
+                ScrollView {
                 VerticalLayout {
                     padding: 16px;
                     spacing: 12px;
@@ -1953,6 +1959,30 @@ export component AppWindow inherits Window {
                                 }
                             }
 
+                            if root.is-admin-edition : HorizontalLayout {
+                                spacing: 12px;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 2px;
+
+                                    Button {
+                                        horizontal-stretch: 1;
+                                        text: root.admin-panel-enabled
+                                            ? (I18n.t("🌐 Web Panel LAN: BẬT", "🌐 Web Panel LAN: ON", "🌐 网页面板: 开"))
+                                            : (I18n.t("⚪ Web Panel LAN: TẮT", "⚪ Web Panel LAN: OFF", "⚪ 网页面板: 关"));
+                                        clicked => { root.toggle-admin-panel(!root.admin-panel-enabled); }
+                                    }
+
+                                    Text {
+                                        text: I18n.t("Tắt/bật web panel port 2525 — áp dụng khi khởi động lại app. Quét QR ở tab Admin để mở từ điện thoại.", "Toggles the LAN web panel on port 2525 — applied on app restart. Scan the QR in the Admin tab to open it from your phone.", "切换 2525 端口网页面板 — 重启应用后生效。扫描 Admin 标签页中的二维码从手机打开。");
+                                        font-size: 10px;
+                                        color: #64748b;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
                             Text {
                                 text: I18n.t("⌨ Phím tắt toàn cục: Ctrl+Alt+S bật/tắt bảo vệ", "⌨ Global hotkey: Ctrl+Alt+S toggles protection", "⌨ 全局快捷键：Ctrl+Alt+S 开关防护");
                                 font-size: 10px;
@@ -2045,6 +2075,7 @@ export component AppWindow inherits Window {
 
                     Rectangle { vertical-stretch: 1; }
                 }
+                } // ScrollView — Settings cards stack beyond the 640px fold
             }
 
             Rectangle {
@@ -2063,6 +2094,38 @@ export component AppWindow inherits Window {
                         font-weight: 700;
                         color: #34d399;
                         horizontal-alignment: center;
+                    }
+
+                    if root.panel-qr-image.width > 2 : HorizontalLayout {
+                        alignment: center;
+                        VerticalLayout {
+                            width: 214px;
+                            spacing: 6px;
+                            alignment: center;
+
+                            Rectangle {
+                                width: 214px;
+                                height: 214px;
+                                background: #ffffff;
+                                border-radius: 8px;
+                                clip: true;
+
+                                Image {
+                                    source: root.panel-qr-image;
+                                    width: 214px;
+                                    height: 214px;
+                                    image-rendering: pixelated;
+                                }
+                            }
+
+                            Text {
+                                text: I18n.t("📷 Quét QR bằng điện thoại để mở panel", "📷 Scan this QR with your phone to open the panel", "📷 用手机扫描二维码打开面板");
+                                font-size: 10px;
+                                color: #64748b;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
                     }
 
                     HorizontalLayout {
@@ -2453,7 +2516,7 @@ export component AppWindow inherits Window {
                             clicked => { root.active-diag-view = 1; }
                         }
                         Button {
-                            text: root.active-diag-view == 2 ? (I18n.t4("● 🩺 Đo Ping & Sức Khỏe Mạng", "● 🩺 Ping & Health", "● 🩺 Ping 与健康", "● 🩺 Ping и здоровье сети")) : (I18n.t4("🩺 Đo Ping & Sức Khỏe Mạng", "🩺 Ping & Health", "🩺 Ping 与健康", "🩺 Ping и здоровье сети"));
+                            text: root.active-diag-view == 2 ? (I18n.t4("● 🩺 Sức khỏe mạng", "● 🩺 Ping & Health", "● 🩺 Ping 与健康", "● 🩺 Ping и здоровье сети")) : (I18n.t4("🩺 Sức khỏe mạng", "🩺 Ping & Health", "🩺 Ping 与健康", "🩺 Ping и здоровье сети"));
                             clicked => { root.active-diag-view = 2; }
                         }
                         Rectangle { horizontal-stretch: 1; }
