@@ -1,6 +1,7 @@
 import ctypes
 import struct
 import sys
+from ctypes import wintypes
 from pathlib import Path
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -48,6 +49,37 @@ def delete_res(h, rtype, rid, lang):
     ok = k32.UpdateResourceW(h, make_int_resource(rtype), make_int_resource(rid), lang, None, 0)
     if not ok:
         raise OSError(f"UpdateResourceW delete type={rtype} id={rid} lang={lang} failed err={ctypes.get_last_error()}")
+
+
+def existing_manifest_langs(exe):
+    lib = k32.LoadLibraryExW(str(exe), None, 0x00000002)
+    if not lib:
+        return []
+    langs = []
+
+    proto = ctypes.WINFUNCTYPE(
+        wintypes.BOOL, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, wintypes.WORD, ctypes.c_long
+    )
+
+    def on_lang(_module, _type, _name, lang, _param):
+        langs.append(lang)
+        return True
+
+    k32.EnumResourceLanguagesW(
+        lib, ctypes.c_wchar_p("#24"), ctypes.c_wchar_p("#1"), proto(on_lang), 0
+    )
+    ctypes.windll.kernel32.FreeLibrary(lib)
+    return langs
+
+
+def remove_foreign_manifest_langs(h, langs, keep_lang=LANG_ID):
+    for lang in langs:
+        if lang == keep_lang:
+            continue
+        try:
+            delete_res(h, RT_MANIFEST, 1, lang)
+        except OSError as e:
+            print(f"manifest lang {hex(lang)} delete skipped: {e}")
 
 
 def end_update(h):
@@ -220,13 +252,14 @@ def main():
     manifest = (root / "app.manifest").read_bytes()
     version = build_version_info(APP_VERSION)
 
+    foreign_langs = [lang for lang in existing_manifest_langs(exe) if lang != LANG_ID]
     h = begin_update(exe)
     try:
         for idx, icon in enumerate(icons, start=1):
             update_res(h, RT_ICON, idx, icon["data"])
         update_res(h, RT_GROUP_ICON, 1, group_icon_blob(icons))
         update_res(h, RT_MANIFEST, 1, manifest)
-        delete_res(h, RT_MANIFEST, 1, 0x0000)
+        remove_foreign_manifest_langs(h, foreign_langs, keep_lang=LANG_ID)
         update_res(h, RT_VERSION, 1, version)
         end_update(h)
     except Exception:
