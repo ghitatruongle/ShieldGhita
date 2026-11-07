@@ -78,16 +78,17 @@ dns_*.txt
 
 # --- Admin Edition: source + artifacts stay LOCAL ONLY (never commit) ----------
 # Rust admin modules (exact files + wildcards for future siblings/subdirs):
-src/modules/local/
-src/modules/admin_*.rs
-src/modules/panel.rs
-src/modules/panel/
-src/app/ui_bridge/admin.rs
-src/app/ui_bridge/admin/
+/src/modules/local/
+/src/modules/admin_*.rs
+/src/modules/panel.rs
+/src/modules/panel/
+/src/app/ui_bridge/admin.rs
+/src/app/ui_bridge/admin/
 # Panel credentials file (salted password hash) if ever copied into the repo:
-admin_panel.toml
-# Runtime data of admin modules:
-local/
+admin_panel*.toml
+# Runtime data of admin modules (root-level only — an unanchored `local/` would
+# silently hide any future legit `local` submodule inside public source):
+/local/
 local_*.json
 local_*.log
 # Admin installer script (public installer.iss stays tracked):
@@ -102,6 +103,8 @@ ui/assets/admin/
 # These must stay on the owner's machine only:
 docs/admin/
 docs_admin/
+docs/plan-*.md
+docs/plans/
 admin_*.md
 ADMIN*.md
 admin_*.txt
@@ -193,6 +196,8 @@ tmp_*/
 
 # --- Agent / AI tooling local state (can quote private source) -------------------
 .zcode/
+.auto/
+.mimosa/
 .freebuff/
 .mimocode/
 .claude/settings.local.json

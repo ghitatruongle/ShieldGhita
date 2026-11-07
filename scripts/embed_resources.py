@@ -44,6 +44,12 @@ def update_res(h, rtype, rid, data, lang=LANG_ID):
         raise OSError(f"UpdateResourceW type={rtype} id={rid} failed err={ctypes.get_last_error()}")
 
 
+def delete_res(h, rtype, rid, lang):
+    ok = k32.UpdateResourceW(h, make_int_resource(rtype), make_int_resource(rid), lang, None, 0)
+    if not ok:
+        raise OSError(f"UpdateResourceW delete type={rtype} id={rid} lang={lang} failed err={ctypes.get_last_error()}")
+
+
 def end_update(h):
     if not k32.EndUpdateResourceW(h, False):
         raise OSError(f"EndUpdateResourceW failed err={ctypes.get_last_error()}")
@@ -220,6 +226,7 @@ def main():
             update_res(h, RT_ICON, idx, icon["data"])
         update_res(h, RT_GROUP_ICON, 1, group_icon_blob(icons))
         update_res(h, RT_MANIFEST, 1, manifest)
+        delete_res(h, RT_MANIFEST, 1, 0x0000)
         update_res(h, RT_VERSION, 1, version)
         end_update(h)
     except Exception:

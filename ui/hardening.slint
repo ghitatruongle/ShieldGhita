@@ -184,6 +184,16 @@ export component HardeningTab inherits Rectangle {
                     enabled: !root.harden-busy;
                     clicked => { root.harden-fix("restrict_anon"); }
                 }
+                Button {
+                    text: "LLMNR";
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-fix("llmnr_off"); }
+                }
+                Button {
+                    text: "mDNS";
+                    enabled: !root.harden-busy;
+                    clicked => { root.harden-fix("mdns_off"); }
+                }
             }
 
             HorizontalLayout {
@@ -202,6 +212,8 @@ export component HardeningTab inherits Rectangle {
                 Button { text: "RDP NLA"; enabled: !root.harden-busy; clicked => { root.harden-rollback("rdp_nla"); } }
                 Button { text: "LSA"; enabled: !root.harden-busy; clicked => { root.harden-rollback("lsa_ppl"); } }
                 Button { text: "UAC"; enabled: !root.harden-busy; clicked => { root.harden-rollback("uac_enable"); } }
+                Button { text: "LLMNR"; enabled: !root.harden-busy; clicked => { root.harden-rollback("llmnr_off"); } }
+                Button { text: "mDNS"; enabled: !root.harden-busy; clicked => { root.harden-rollback("mdns_off"); } }
                 Button { text: "AutoRun"; enabled: !root.harden-busy; clicked => { root.harden-rollback("autorun_off"); } }
                 Button { text: "Anonymous"; enabled: !root.harden-busy; clicked => { root.harden-rollback("restrict_anon"); } }
             }
