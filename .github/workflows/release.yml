@@ -45,7 +45,9 @@ jobs:
         shell: pwsh
         run: |
           $exe = "target\release\shield_ghita.exe"
-          $markers = @("Cross-Subnet Port Sweep", "WS-Discovery UDP 3702", "BehaviorProfile", "AmbientWifiNode", "sgpanel", "SGPanelMemory", "SGVLT1", "AuthzManager", "hardening_fix", "FixSpec")
+          # Track 3/4 (0.1.5-alpha1): SGVLT1 / hardening_fix / FixSpec removed —
+          # Vault and Hardening are public edition features now.
+          $markers = @("Cross-Subnet Port Sweep", "WS-Discovery UDP 3702", "BehaviorProfile", "AmbientWifiNode", "sgpanel", "SGPanelMemory", "AuthzManager")
           foreach ($m in $markers) {
             $found = Select-String -Path $exe -Pattern $m -SimpleMatch -Quiet
             if ($found) {

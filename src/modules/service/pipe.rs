@@ -202,12 +202,24 @@ fn create_server(
     unsafe { tokio::net::windows::named_pipe::NamedPipeServer::from_raw_handle(handle.0 as _) }
 }
 
+/// Idle guard for IPC clients: a previously authenticated client that stops
+/// sending would otherwise hold this task open forever (Track 1.1).
+const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 async fn handle_client(
     pipe: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
     state: Arc<AppState>,
     token: String,
 ) -> std::io::Result<()> {
-    let Some(first) = read_frame(pipe).await? else {
+    let first = match tokio::time::timeout(IDLE_TIMEOUT, read_frame(pipe)).await {
+        Ok(Ok(frame)) => frame,
+        Ok(Err(e)) => return Err(e),
+        Err(_) => {
+            warn!("Core IPC: handshake not received within {IDLE_TIMEOUT:?} — closing");
+            return Ok(());
+        }
+    };
+    let Some(first) = first else {
         return Ok(());
     };
     let authenticated = match serde_json::from_slice::<CoreRequest>(&first) {
@@ -227,8 +239,14 @@ async fn handle_client(
     }
     write_frame(pipe, &CoreResponse::Ok).await?;
     loop {
-        let Some(bytes) = read_frame(pipe).await? else {
-            break;
+        let bytes = match tokio::time::timeout(IDLE_TIMEOUT, read_frame(pipe)).await {
+            Ok(Ok(Some(bytes))) => bytes,
+            Ok(Ok(None)) => break,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                warn!("Core IPC: idle client timed out after {IDLE_TIMEOUT:?} — closing");
+                break;
+            }
         };
         let Ok(request) = serde_json::from_slice::<CoreRequest>(&bytes) else {
             write_frame(
@@ -240,7 +258,27 @@ async fn handle_client(
             .await?;
             continue;
         };
-        let response = dispatch(&state, request).await;
+        // A dispatch panic must not kill the connection silently: run each
+        // request on its own task so a panic is captured as JoinError and the
+        // client still receives an explicit error response (Track 1.1).
+        let response = match tokio::spawn({
+            let state = state.clone();
+            async move { dispatch(&state, request).await }
+        })
+        .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                if e.is_panic() {
+                    error!("Core IPC: dispatch panicked: {e}");
+                } else {
+                    error!("Core IPC: dispatch task failed: {e}");
+                }
+                CoreResponse::Err {
+                    code: "dispatch_failed".into(),
+                }
+            }
+        };
         write_frame(pipe, &response).await?;
     }
     Ok(())

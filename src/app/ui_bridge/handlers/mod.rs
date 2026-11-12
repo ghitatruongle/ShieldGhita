@@ -373,9 +373,12 @@ pub(super) mod adblock;
 pub(super) mod antivirus;
 pub(super) mod diagnostics;
 pub(super) mod files;
+// Track 3/4: formerly admin-only callback groups, now public edition features.
+pub(super) mod hardening;
 pub(super) mod protection;
 pub(super) mod ram;
 pub(super) mod settings;
+pub(super) mod vault;
 
 pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
     protection::register(ui, state);
@@ -385,6 +388,8 @@ pub fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
     files::register(ui, state);
     adblock::register(ui, state);
     antivirus::register(ui, state);
+    hardening::register(ui, state);
+    vault::register(ui, state);
 }
 #[cfg(test)]
 mod quarantine_tests {

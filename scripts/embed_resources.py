@@ -65,8 +65,11 @@ def existing_manifest_langs(exe):
         langs.append(lang)
         return True
 
+    # Keep the WINFUNCTYPE alive for the whole enumeration — an inline callback
+    # can be garbage-collected mid-call and crash or corrupt the result.
+    keepalive = proto(on_lang)
     k32.EnumResourceLanguagesW(
-        lib, ctypes.c_wchar_p("#24"), ctypes.c_wchar_p("#1"), proto(on_lang), 0
+        lib, ctypes.c_wchar_p("#24"), ctypes.c_wchar_p("#1"), keepalive, 0
     )
     ctypes.windll.kernel32.FreeLibrary(lib)
     return langs
@@ -252,14 +255,24 @@ def main():
     manifest = (root / "app.manifest").read_bytes()
     version = build_version_info(APP_VERSION)
 
-    foreign_langs = [lang for lang in existing_manifest_langs(exe) if lang != LANG_ID]
+    foreign_langs = [lang for lang in existing_manifest_langs(exe) if lang != 0]
     h = begin_update(exe)
     try:
         for idx, icon in enumerate(icons, start=1):
             update_res(h, RT_ICON, idx, icon["data"])
         update_res(h, RT_GROUP_ICON, 1, group_icon_blob(icons))
-        update_res(h, RT_MANIFEST, 1, manifest)
-        remove_foreign_manifest_langs(h, foreign_langs, keep_lang=LANG_ID)
+        # Replace the manifest at language 0x0000 (NEUTRAL): the mingw-w64
+        # toolchain embeds its default asInvoker manifest at neutral, and
+        # UpdateResourceW keys on (type, id, language) — writing app.manifest
+        # at 0x409 would ADD an entry while the neutral asInvoker one kept
+        # winning in the loader (no UAC shield, no auto-elevation). A neutral
+        # manifest is picked regardless of the process UI language.
+        update_res(h, RT_MANIFEST, 1, manifest, lang=0)
+        for lang in foreign_langs:
+            try:
+                delete_res(h, RT_MANIFEST, 1, lang)
+            except OSError as e:
+                print(f"manifest lang {hex(lang)} delete skipped: {e}")
         update_res(h, RT_VERSION, 1, version)
         end_update(h)
     except Exception:

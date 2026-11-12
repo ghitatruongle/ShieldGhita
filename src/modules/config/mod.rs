@@ -296,6 +296,19 @@ impl AppConfig {
     }
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let result = self.write_config();
+        if let Err(e) = &result {
+            // Track 2: callers use `let _ = save()` widely — surface silent
+            // failures (disk full / ACL) in the log with the path for triage.
+            tracing::warn!(
+                "Config save failed ({}): {e}",
+                Self::config_path().display()
+            );
+        }
+        result
+    }
+
+    fn write_config(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::config_path();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;

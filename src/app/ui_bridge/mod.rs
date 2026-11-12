@@ -229,19 +229,8 @@ pub fn setup_ui_bridge(
         ui.on_pentest_export_report(|| {});
         ui.on_wifi_audit_scan(|| {});
         ui.on_wifi_audit_weak_psk(|| {});
-        ui.on_harden_audit_persistence(|| {});
-        ui.on_harden_audit_eventlog(|| {});
-        ui.on_harden_audit_usb(|| {});
-        ui.on_harden_selfhash(|| {});
-        ui.on_harden_fix(|_| {});
-        ui.on_harden_rollback(|_| {});
-        ui.on_vault_encrypt_file(|| {});
-        ui.on_vault_decrypt_file(|| {});
-        ui.on_vault_encrypt_folder(|| {});
-        ui.on_vault_decrypt_folder(|| {});
-        ui.on_vault_secure_delete(|| {});
-        ui.on_vault_gen_password(|| {});
-        ui.on_vault_copy_password(|| {});
+        // Track 3/4: harden_* and vault_* callbacks are registered for real in
+        // handlers::{hardening,vault} for every edition now — no stubs needed.
     }
 
     if !cfg.onboarding_done {

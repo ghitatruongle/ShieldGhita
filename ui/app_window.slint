@@ -1,6 +1,6 @@
 import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
 import {
-    I18n, NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry,
+    I18n, Theme, NetworkDevice, ActiveConnection, AppConnectionGroup, LogEntry,
     DomainLogGroup, ConsoleLogEntry, SecurityIncident, ProximityDeviceItem,
     AttackHistoryItem, CameraItem, BehaviorProfileItem, DnsBenchmarkItem,
     PingResultItem, NetworkHealthReport,
@@ -8,7 +8,7 @@ import {
     AdStatItem, ClientRuleItem, VulnFindingItem, QuarantineItem,
     WifiNetworkItem, PentestFindingItem, PersistenceItem,
 } from "common.slint";
-import { TabButton, StatCard } from "widgets.slint";
+import { TabButton, StatCard, Spinner } from "widgets.slint";
 import { RamMapTab } from "rammap.slint";
 import { FileAnalyzerTab } from "file_analyzer.slint";
 import { AdBlockStatsTab } from "adblock_stats.slint";
@@ -33,10 +33,17 @@ component LanDeviceRow inherits Rectangle {
     callback toggle-quarantine(string, bool);
 
     height: 68px;
-    background: device.is-quarantined ? #3b0712 : #111827;
+    // Track 5: has-hover đổi nền nhẹ; TouchArea đặt TRƯỚC các nút con để không nuốt click của chúng
+    background: device.is-quarantined
+        ? (hover-area.has-hover ? Theme.danger-row-hover : #3b0712)
+        : (hover-area.has-hover ? Theme.surface-hover : #111827);
     border-radius: 8px;
     border-width: 1px;
     border-color: device.is-quarantined ? #f43f5e : (device.threats-detected > 0 ? #ef4444 : #1f2937);
+    animate background { duration: 120ms; }
+
+    hover-area := TouchArea { }
+
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 14px;
@@ -305,6 +312,16 @@ export component AppWindow inherits Window {
     in-out property <bool> show-onboarding: false;
     in-out property <string> incident-search: "";
     callback dismiss-onboarding();
+
+    // Track 5: giá trị 0→1 được animate khi toast/overlay/modal bật — các phần tử con
+    // tham chiếu để trượt/mờ dần vào. Đặt ở Window (tồn tại vĩnh viễn) vì animate trên
+    // phần tử tạo bởi `if` không chạy được ở khung hình khởi tạo.
+    property <float> toast-slide: root.show-toast ? 1.0 : 0.0;
+    animate toast-slide { duration: 200ms; }
+    property <float> overlay-fade: root.show-onboarding ? 1.0 : 0.0;
+    animate overlay-fade { duration: 120ms; }
+    property <float> attack-modal-fade: root.attack-modal-open ? 1.0 : 0.0;
+    animate attack-modal-fade { duration: 120ms; }
 
     in-out property <float> cpu-usage: 0.0;
     in-out property <float> mem-usage: 0.0;
@@ -629,6 +646,8 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.height;
         background: #020617dd;
+        // Track 5: overlay mờ dần vào khi bật (tham chiếu property animate ở Window)
+        opacity: root.overlay-fade;
         TouchArea {
             clicked => { }
         }
@@ -679,10 +698,12 @@ export component AppWindow inherits Window {
 
     if root.show-toast : Rectangle {
         z: 100;
-        x: root.width - 410px;
+        // Track 5: trượt vào từ ngoài mép phải cửa sổ + mờ dần (toast-slide 0→1, 200ms)
+        x: root.width - 410px + (1.0 - root.toast-slide) * 410px;
         y: 60px;
         width: 390px;
         height: 72px;
+        opacity: root.toast-slide;
         background: root.toast-is-threat ? #450a0a : #1e1b4b;
         border-radius: 10px;
         border-width: 2px;
@@ -984,7 +1005,8 @@ export component AppWindow inherits Window {
                 clicked => { root.active-tab = 5; }
             }
 
-            if root.is-admin-edition : TabButton {
+            // Track 4: Vault and "Chống Hack" are public edition features now.
+            TabButton {
                 text: I18n.t4("🔐 Vault", "🔐 Vault", "🔐 保险库", "🔐 Хранилище");
                 active: root.active-tab == 12;
                 active-color: #c084fc;
@@ -998,7 +1020,7 @@ export component AppWindow inherits Window {
                 clicked => { root.active-tab = 13; }
             }
 
-            if root.is-admin-edition : TabButton {
+            TabButton {
                 text: I18n.t4("🧱 Chống Hack", "🧱 Hardening", "🧱 加固", "🧱 Укрепление");
                 active: root.active-tab == 14;
                 active-color: #fbbf24;
@@ -1022,6 +1044,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 0;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 0 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
                 VerticalLayout {
                     padding: 16px;
                     spacing: 16px;
@@ -1144,6 +1169,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 1;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 1 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
                 VerticalLayout {
                     padding: 16px;
                     spacing: 12px;
@@ -1191,6 +1219,9 @@ export component AppWindow inherits Window {
                         }
                     }
 
+                    // Track 5: forward-focus không khả thi cho LineEdit này vì nó là
+                    // phần tử điều kiện (`if`) — Slint không cho tham chiếu element
+                    // tạo bởi `if` từ bên ngoài. Ô search vẫn nhận focus qua Tab/click.
                     HorizontalLayout {
                         spacing: 10px;
                         Button {
@@ -1239,7 +1270,7 @@ export component AppWindow inherits Window {
                         border-width: 1px;
                         border-color: #4f46e5;
                         HorizontalLayout {
-                            padding-left: 10px;
+                            padding-left: 32px;
                             padding-right: 10px;
                             alignment: start;
                             Text {
@@ -1249,6 +1280,13 @@ export component AppWindow inherits Window {
                                 color: #a5b4fc;
                                 vertical-alignment: center;
                             }
+                        }
+                        // Track 5: glyph quay cạnh thông báo quét (giữ nguyên chuỗi i18n)
+                        Spinner {
+                            x: 10px;
+                            y: (parent.height - self.height) / 2;
+                            size: 14px;
+                            glyph-color: Theme.accent;
                         }
                     }
 
@@ -1346,6 +1384,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 2;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 2 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
                 VerticalLayout {
                     padding: 16px;
                     spacing: 10px;
@@ -1595,6 +1636,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 3;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 3 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
                 HorizontalLayout {
                     padding: 16px;
                     spacing: 16px;
@@ -1687,6 +1731,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 4;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 4 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
                 // ScrollView: Settings stacks ~14 fixed cards — the column
                 // clipped below the fold at min-height 640.
                 ScrollView {
@@ -2500,6 +2547,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 6;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 6 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
 
                 VerticalLayout {
                     padding: 16px;
@@ -2924,6 +2974,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 7;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 7 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
 
                 RamMapTab {
                     total-mb: root.ram-total-mb;
@@ -2961,6 +3014,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 8;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 8 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
 
                 FileAnalyzerTab {
                     result: root.file-scan-result;
@@ -2994,6 +3050,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 9;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 9 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
 
                 AdBlockStatsTab {
                     total-today: root.adblock-total-today;
@@ -3024,6 +3083,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 10;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 10 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
 
                 AntivirusTab {
                     av-realtime <=> root.av-realtime;
@@ -3054,6 +3116,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 visible: root.active-tab == 11;
+                // Track 5: fade-in khi bật tab (opacity đổi theo active-tab nên animate chạy được)
+                opacity: root.active-tab == 11 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
 
                 VulnScanTab {
                     is-busy: root.vuln-is-busy;
@@ -3071,7 +3136,11 @@ export component AppWindow inherits Window {
                 y: 0;
                 width: 100%;
                 height: 100%;
-                visible: root.is-admin-edition && root.active-tab == 12;
+                // Track 4: Vault is public — show for every edition.
+                visible: root.active-tab == 12;
+                // Review fix (P2): same fade-in as the other public panels.
+                opacity: root.active-tab == 12 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
 
                 VaultTab {
                     vault-password <=> root.vault-password;
@@ -3118,7 +3187,11 @@ export component AppWindow inherits Window {
                 y: 0;
                 width: 100%;
                 height: 100%;
-                visible: root.is-admin-edition && root.active-tab == 14;
+                // Track 3: Hardening is public — show for every edition.
+                visible: root.active-tab == 14;
+                // Review fix (P2): same fade-in as the other public panels.
+                opacity: root.active-tab == 14 ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; }
 
                 HardeningTab {
                     harden-busy: root.harden-busy;
@@ -3171,6 +3244,8 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.height;
         background: #000000aa;
+        // Track 5: backdrop mờ dần vào khi mở modal
+        opacity: root.attack-modal-fade;
         TouchArea {
             clicked => { root.attack-modal-open = false; }
         }
@@ -3182,6 +3257,9 @@ export component AppWindow inherits Window {
         height: 470px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
+        // Track 5: modal mờ dần vào 120ms (scale bỏ qua — Slint không có transform scale
+        // trên element và animating width/height sẽ phá layout)
+        opacity: root.attack-modal-fade;
         background: #0d121f;
         border-radius: 14px;
         border-width: 2px;

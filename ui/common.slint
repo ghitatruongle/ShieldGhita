@@ -1,3 +1,39 @@
+// Track 5 (0.1.5-alpha1): token màu & cỡ chữ dùng chung toàn app.
+// Lưu ý: global Theme chỉ ĐỊNH NGHĨA token — code MỚI tham chiếu Theme.xxx thay vì hex,
+// các màu cũ chưa mass-migrate (bản sau mới migrate).
+export global Theme {
+    // Nền
+    out property <color> bg-base: #0b0f19;
+    out property <color> bg-panel: #0f172a;
+    out property <color> bg-card: #1e293b;
+    // Chữ
+    out property <color> text-primary: #f1f5f9;
+    out property <color> text-secondary: #94a3b8;
+    out property <color> text-muted: #64748b;
+    // Accent
+    out property <color> accent: #38bdf8;
+    out property <color> accent-dim: #38bdf826; // rgba(56,189,248,0.15)
+    // Trạng thái
+    out property <color> danger: #ef4444;
+    out property <color> danger-soft: #f87171;
+    out property <color> success: #34d399;
+    out property <color> success-strong: #22c55e;
+    out property <color> warning: #fbbf24;
+    out property <color> warning-deep: #f59e0b;
+    // Viền
+    out property <color> border: #1f2937;
+    // Hover (Track 5 — hiệu ứng mượt): nền tối + ~8% sáng hơn
+    out property <color> surface-hover: #222a3b;        // ≈ #0f172a / #111827 + 8%
+    out property <color> surface-hover-strong: #303a4b; // ≈ #1e293b + 8%
+    out property <color> danger-row-hover: #4b1b25;     // ≈ #3b0712 (hàng cách ly) + 8%
+    // Cỡ chữ
+    out property <length> fs-small: 10px;
+    out property <length> fs-body: 11px;
+    out property <length> fs-body-lg: 12px;
+    out property <length> fs-title: 20px;
+    out property <length> fs-title-lg: 24px;
+}
+
 export global I18n {
     in-out property <int> lang: 0;
     public pure function t(vi: string, en: string, zh: string) -> string {

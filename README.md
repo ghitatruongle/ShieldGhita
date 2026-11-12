@@ -4,7 +4,7 @@
 
 **Master Internet Controller & Ultra-Fast Network Security Shield for Windows**
 
-[![Version](https://img.shields.io/badge/version-0.1.5--preview-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
+[![Version](https://img.shields.io/badge/version-0.1.5--alpha1-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com)
 
@@ -96,14 +96,23 @@
 ### 12. Security & Vulnerability Audit 🔎
 - **Local Windows Audit**: SMBv1, RDP/NLA, UAC, firewall profiles, Windows Update age, startup entries, LSA protection and blank-password policy — all via locale-free registry checks.
 - **LAN Device Audit**: Risky service ports (Telnet, RTSP, RDP, SMB) per device with severity badges and concrete hardening advice.
-- **Honest Scope**: A read-only audit — Shield Ghita reports and advises, it never changes your system configuration.
+- **Honest Scope (for this LAN audit)**: A read-only audit — Shield Ghita reports and advises, it never changes your system configuration. (The separate Hardening feature applies only the registry fixes you explicitly choose, each with one-click rollback.)
+
+### 13. Vault — Encrypted File Safe 🔐 (new in 0.1.5-alpha1, previously Admin-only)
+- **AES-256-GCM file & folder encryption** with an Argon2id-derived key: encrypt any file or whole folder into a `.sgvault` container and restore it bit-exact with the password.
+- **Password generator + clipboard auto-clear** (30s) and **secure delete** (3-pass overwrite + rename + remove) for the original file after encryption.
+- ⚠️ **There is no escrow**: if you lose the vault password, the data is unrecoverable — keep a copy in a safe place.
+
+### 14. Hardening — One-Click Registry Fixes 🧱 (new in 0.1.5-alpha1, previously Admin-only)
+- **8 safety patches**: SMBv1 off, RDP Network Level Authentication, LSA PPL, UAC, AutoRun, RestrictAnonymous, LLMNR off, mDNS off — against WannaCry-style worms, credential theft and LAN name-capture.
+- **Every fix is reversible**: the previous registry value is backed up to `hardening_backup.json` before each apply, and one-click rollback restores it exactly (including values that did not exist before).
 
 ---
 
 ## Installation & Getting Started
 
 ### 1. Pre-built Setup Installer
-- Download `ShieldGhita_Setup_v0.1.5-preview.exe` and execute with **Administrator** privileges.
+- Download `ShieldGhita_Setup_v0.1.5-alpha1.exe` and execute with **Administrator** privileges.
 - The installer itself runs in English, Tiếng Việt or 简体中文, lets you choose the application language, automatically terminates running instances, cleanly uninstalls previous versions, and deploys the new release safely.
 
 ### 2. Build From Source (For Developers)
@@ -215,14 +224,23 @@ cargo run --release
 ### 12. Kiểm Toán Bảo Mật & Lỗ Hổng 🔎
 - **Kiểm toán Windows cục bộ**: SMBv1, RDP/NLA, UAC, cấu hình tường lửa, tuổi bản vá Windows Update, danh sách tự khởi động, bảo vệ LSA, chính sách mật khẩu rỗng — toàn bộ qua registry không phụ thuộc ngôn ngữ hệ thống.
 - **Kiểm toán thiết bị LAN**: Cổng dịch vụ rủi ro (Telnet, RTSP, RDP, SMB) trên từng thiết bị với nhãn mức độ và khuyến nghị gia cố cụ thể.
-- **Phạm vi trung thực**: Chỉ đọc — Shield Ghita báo cáo và khuyến nghị, không bao giờ tự thay đổi cấu hình máy bạn.
+- **Phạm vi trung thực (riêng mục kiểm toán LAN này)**: Chỉ đọc — Shield Ghita báo cáo và khuyến nghị, không bao giờ tự thay đổi cấu hình máy bạn. (Tính năng Chống Hack riêng chỉ áp dụng những bản vá registry bạn chủ động chọn, mỗi bản vá đều có rollback một chạm.)
+
+### 13. Vault — Két sắt mã hóa 🔐 (mới trong 0.1.5-alpha1, trước đây chỉ có ở bản Admin)
+- **Mã hóa tệp/thư mục AES-256-GCM** với khóa dẫn xuất Argon2id: đóng gói mọi tệp hoặc cả thư mục thành `.sgvault` và mở lại nguyên vẹn bằng mật khẩu.
+- **Sinh mật khẩu + clipboard tự xóa** (30 giây) và **xóa an toàn** (ghi đè 3 vòng + đổi tên + xóa) tệp gốc sau khi mã hóa.
+- ⚠️ **Không có escrow**: mất mật khẩu vault = mất dữ liệu vĩnh viễn — hãy giữ mật khẩu ở nơi an toàn.
+
+### 14. Chống Hack — Vá registry một chạm 🧱 (mới trong 0.1.5-alpha1, trước đây chỉ có ở bản Admin)
+- **8 bản vá an toàn**: tắt SMBv1, bật RDP Network Level Authentication, LSA PPL, UAC, AutoRun, RestrictAnonymous, tắt LLMNR, tắt mDNS — chống sâu kiểu WannaCry, đánh cắp credential và bắt tên miền cục bộ.
+- **Mọi bản vá đều hoàn tác được**: giá trị registry cũ được backup vào `hardening_backup.json` trước khi áp dụng, rollback một chạm khôi phục chính xác (kể cả giá trị chưa từng tồn tại).
 
 ---
 
 ## Hướng dẫn cài đặt & Sử dụng
 
 ### 1. Cài đặt nhanh qua bộ Setup
-- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.5-preview.exe` và chạy với quyền **Administrator**.
+- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.5-alpha1.exe` và chạy với quyền **Administrator**.
 - Trình cài đặt hỗ trợ tiếng Việt / English / 简体中文, cho phép chọn ngôn ngữ ứng dụng, tự động dừng ứng dụng cũ, dọn sạch phiên bản trước và cập nhật phiên bản mới một cách an toàn.
 
 ### 2. Chạy từ mã nguồn (Dành cho Developer)

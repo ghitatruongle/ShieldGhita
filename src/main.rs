@@ -71,6 +71,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if std::env::args().any(|arg| arg == "--service") {
+        // Service mode owns the system-DNS override just like the UI path:
+        // register the emergency panic-hook + Ctrl handler BEFORE the worker
+        // starts, so a mid-override panic cannot leave the host on a dead
+        // resolver until the next launch (Track 1.1).
+        dns_manager::register_safety_cleanup();
         let _ = phase_at;
         return modules::service::run_service_mode();
     }

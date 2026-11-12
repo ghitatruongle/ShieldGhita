@@ -1,5 +1,6 @@
 import { Button, ListView, LineEdit } from "std-widgets.slint";
-import { I18n, FileScanResult, FileScanFindingItem, LocationThreatItem } from "common.slint";
+import { I18n, Theme, FileScanResult, FileScanFindingItem, LocationThreatItem } from "common.slint";
+import { Spinner } from "widgets.slint";
 
 export component FileFindingRow inherits Rectangle {
     in property <FileScanFindingItem> finding;
@@ -211,6 +212,12 @@ export component FileAnalyzerTab inherits Rectangle {
                     font-size: 11px;
                     color: #94a3b8;
                 }
+            }
+
+            // Track 5: spinner quay cạnh nút khi đang quét (giữ nguyên chuỗi i18n)
+            if root.is-scanning : VerticalLayout {
+                alignment: center;
+                Spinner { size: 13px; glyph-color: Theme.accent; }
             }
 
             Button {
@@ -565,6 +572,12 @@ export component FileAnalyzerTab inherits Rectangle {
                         }
                     }
 
+                    // Track 5: spinner quay cạnh nút khi đang quét vị trí (giữ nguyên chuỗi i18n)
+                    if root.location-busy : VerticalLayout {
+                        alignment: center;
+                        Spinner { size: 13px; glyph-color: Theme.accent; }
+                    }
+
                     Button {
                         text: root.location-busy ? I18n.t4("⏳ Đang quét...", "⏳ Scanning...", "⏳ 扫描中...", "⏳ Сканирование...") : I18n.t4("📂 Chọn thư mục / ổ đĩa", "📂 Pick folder / drive", "📂 选择文件夹/磁盘", "📂 Выбрать папку / диск");
                         enabled: !root.location-busy;
@@ -630,6 +643,8 @@ export component FileAnalyzerTab inherits Rectangle {
                                 height: 100%;
                                 border-radius: 3px;
                                 background: #0ea5e9;
+                                // Track 5: progress bar trượt mượt khi % thay đổi
+                                animate width { duration: 150ms; }
                             }
                         }
                     }

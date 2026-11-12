@@ -1,10 +1,11 @@
 [package]
 name = "shield_ghita"
-version = "0.1.5-preview"
+version = "0.1.5-alpha1"
 edition = "2021"
 [features]
 default = []
-admin = ["dep:rcgen", "dep:tokio-rustls", "dep:argon2", "dep:qrcode"]
+# Track 4: argon2 is no longer admin-gated — Vault (public edition) uses it as KDF.
+admin = ["dep:rcgen", "dep:tokio-rustls", "dep:qrcode"]
 [dependencies]
 slint = { version = "1.8", features = ["raw-window-handle-06"] }
 # Needed to extract the Win32 HWND from slint::Window so the pick-file dialog
@@ -28,7 +29,8 @@ sha1 = "0.10"
 sha2 = "0.10"
 getrandom = "0.3"
 aes-gcm = "0.10"
-argon2 = { version = "0.5", optional = true }
+# Vault KDF (public edition since 0.1.5-alpha1) — also used by the admin panel auth.
+argon2 = "0.5"
 # Admin Edition panel HTTPS only (feature-gated: never compiled into public builds).
 # ring provider matches the one reqwest/hyper-rustls already use in this tree.
 rcgen = { version = "0.13", optional = true, default-features = false, features = ["ring"] }
