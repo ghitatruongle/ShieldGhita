@@ -123,10 +123,9 @@ fn evaluate_connection_safety(proc_name: &str, remote_port: u16) -> bool {
     let dangerous_ports: [u16; 11] = [
         4444, 5555, 1337, 6667, 31337, 4443, 7001, 8081, 9999, 12345, 27017,
     ];
-    if dangerous_ports.contains(&remote_port) {
-        return false;
-    }
-    true
+    // CI clippy (newer than the pinned local toolchain) flags the if-guard +
+    // trailing-true form — same logic, reduced per its suggestion.
+    !dangerous_ports.contains(&remote_port)
 }
 
 impl ConnectionTracker {
