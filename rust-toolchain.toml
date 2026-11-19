@@ -1,3 +1,6 @@
 [toolchain]
-channel = "stable-x86_64-pc-windows-msvc"
+# "stable" + targets (không ghép target tuple vào channel): rustup trên runner
+# Linux từ chối channel dạng 'stable-x86_64-pc-windows-msvc' → job audit fail.
+channel = "stable"
+targets = ["x86_64-pc-windows-msvc"]
 components = ["clippy", "rustfmt"]
