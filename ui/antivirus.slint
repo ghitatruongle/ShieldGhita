@@ -1,5 +1,5 @@
 import { Button, ListView, CheckBox } from "std-widgets.slint";
-import { I18n, QuarantineItem } from "common.slint";
+import { I18n, QuarantineItem, Theme } from "common.slint";
 
 component QuarantineRow inherits Rectangle {
     in property <QuarantineItem> entry;
@@ -7,10 +7,10 @@ component QuarantineRow inherits Rectangle {
     callback delete-entry(string);
 
     height: 62px;
-    background: #111827;
+    background: Theme.bg-card-alt;
     border-radius: 6px;
     border-width: 1px;
-    border-color: #334155;
+    border-color: Theme.border-strong;
 
     HorizontalLayout {
         padding-left: 12px;
@@ -27,7 +27,7 @@ component QuarantineRow inherits Rectangle {
                 text: "🔒 " + entry.original-name;
                 font-size: 12px;
                 font-weight: 700;
-                color: #f1f5f9;
+                color: Theme.text-primary;
                 overflow: elide;
             }
 
@@ -35,14 +35,14 @@ component QuarantineRow inherits Rectangle {
                 text: entry.original-path;
                 font-size: 10px;
                 font-family: "Consolas";
-                color: #64748b;
+                color: Theme.text-muted;
                 overflow: elide;
             }
 
             Text {
                 text: entry.reason + " • " + entry.quarantined-at + " • " + entry.size-kb + " KB";
                 font-size: 10px;
-                color: #94a3b8;
+                color: Theme.text-secondary;
                 overflow: elide;
             }
         }
@@ -99,13 +99,13 @@ export component AntivirusTab inherits Rectangle {
                     text: I18n.t4("🛡 DIỆT VIRUS & CÁCH LY", "🛡 ANTIVIRUS & QUARANTINE", "🛡 杀毒与隔离", "🛡 АНТИВИРУС И КАРАНТИН");
                     font-size: 15px;
                     font-weight: 800;
-                    color: #34d399;
+                    color: Theme.success;
                 }
 
                 Text {
                     text: I18n.t4("Bảo vệ thời gian thực • Canh ransomware (tệp mồi + khóa mạng khẩn cấp) • Cách ly mã hóa AES-256, KHÔNG xóa dữ liệu người dùng khi khôi phục", "Real-time guard • Ransomware canary + emergency lock • AES-256 encrypted quarantine, restore never destroys user data", "实时防护 • 勒索软件金丝雀+紧急断网 • AES-256 加密隔离，恢复不破坏数据", "Защита в реальном времени • Канарейка шифровальщика + аварийная блокировка • Карантин с AES-256");
                     font-size: 11px;
-                    color: #94a3b8;
+                    color: Theme.text-secondary;
                 }
             }
 
@@ -152,10 +152,10 @@ export component AntivirusTab inherits Rectangle {
 
         if root.lock-active : Rectangle {
             height: 56px;
-            background: #450a0a;
+            background: Theme.danger-bg;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #ef4444;
+            border-color: Theme.danger;
 
             HorizontalLayout {
                 padding-left: 14px;
@@ -167,7 +167,7 @@ export component AntivirusTab inherits Rectangle {
                     text: I18n.t4("⛔ Mạng đang bị KHOÁ do tệp mồi bị can thiệp — tự mở sau 5 phút", "⛔ Network is LOCKED by a canary tamper — auto-releases in 5 minutes", "⛔ 网络已因金丝雀被篡改而锁定 — 5 分钟后自动解除", "⛔ Сеть заблокирована из-за приманки — снимется через 5 минут");
                     font-size: 12px;
                     font-weight: 800;
-                    color: #fca5a5;
+                    color: Theme.danger-text;
                     horizontal-stretch: 1;
                     overflow: elide;
                 }
@@ -186,10 +186,10 @@ export component AntivirusTab inherits Rectangle {
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
 
                 VerticalLayout {
                     padding: 8px;
@@ -199,24 +199,24 @@ export component AntivirusTab inherits Rectangle {
                         text: I18n.t4("CHỮ KÝ ĐANG HOẠT ĐỘNG", "ACTIVE SIGNATURES", "生效特征数", "АКТИВНЫХ СИГНАТУР");
                         font-size: 10px;
                         font-weight: 700;
-                        color: #64748b;
+                        color: Theme.text-muted;
                     }
 
                     Text {
                         text: root.signature-count;
                         font-size: 18px;
                         font-weight: 800;
-                        color: #38bdf8;
+                        color: Theme.accent;
                     }
                 }
             }
 
             Rectangle {
                 horizontal-stretch: 2;
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
 
                 VerticalLayout {
                     padding: 8px;
@@ -233,10 +233,10 @@ export component AntivirusTab inherits Rectangle {
 
         if root.av-status != "" : Rectangle {
             height: 36px;
-            background: #0f172a;
+            background: Theme.bg-panel;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #0284c7;
+            border-color: Theme.accent-solid;
 
             HorizontalLayout {
                 padding-left: 14px;
@@ -247,7 +247,7 @@ export component AntivirusTab inherits Rectangle {
                     text: root.av-status;
                     font-size: 12px;
                     font-weight: 700;
-                    color: #38bdf8;
+                    color: Theme.accent;
                     overflow: elide;
                     vertical-alignment: center;
                 }
@@ -258,15 +258,15 @@ export component AntivirusTab inherits Rectangle {
             text: I18n.t4("🔒 DANH SÁCH CÁCH LY (mã hóa AES-256, khôi phục nguyên vẹn)", "🔒 QUARANTINE LIST (AES-256 encrypted, restorable)", "🔒 隔离列表（AES-256 加密，可恢复）", "🔒 КАРАНТИН (AES-256, восстанавливается)");
             font-size: 12px;
             font-weight: 700;
-            color: #cbd5e1;
+            color: Theme.text-soft;
         }
 
         if root.quarantine-list.length == 0 : Rectangle {
             vertical-stretch: 1;
-            background: #111827;
+            background: Theme.bg-card-alt;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #1f2937;
+            border-color: Theme.border;
 
             VerticalLayout {
                 alignment: center;
@@ -281,7 +281,7 @@ export component AntivirusTab inherits Rectangle {
                 Text {
                     text: I18n.t4("Chưa có tệp nào trong cách ly. Quét vị trí hoặc để Bảo vệ Thời gian thực tự bắt tệp nguy hiểm.", "Quarantine is empty. Use Location Scan or let Real-time Guard catch malicious files.", "隔离区为空。使用位置扫描或让实时防护捕获恶意文件。", "Карантин пуст. Используйте сканирование или защиту в реальном времени.");
                     font-size: 12px;
-                    color: #64748b;
+                    color: Theme.text-muted;
                     horizontal-alignment: center;
                     wrap: word-wrap;
                 }

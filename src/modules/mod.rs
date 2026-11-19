@@ -17,6 +17,7 @@ pub mod service;
 pub mod sinkhole;
 pub mod stats;
 pub mod system;
+pub mod update_check;
 pub mod vault;
 
 macro_rules! declare_admin_module {

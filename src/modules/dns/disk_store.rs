@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::path::Path;
+use std::sync::{Mutex, RwLock};
 
 const HEADER_SIZE: usize = 4096;
 const MAGIC: &[u8; 4] = b"SGBL";
@@ -62,7 +62,7 @@ impl FastDomainCache {
 
 /// On-disk blocklist store: ~10MB on disk, ~2KB in RAM.
 pub struct DiskBlocklist {
-    file_path: PathBuf,
+    store: Mutex<File>,
     total_domains: usize,
     buckets: [(u32, u32); BUCKET_COUNT], // (offset, count)
     strings_base_offset: u64,
@@ -159,7 +159,7 @@ impl DiskBlocklist {
         }
 
         Ok(Self {
-            file_path: path.to_path_buf(),
+            store: Mutex::new(file),
             total_domains,
             buckets,
             strings_base_offset,
@@ -186,9 +186,9 @@ impl DiskBlocklist {
             return false;
         }
 
-        let mut file = match File::open(&self.file_path) {
-            Ok(f) => f,
-            Err(_) => return false,
+        let mut file = match self.store.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         if file.seek(SeekFrom::Start(offset as u64)).is_err() {
@@ -249,7 +249,7 @@ impl DiskBlocklist {
 
         if let Some(idx) = found_idx {
             // Check for match and scan neighboring equal hashes if any
-            let check_match = |cand_idx: usize| -> bool {
+            let check_match = |file: &mut File, cand_idx: usize| -> bool {
                 let p = match cand_idx.checked_mul(RECORD_SIZE) {
                     Some(v) => v,
                     None => return false,
@@ -284,21 +284,17 @@ impl DiskBlocklist {
                     Some(v) => v,
                     None => return false,
                 };
-                let mut f = match File::open(&self.file_path) {
-                    Ok(f) => f,
-                    Err(_) => return false,
-                };
-                if f.seek(SeekFrom::Start(abs_off)).is_err() {
+                if file.seek(SeekFrom::Start(abs_off)).is_err() {
                     return false;
                 }
                 let mut str_buf = vec![0u8; str_len];
-                if f.read_exact(&mut str_buf).is_err() {
+                if file.read_exact(&mut str_buf).is_err() {
                     return false;
                 }
                 str_buf.eq_ignore_ascii_case(domain.as_bytes())
             };
 
-            if check_match(idx) {
+            if check_match(&mut file, idx) {
                 return true;
             }
             // Scan backwards
@@ -316,7 +312,7 @@ impl DiskBlocklist {
                 if h != target_hash {
                     break;
                 }
-                if check_match(i) {
+                if check_match(&mut file, i) {
                     return true;
                 }
             }
@@ -334,7 +330,7 @@ impl DiskBlocklist {
                 if h != target_hash {
                     break;
                 }
-                if check_match(j) {
+                if check_match(&mut file, j) {
                     return true;
                 }
                 j += 1;

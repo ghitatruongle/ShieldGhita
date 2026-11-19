@@ -1,0 +1,436 @@
+// 0.1.5-alpha2 Track 3: extracted from app_window.slint — the composition
+// root keeps the AppWindow property surface; this file owns tab content.
+import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { I18n, Theme } from "../common.slint";
+import { NetworkDevice, SecurityIncident } from "../common.slint";
+import { TabButton, StatCard, Spinner } from "../widgets.slint";
+component LanDeviceRow inherits Rectangle {
+    in property <NetworkDevice> device;
+    callback view-logs(string);
+    callback toggle-quarantine(string, bool);
+
+    height: 68px;
+    // Track 5: has-hover đổi nền nhẹ; TouchArea đặt TRƯỚC các nút con để không nuốt click của chúng
+    background: device.is-quarantined
+        ? (hover-area.has-hover ? Theme.danger-row-hover : Theme.quarantine-bg)
+        : (hover-area.has-hover ? Theme.surface-hover : Theme.bg-card-alt);
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: device.is-quarantined ? Theme.rose : (device.threats-detected > 0 ? Theme.danger : Theme.border);
+    animate background { duration: 120ms; }
+
+    hover-area := TouchArea { }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 14px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 250px;
+            HorizontalLayout {
+                spacing: 6px;
+                Text { text: device.name; font-size: 13px; font-weight: 700; color: Theme.text-primary; overflow: elide; }
+                if device.is-quarantined : Rectangle {
+                    height: 16px;
+                    border-radius: 8px;
+                    background: Theme.rose-solid;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        alignment: center;
+                        Text { text: I18n.t("⛔ CÔ LẬP", "⛔ ISOLATED", "⛔ 已隔离"); font-size: 9px; font-weight: 800; color: Theme.white; vertical-alignment: center; }
+                    }
+                }
+            }
+            Text { text: (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + device.vendor + (device.os-name != "" ? (" • " + device.os-name) : ""); font-size: 11px; color: Theme.accent; overflow: elide; }
+            Text { text: (I18n.t("Độ tin cậy: ", "Confidence: ", "识别置信度: ")) + device.confidence + "%"; font-size: 10px; color: Theme.text-muted; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 150px;
+            Text { text: "IP: " + device.ip; font-size: 12px; font-weight: 700; color: Theme.text-soft; }
+            Text { text: "MAC: " + device.mac; font-size: 11px; color: Theme.text-muted; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 160px;
+            HorizontalLayout {
+                spacing: 6px;
+                Rectangle {
+                    height: 20px;
+                    border-radius: 10px;
+                    background: Theme.accent-solid;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        alignment: center;
+                        Text { text: device.total-queries + " req"; font-size: 10px; font-weight: 700; color: Theme.white; vertical-alignment: center; }
+                    }
+                }
+                Rectangle {
+                    height: 20px;
+                    border-radius: 10px;
+                    background: Theme.danger-solid;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        alignment: center;
+                        Text { text: device.blocked-queries + " ad"; font-size: 10px; font-weight: 700; color: Theme.white; vertical-alignment: center; }
+                    }
+                }
+            }
+            Text { text: (I18n.t("Domain: ", "Domain: ", "域名: ")) + device.last-domain; font-size: 11px; color: Theme.text-secondary; overflow: elide; }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 130px;
+            Text {
+                text: device.is-online ? (I18n.t("🟢 TRỰC TUYẾN", "🟢 ONLINE", "🟢 在线")) : (I18n.t("🔴 NGOẠI TUYẾN", "🔴 OFFLINE", "🔴 离线"));
+                font-size: 11px;
+                font-weight: 800;
+                color: device.is-online ? Theme.ok-bright : Theme.danger-soft;
+            }
+            Text { text: device.risk-level != "" ? device.risk-level : (I18n.t("Độ trễ: ", "Latency: ", "延迟: ") + device.latency); font-size: 11px; color: Theme.text-secondary; }
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+            Button {
+                text: I18n.t("📋 Log", "📋 Log", "📋 日志");
+                clicked => { root.view-logs(device.ip); }
+            }
+            if !device.is-local : Button {
+                text: device.is-quarantined ? I18n.t("🟢 Mở", "🟢 Free", "🟢 解除") : I18n.t("⛔ Cách ly", "⛔ Isolate", "⛔ 隔离");
+                clicked => { root.toggle-quarantine(device.ip, !device.is-quarantined); }
+            }
+        }
+    }
+}
+
+component IncidentRow inherits Rectangle {
+    in property <SecurityIncident> inc;
+
+    height: 74px;
+    rh := TouchArea { }
+    if rh.has-hover : Rectangle {
+        x: 0; y: 0; width: 100%; height: 100%;
+        background: Theme.white;
+        opacity: 0.06;
+    }
+    background: inc.severity == "CRITICAL" ? Theme.crit-bg : (inc.severity == "HIGH" ? Theme.warn-bg : Theme.bg-panel);
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: inc.severity == "CRITICAL" ? Theme.danger : (inc.severity == "HIGH" ? Theme.warning-deep : Theme.blue-mid);
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 14px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 85px;
+            spacing: 4px;
+            Rectangle {
+                height: 22px;
+                border-radius: 11px;
+                background: inc.severity == "CRITICAL" ? Theme.danger-solid : (inc.severity == "HIGH" ? Theme.amber-deep : Theme.blue-deep);
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: I18n.sev(inc.severity);
+                        font-size: 10px;
+                        font-weight: 800;
+                        color: Theme.white;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            Text { text: inc.time; font-size: 11px; color: Theme.text-secondary; horizontal-alignment: center; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 3px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "🚨 " + inc.incident-type;
+                    font-size: 13px;
+                    font-weight: 800;
+                    color: inc.severity == "CRITICAL" ? Theme.danger-text : (inc.severity == "HIGH" ? Theme.warn-text : Theme.info-text);
+                }
+                Rectangle {
+                    height: 18px;
+                    border-radius: 4px;
+                    background: Theme.bg-card;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        alignment: center;
+                        Text { text: inc.source-ip; font-size: 10px; font-weight: 700; color: Theme.text-soft; vertical-alignment: center; }
+                    }
+                }
+            }
+            Text { text: inc.details; font-size: 11px; color: Theme.text-body; overflow: elide; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 250px;
+            Rectangle {
+                border-radius: 6px;
+                background: Theme.ok-bg;
+                border-width: 1px;
+                border-color: Theme.success-solid;
+                VerticalLayout {
+                    padding: 6px;
+                    Text {
+                        text: (I18n.t("🛡️ Biện pháp IPS: ", "🛡️ IPS Action: ", "🛡️ IPS 处置: ")) + inc.mitigation;
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: Theme.mint;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component SecurityTab inherits Rectangle {
+    in-out property <bool> arp-spoof-detection;
+    in-out property <bool> attack-detection-enabled;
+    in-out property <bool> auto-block-attacks;
+    callback clear-security-incidents();
+    in-out property <[NetworkDevice]> devices;
+    callback export-incidents();
+    callback filter-logs-by-ip(string);
+    in-out property <string> incident-search;
+    in-out property <bool> is-scanning;
+    in-out property <int> lan-subview-mode;
+    in-out property <string> quarantine-target;
+    callback refresh-devices();
+    in-out property <[SecurityIncident]> security-incidents;
+    callback toggle-device-quarantine(string, bool);
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: Theme.bg-card-alt;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 4px;
+                                Text { text: I18n.t("🛡️ HỆ THỐNG PHÁT HIỆN TẤN CÔNG (IDS)", "🛡️ INTRUSION DETECTION (IDS)", "🛡️ 入侵检测系统 (IDS)"); font-size: 11px; font-weight: 700; color: Theme.accent; }
+                                Text { text: root.attack-detection-enabled ? (I18n.t("🟢 ĐANG BẢO VỆ", "🟢 ACTIVE", "🟢 防护中")) : (I18n.t("⚪ ĐANG TẮT", "⚪ DISABLED", "⚪ 已关闭")); font-size: 13px; font-weight: 800; color: root.attack-detection-enabled ? Theme.ok-bright : Theme.text-secondary; }
+                            }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: Theme.bg-card-alt;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 4px;
+                                Text { text: I18n.t("⚡ TỰ ĐỘNG KHÓA IP TẤN CÔNG (IPS)", "⚡ AUTO-BLOCK THREATS (IPS)", "⚡ 自动封锁攻击 IP (IPS)"); font-size: 11px; font-weight: 700; color: Theme.danger-soft; }
+                                Text { text: root.auto-block-attacks ? (I18n.t("🟢 TỰ ĐỘNG CÔ LẬP NGUỒN", "🟢 AUTO-MITIGATION ON", "🟢 自动隔离攻击源")) : (I18n.t("⚪ CHỈ CẢNH BÁO", "⚪ ALERT ONLY", "⚪ 仅告警")); font-size: 13px; font-weight: 800; color: root.auto-block-attacks ? Theme.ok-bright : Theme.text-secondary; }
+                            }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: Theme.bg-card-alt;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 4px;
+                                Text { text: I18n.t("📡 GIÁM SÁT ARP SPOOFING / MITM", "📡 ARP SPOOFING WATCH", "📡 ARP 欺骗 / 中间人监控"); font-size: 11px; font-weight: 700; color: Theme.warning; }
+                                Text { text: root.arp-spoof-detection ? (I18n.t("🟢 QUẢN TRỊ GATEWAY", "🟢 GATEWAY MONITORED", "🟢 网关监控中")) : (I18n.t("⚪ ĐANG TẮT", "⚪ DISABLED", "⚪ 已关闭")); font-size: 13px; font-weight: 800; color: root.arp-spoof-detection ? Theme.ok-bright : Theme.text-secondary; }
+                            }
+                        }
+                    }
+
+                    // Track 5: forward-focus không khả thi cho LineEdit này vì nó là
+                    // phần tử điều kiện (`if`) — Slint không cho tham chiếu element
+                    // tạo bởi `if` từ bên ngoài. Ô search vẫn nhận focus qua Tab/click.
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Button {
+                            text: root.lan-subview-mode == 0 ? (I18n.t("● 🌐 Thiết bị LAN", "● 🌐 LAN Devices", "● 🌐 局域网设备")) : (I18n.t("🌐 Thiết bị LAN", "🌐 LAN Devices", "🌐 局域网设备"));
+                            clicked => { root.lan-subview-mode = 0; }
+                        }
+                        Button {
+                            text: root.lan-subview-mode == 1 ? (I18n.t("● 🚨 Cảnh báo An ninh", "● 🚨 Incidents", "● 🚨 安全警报")) : (I18n.t("🚨 Cảnh báo An ninh", "🚨 Incidents", "🚨 安全警报"));
+                            clicked => { root.lan-subview-mode = 1; }
+                        }
+                        Button {
+                            text: root.lan-subview-mode == 2 ? (I18n.t("● 🔓 Cổng mở LAN", "● 🔓 Open Ports", "● 🔓 局域网开放端口")) : (I18n.t("🔓 Cổng mở LAN", "🔓 Open Ports", "🔓 局域网开放端口"));
+                            clicked => { root.lan-subview-mode = 2; }
+                        }
+                        if root.lan-subview-mode != 1 : Button {
+                            text: I18n.t("🔍 Quét lại mạng LAN", "🔍 Rescan LAN Subnet", "🔍 重新扫描局域网");
+                            clicked => { root.refresh-devices(); }
+                        }
+                        if root.lan-subview-mode == 1 : Button {
+                            text: I18n.t("🗑️ Xóa toàn bộ cảnh báo", "🗑️ Clear All Incidents", "🗑️ 清空所有警报");
+                            clicked => { root.clear-security-incidents(); }
+                        }
+                        if root.lan-subview-mode == 1 : Button {
+                            text: I18n.t("💾 Xuất CSV", "💾 Export CSV", "💾 导出 CSV");
+                            clicked => { root.export-incidents(); }
+                        }
+                        if root.lan-subview-mode == 1 : LineEdit {
+                            width: 180px;
+                            text <=> root.incident-search;
+                            placeholder-text: I18n.t("🔍 Tìm sự cố…", "🔍 Search incidents…", "🔍 搜索事件…");
+                        }
+                        Text {
+                            text: root.lan-subview-mode == 0 ? (I18n.t("Giám sát thời gian thực mọi hoạt động Internet của thiết bị LAN:", "Real-time Internet activity of LAN devices:", "实时监控局域网设备的所有上网活动:")) : (root.lan-subview-mode == 1 ? (I18n.t("Nhật ký cảnh báo an ninh & ngăn chặn xâm nhập thời gian thực:", "Real-time Security Incidents & Intrusion Prevention Logs:", "实时安全警报与入侵防御日志:")) : (I18n.t("Cổng dịch vụ đang mở trên từng thiết bị LAN & mức độ rủi ro:", "Open service ports per LAN device & risk level:", "各局域网设备开放的服务端口及风险等级:")));
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+
+                    if root.is-scanning : Rectangle {
+                        height: 30px;
+                        border-radius: 8px;
+                        background: Theme.indigo-bg;
+                        border-width: 1px;
+                        border-color: Theme.indigo-mid;
+                        HorizontalLayout {
+                            padding-left: 32px;
+                            padding-right: 10px;
+                            alignment: start;
+                            Text {
+                                text: I18n.t("⏳ Đang quét mạng LAN & phân tích cổng mở…", "⏳ Scanning LAN & analyzing open ports…", "⏳ 正在扫描局域网并分析开放端口…");
+                                font-size: 12px;
+                                font-weight: 700;
+                                color: Theme.indigo-text;
+                                vertical-alignment: center;
+                            }
+                        }
+                        // Track 5: glyph quay cạnh thông báo quét (giữ nguyên chuỗi i18n)
+                        Spinner {
+                            x: 10px;
+                            y: (parent.height - self.height) / 2;
+                            size: 14px;
+                            glyph-color: Theme.accent;
+                        }
+                    }
+
+                    if !root.is-scanning && root.lan-subview-mode != 1 && root.devices.length == 0 : Text {
+                        text: I18n.t("Chưa phát hiện thiết bị LAN nào — bấm 🔍 Quét lại mạng LAN.", "No LAN devices detected yet — press 🔍 Rescan LAN Subnet.", "尚未发现局域网设备 — 请点击 🔍 重新扫描局域网。");
+                        font-size: 12px;
+                        color: Theme.text-muted;
+                        horizontal-alignment: center;
+                    }
+
+                    if root.lan-subview-mode == 1 && root.security-incidents.length == 0 : Text {
+                        text: I18n.t("✅ Chưa có cảnh báo an ninh nào — hệ thống đang hoạt động an toàn.", "✅ No security incidents yet — system is running safe.", "✅ 暂无安全警报 — 系统运行安全。");
+                        font-size: 12px;
+                        color: Theme.text-muted;
+                        horizontal-alignment: center;
+                    }
+
+                    if root.lan-subview-mode == 0 : ListView {
+                        vertical-stretch: 1;
+                        for device in root.devices : LanDeviceRow {
+                            device: device;
+                            view-logs(ip) => { root.filter-logs-by-ip(ip); }
+                            toggle-quarantine(ip, q) => {
+                                if q { root.quarantine-target = ip; }
+                                else { root.toggle-device-quarantine(ip, false); }
+                            }
+                        }
+                    }
+
+                    if root.lan-subview-mode == 1 : ListView {
+                        vertical-stretch: 1;
+                        for inc in root.security-incidents : IncidentRow {
+                            inc: inc;
+                        }
+                    }
+
+                    if root.lan-subview-mode == 2 : ListView {
+                        vertical-stretch: 1;
+                        for device in root.devices : Rectangle {
+                            height: 68px;
+                            background: device.port-risk == "HIGH" ? Theme.crit-bg : (device.port-risk == "MEDIUM" ? Theme.warn-bg : Theme.bg-card-alt);
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: device.port-risk == "HIGH" ? Theme.danger : (device.port-risk == "MEDIUM" ? Theme.warning-deep : Theme.border);
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 14px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    min-width: 230px;
+                                    Text { text: device.name; font-size: 13px; font-weight: 700; color: Theme.text-primary; overflow: elide; }
+                                    Text { text: "IP: " + device.ip + "  •  MAC: " + device.mac; font-size: 11px; color: Theme.text-muted; overflow: elide; }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    Text { text: "🔓 " + device.open-ports; font-size: 12px; font-weight: 700; color: Theme.text-body; overflow: elide; }
+                                    Text {
+                                        text: device.port-advice != "" ? ((I18n.t("Khuyến nghị: ", "Advice: ", "建议: ")) + device.port-advice) : (I18n.t("Không phát hiện cổng rủi ro đang mở.", "No risky open ports detected.", "未发现存在风险的开放端口。"));
+                                        font-size: 11px;
+                                        color: Theme.text-secondary;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 130px;
+                                    height: 26px;
+                                    border-radius: 13px;
+                                    background: device.port-risk == "HIGH" ? Theme.maroon : (device.port-risk == "MEDIUM" ? Theme.brown : Theme.ok-bg);
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        Text {
+                                            text: device.port-risk == "HIGH" ? (I18n.t("🔴 RỦI RO CAO", "🔴 HIGH RISK", "🔴 高风险")) : (device.port-risk == "MEDIUM" ? (I18n.t("🟡 TRUNG BÌNH", "🟡 MEDIUM", "🟡 中风险")) : (I18n.t("🟢 AN TOÀN", "🟢 SAFE", "🟢 安全")));
+                                            font-size: 10px;
+                                            font-weight: 800;
+                                            color: Theme.white;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+}
+
+

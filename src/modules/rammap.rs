@@ -88,16 +88,20 @@ extern "system" {
     fn GetPerformanceInfo(info: *mut PerformanceInformation, size: u32) -> i32;
 }
 
+// SYSTEM_MEMORY_LIST_INFORMATION (NtQuerySystemInformation class 0x50),
+// verified against the kernel: 22 size_t slots on x64 — the five page counts
+// come FIRST, then the two 8-entry priority arrays. The previous layout put
+// the arrays first and read Repurposed counters as free/modified pages.
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct SystemMemoryListInfo {
-    standby_by_priority: [usize; MEMORY_PRIORITY_MAXIMUM],
-    repurposed_by_priority: [usize; MEMORY_PRIORITY_MAXIMUM],
     zero_page_count: usize,
     free_page_count: usize,
     modified_page_count: usize,
     modified_no_write_page_count: usize,
     bad_page_count: usize,
+    standby_by_priority: [usize; MEMORY_PRIORITY_MAXIMUM],
+    repurposed_by_priority: [usize; MEMORY_PRIORITY_MAXIMUM],
     modified_page_count_page_file: usize,
 }
 

@@ -26,7 +26,7 @@ impl SelfDefense {
                 return Err(format!("SetPriorityClass(ABOVE_NORMAL) failed: {err}"));
             }
         }
-        info!("Self-defense enabled: process priority elevated to ABOVE_NORMAL");
+        info!("Self-defense enabled: priority ABOVE_NORMAL only (no restart watchdog, no process protection)");
         self.enabled = true;
         Ok(())
     }
@@ -52,7 +52,7 @@ impl SelfDefense {
                 return Err(format!("SetPriorityClass(NORMAL) failed: {err}"));
             }
         }
-        info!("Self-defense disabled: process priority restored to NORMAL");
+        info!("Self-defense disabled: priority restored to NORMAL");
         self.enabled = false;
         Ok(())
     }

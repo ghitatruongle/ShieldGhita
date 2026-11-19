@@ -3,7 +3,24 @@ use super::*;
 impl DnsBlocker {
     pub fn validate_domain(domain: &str) -> Result<String, String> {
         use crate::modules::i18n;
-        let d = domain.trim().trim_end_matches('.').to_lowercase();
+        // Accept paste-friendly input: strip scheme, path, wildcard prefix,
+        // port and trailing dot before validating the bare domain.
+        let mut d = domain.trim().to_lowercase();
+        if let Some(pos) = d.find("://") {
+            d = d[pos + 3..].to_string();
+        }
+        if let Some(pos) = d.find('/') {
+            d = d[..pos].to_string();
+        }
+        if let Some(pos) = d.find(':') {
+            d = d[..pos].to_string();
+        }
+        let d = d
+            .trim()
+            .trim_start_matches("*.")
+            .trim_start_matches('.')
+            .trim_end_matches('.')
+            .to_string();
         if d.is_empty() {
             return Err(i18n::tr("Tên miền trống", "Domain is empty", "域名为空").into());
         }

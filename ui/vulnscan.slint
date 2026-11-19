@@ -1,16 +1,16 @@
 import { Button, ListView, LineEdit } from "std-widgets.slint";
-import { I18n, VulnFindingItem } from "common.slint";
+import { I18n, Theme, VulnFindingItem } from "common.slint";
 
 component FindingRow inherits Rectangle {
     in property <VulnFindingItem> item;
 
     height: 92px;
-    background: #111827;
+    background: Theme.bg-card-alt;
     border-radius: 8px;
     border-width: 1px;
-    border-color: item.severity == "CRITICAL" ? #dc2626 :
-                  item.severity == "HIGH" ? #ea580c :
-                  item.severity == "MEDIUM" ? #d97706 : #334155;
+    border-color: item.severity == "CRITICAL" ? Theme.danger-solid :
+                  item.severity == "HIGH" ? Theme.orange-deep :
+                  item.severity == "MEDIUM" ? Theme.amber-deep : Theme.border-strong;
 
     HorizontalLayout {
         padding-left: 14px;
@@ -22,21 +22,21 @@ component FindingRow inherits Rectangle {
             width: 78px;
             height: 24px;
             border-radius: 6px;
-            background: item.severity == "CRITICAL" ? #ef444433 :
-                        item.severity == "HIGH" ? #f9731633 :
-                        item.severity == "MEDIUM" ? #f59e0b33 : #3b82f633;
+            background: item.severity == "CRITICAL" ? Theme.danger-dim :
+                        item.severity == "HIGH" ? Theme.orange-dim :
+                        item.severity == "MEDIUM" ? Theme.warn-dim : Theme.blue-dim;
             border-width: 1px;
-            border-color: item.severity == "CRITICAL" ? #ef4444 :
-                          item.severity == "HIGH" ? #f97316 :
-                          item.severity == "MEDIUM" ? #f59e0b : #3b82f6;
+            border-color: item.severity == "CRITICAL" ? Theme.danger :
+                          item.severity == "HIGH" ? Theme.orange :
+                          item.severity == "MEDIUM" ? Theme.warning-deep : Theme.blue-mid;
 
             Text {
                 text: item.severity;
                 font-size: 9px;
                 font-weight: 800;
-                color: item.severity == "CRITICAL" ? #fca5a5 :
-                       item.severity == "HIGH" ? #fdba74 :
-                       item.severity == "MEDIUM" ? #fde68a : #93c5fd;
+                color: item.severity == "CRITICAL" ? Theme.danger-text :
+                       item.severity == "HIGH" ? Theme.orange-text :
+                       item.severity == "MEDIUM" ? Theme.amber-soft : Theme.info-text;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -51,14 +51,14 @@ component FindingRow inherits Rectangle {
                 text: item.title;
                 font-size: 12px;
                 font-weight: 700;
-                color: #f1f5f9;
+                color: Theme.text-primary;
                 overflow: elide;
             }
 
             Text {
                 text: item.detail;
                 font-size: 11px;
-                color: #cbd5e1;
+                color: Theme.text-soft;
                 overflow: elide;
                 wrap: word-wrap;
                 max-height: 30px;
@@ -67,7 +67,7 @@ component FindingRow inherits Rectangle {
             Text {
                 text: "🛠 " + item.recommendation;
                 font-size: 10px;
-                color: #86efac;
+                color: Theme.ok-text;
                 overflow: elide;
                 wrap: word-wrap;
                 max-height: 28px;
@@ -103,13 +103,13 @@ export component VulnScanTab inherits Rectangle {
                     text: I18n.t4("🔎 KIỂM TOÁN BẢO MẬT & LỖ HỔNG", "🔎 SECURITY & VULNERABILITY AUDIT", "🔎 安全与漏洞审计", "🔎 АУДИТ БЕЗОПАСНОСТИ И УЯЗВИМОСТЕЙ");
                     font-size: 15px;
                     font-weight: 800;
-                    color: #60a5fa;
+                    color: Theme.blue;
                 }
 
                 Text {
                     text: I18n.t4("Kiểm tra cấu hình Windows (SMBv1, RDP/NLA, UAC, tường lửa, bản vá, autorun, LSA) + quét cổng rủi ro trên thiết bị LAN • Chỉ đọc, KHÔNG thay đổi hệ thống", "Checks Windows configuration (SMBv1, RDP/NLA, UAC, firewall, patches, autoruns, LSA) + risky ports on LAN devices • Read-only, changes nothing", "检查 Windows 配置（SMBv1、RDP/NLA、UAC、防火墙、补丁、自启动、LSA）+ 局域网设备风险端口 • 只读不改系统", "Проверка конфигурации Windows (SMBv1, RDP/NLA, UAC, брандмауэр, обновления, автозапуск, LSA) + рискованные порты LAN • Только чтение");
                     font-size: 11px;
-                    color: #94a3b8;
+                    color: Theme.text-secondary;
                 }
             }
 
@@ -140,10 +140,10 @@ export component VulnScanTab inherits Rectangle {
 
         if root.status != "" : Rectangle {
             height: 36px;
-            background: #0f172a;
+            background: Theme.bg-panel;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #0284c7;
+            border-color: Theme.accent-solid;
 
             HorizontalLayout {
                 padding-left: 14px;
@@ -154,7 +154,7 @@ export component VulnScanTab inherits Rectangle {
                     text: root.status;
                     font-size: 12px;
                     font-weight: 700;
-                    color: #38bdf8;
+                    color: Theme.accent;
                     overflow: elide;
                     vertical-alignment: center;
                 }
@@ -163,10 +163,10 @@ export component VulnScanTab inherits Rectangle {
 
         if root.findings.length == 0 && !root.is-busy : Rectangle {
             vertical-stretch: 1;
-            background: #111827;
+            background: Theme.bg-card-alt;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #1f2937;
+            border-color: Theme.border;
 
             VerticalLayout {
                 alignment: center;
@@ -181,7 +181,7 @@ export component VulnScanTab inherits Rectangle {
                 Text {
                     text: I18n.t4("Chưa có kết quả kiểm toán. Bấm 'Quét máy này' hoặc nhập IP thiết bị LAN rồi bấm 'Quét thiết bị'.", "No audit results yet. Click 'Audit this PC' or enter a LAN device IP and click 'Audit device'.", "暂无审计结果。点击“审计本机”或输入局域网设备 IP 后点击“审计设备”。", "Результатов пока нет. Нажмите «Аудит этого ПК» или введите IP устройства LAN.");
                     font-size: 12px;
-                    color: #64748b;
+                    color: Theme.text-muted;
                     horizontal-alignment: center;
                     wrap: word-wrap;
                 }

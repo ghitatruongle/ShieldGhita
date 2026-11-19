@@ -1,0 +1,597 @@
+// 0.1.5-alpha2 Track 3: extracted from app_window.slint — the composition
+// root keeps the AppWindow property surface; this file owns the content.
+import { Button, CheckBox, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { I18n, Theme } from "../common.slint";
+import { TabButton, StatCard, Spinner, TooltipButton } from "../widgets.slint";
+
+export component AttackModal inherits Rectangle {
+    in-out property <int> attack-duration-min;
+    in-out property <string> attack-message;
+    in property <float> attack-modal-fade;
+    in-out property <bool> attack-modal-open;
+    in-out property <int> attack-modal-tab;
+    in-out property <int> attack-mode;
+    in-out property <string> attack-target-ip;
+    in-out property <string> attack-target-mac;
+    in-out property <string> attack-target-name;
+    in-out property <string> attack-target-vendor;
+    in-out property <bool> is-admin-edition;
+    callback launch-attack(string, string, string, int, int);
+    if root.is-admin-edition && root.attack-modal-open : Rectangle {
+        z: 150;
+        width: root.width;
+        height: root.height;
+        background: Theme.shadow;
+        // Track 5: backdrop mờ dần vào khi mở modal
+        opacity: root.attack-modal-fade;
+        TouchArea {
+            clicked => { root.attack-modal-open = false; }
+        }
+    }
+
+    if root.is-admin-edition && root.attack-modal-open : Rectangle {
+        z: 160;
+        width: 620px;
+        height: 470px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        // Track 5: modal mờ dần vào 120ms (scale bỏ qua — Slint không có transform scale
+        // trên element và animating width/height sẽ phá layout)
+        opacity: root.attack-modal-fade;
+        background: Theme.bg-chrome;
+        border-radius: 14px;
+        border-width: 2px;
+        border-color: Theme.danger;
+        drop-shadow-color: Theme.shadow-deep;
+        drop-shadow-blur: 24px;
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "⚠️ " + I18n.t("CẢNH BÁO THIẾT BỊ", "DEVICE NOTICE", "设备通告");
+                    font-size: 17px;
+                    font-weight: 800;
+                    color: Theme.danger-soft;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                TooltipButton {
+                    text: "✖";
+                    tip: I18n.t4("Đóng", "Close", "关闭", "Закрыть");
+                    width: 36px;
+                    clicked => { root.attack-modal-open = false; }
+                }
+            }
+
+            Text {
+                text: root.attack-target-name;
+                font-size: 15px;
+                font-weight: 800;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+            Text {
+                text: "IP: " + root.attack-target-ip + "    MAC: " + root.attack-target-mac + "    " + (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + root.attack-target-vendor;
+                font-size: 11px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                TabButton {
+                    text: I18n.t("ℹ Thông tin", "ℹ Info", "ℹ 信息");
+                    active: root.attack-modal-tab == 0;
+                    clicked => { root.attack-modal-tab = 0; }
+                }
+                TabButton {
+                    text: I18n.t("📈 Hành vi", "📈 Behavior", "📈 行为");
+                    active: root.attack-modal-tab == 1;
+                    clicked => { root.attack-modal-tab = 1; }
+                }
+                TabButton {
+                    text: I18n.t("⚠ THÔNG BÁO", "⚠ NOTICE", "⚠ 通告");
+                    active: root.attack-modal-tab == 2;
+                    active-color: Theme.danger;
+                    clicked => { root.attack-modal-tab = 2; }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg-base;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: Theme.bg-card;
+                clip: true;
+
+                if root.attack-modal-tab == 0 : VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+                    Text { text: root.attack-target-name; font-size: 14px; font-weight: 700; color: Theme.text-primary; }
+                    Text { text: (I18n.t("Hãng: ", "Vendor: ", "厂商: ")) + root.attack-target-vendor; font-size: 12px; color: Theme.accent; }
+                    Text { text: "IP: " + root.attack-target-ip; font-size: 12px; color: Theme.text-soft; }
+                    Text { text: "MAC: " + root.attack-target-mac; font-size: 12px; color: Theme.text-soft; }
+                    Text {
+                        text: I18n.t("Chọn tab ⚠ THÔNG BÁO để gửi trang cảnh báo tới thiết bị này.", "Open the ⚠ ATTACK tab to send a warning page to this device.", "打开 ⚠ 攻击 选项卡以向此设备发送警告页面。");
+                        font-size: 11px;
+                        color: Theme.text-muted;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if root.attack-modal-tab == 1 : VerticalLayout {
+                    padding: 16px;
+                    spacing: 10px;
+                    Text {
+                        text: I18n.t("Hồ sơ hành vi chi tiết của thiết bị được tổng hợp trong mục 🧠 Xem Hồ Sơ Hành Vi của tab Admin.", "Detailed behavior profiles are aggregated in the 🧠 View Behavior Profiles section of the Admin tab.", "设备的详细行为档案汇总在管理选项卡的 🧠 查看行为档案 中。");
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if root.attack-modal-tab == 2 : VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    Text {
+                        text: I18n.t("Tin nhắn hiển thị trên trang cảnh báo:", "Message shown on the warning page:", "警告页面显示的消息：");
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.text-body;
+                    }
+                    LineEdit {
+                        text <=> root.attack-message;
+                        placeholder-text: I18n.t("Để trống = tin nhắn mặc định của hệ thống...", "Leave empty for the default system message...", "留空则使用系统默认消息...");
+                    }
+
+                    Text {
+                        text: I18n.t("📄 Chế độ: Trang cảnh báo (máy đích sẽ thấy trang tin nhắn này)", "📄 Mode: Warning Page (the target will see this message page)", "📄 模式：警告页面（目标设备将显示此消息）");
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.warning-deep;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: root.attack-duration-min == 15 ? "⏱ 15' ✓" : "⏱ 15'";
+                            clicked => { root.attack-duration-min = 15; }
+                        }
+                        Button {
+                            text: root.attack-duration-min == 30 ? "⏱ 30' ✓" : "⏱ 30'";
+                            clicked => { root.attack-duration-min = 30; }
+                        }
+                        Button {
+                            text: root.attack-duration-min == 60 ? "⏱ 60' ✓" : "⏱ 60'";
+                            clicked => { root.attack-duration-min = 60; }
+                        }
+                    }
+
+                    Text {
+                        text: I18n.t("Trong thời hạn hiệu lực, toàn bộ DNS của thiết bị này sẽ được điều hướng về máy admin. Chế độ Trang cảnh báo kèm cổng captive-portal để hiện thông báo trên điện thoại/máy đích. HTTPS sẽ hiển thị lỗi chứng chỉ thay vì trang đẹp.", "While active, all DNS of this device is redirected to the admin machine. Warning Page mode also serves a captive-portal page so phones show the notice. HTTPS sites will show a certificate error instead of the styled page.", "生效期间，此设备的所有 DNS 都将被重定向到管理机。警告页面模式还会提供 captive-portal 页面以便手机显示通知。HTTPS 网站将显示证书错误而非美化页面。");
+                        font-size: 10px;
+                        color: Theme.text-muted;
+                        wrap: word-wrap;
+                    }
+
+                    Button {
+                        text: I18n.t("🚀 GỬI THÔNG BÁO", "🚀 SEND NOTICE", "🚀 发送通告");
+                        clicked => {
+                            root.launch-attack(root.attack-target-ip, root.attack-target-mac, root.attack-message, root.attack-mode, root.attack-duration-min);
+                            root.attack-modal-open = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component CameraModal inherits Rectangle {
+    callback audit-camera-security(string);
+    in-out property <image> camera-live-frame;
+    in-out property <bool> camera-live-has-frame;
+    in-out property <string> camera-live-ip;
+    in-out property <bool> camera-live-modal-open;
+    in-out property <string> camera-live-rtsp;
+    in-out property <string> camera-live-status;
+    in-out property <string> camera-live-title;
+    in-out property <string> camera-save-pass;
+    in-out property <string> camera-save-user;
+    in-out property <bool> camera-security-is-vulnerable;
+    in-out property <string> camera-security-status;
+    in-out property <bool> is-admin-edition;
+    in-out property <bool> camera-unlock-optin;
+    in-out property <bool> camera-unlock-busy;
+    in-out property <string> camera-unlock-status;
+    callback open-camera-stream(string);
+    callback save-camera-credential(string, string, string);
+    callback save-camera-snapshot(string);
+    callback send-camera-ptz(string);
+    callback start-camera-live-stream(string, string, string);
+    callback stop-camera-live-stream();
+    callback camera-unlock-advanced(string);
+    if root.is-admin-edition && root.camera-live-modal-open : Rectangle {
+        z: 170;
+        width: root.width;
+        height: root.height;
+        background: Theme.shadow-deep;
+
+        TouchArea {
+            clicked => {
+                root.camera-live-modal-open = false;
+                root.stop-camera-live-stream();
+            }
+        }
+
+        Rectangle {
+            z: 180;
+            width: 880px;
+            height: 610px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.bg-chrome;
+            border-radius: 14px;
+            border-width: 2px;
+            border-color: Theme.accent;
+            drop-shadow-color: Theme.shadow-deepest;
+            drop-shadow-blur: 28px;
+
+            TouchArea {}
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 70px;
+                        height: 24px;
+                        background: Theme.danger-solid;
+                        border-radius: 4px;
+                        Text {
+                            text: "● LIVE";
+                            font-size: 11px;
+                            font-weight: 800;
+                            color: Theme.white;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: root.camera-live-title;
+                        font-size: 15px;
+                        font-weight: 700;
+                        color: Theme.text-bright;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    TooltipButton {
+                        text: I18n.t("✕ Đóng", "✕ Close", "✕ 关闭");
+                        tip: I18n.t4("Đóng stream camera", "Close camera stream", "关闭摄像头串流", "Закрыть поток камеры");
+                        clicked => {
+                            root.camera-live-modal-open = false;
+                            root.stop-camera-live-stream();
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 14px;
+                    vertical-stretch: 1;
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        background: Theme.bg-deep;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.bg-card;
+                        clip: true;
+
+                        if root.camera-live-has-frame : Image {
+                            source: root.camera-live-frame;
+                            width: 100%;
+                            height: 100%;
+                            image-fit: contain;
+                        }
+
+                        if !root.camera-live-has-frame : VerticalLayout {
+                            alignment: center;
+                            spacing: 8px;
+                            Text {
+                                text: root.camera-live-status;
+                                font-size: 13px;
+                                font-weight: 700;
+                                color: Theme.text-secondary;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: I18n.t("Đang tự động quét cổng và giải mã luồng camera (không cần nhập mật khẩu)...", "Auto-probing camera ports & stream (no manual password needed)...", "正在自动探测摄像头端口并解析画面（无需手动输入密码）...");
+                                font-size: 11px;
+                                color: Theme.text-muted;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 220px;
+                        background: Theme.bg-card-alt;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.border;
+
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 10px;
+
+                            Text {
+                                text: I18n.t("ĐIỀU KHIỂN (PTZ)", "PTZ CONTROL", "云台控制 (PTZ)");
+                                font-size: 11px;
+                                font-weight: 800;
+                                color: Theme.accent;
+                                horizontal-alignment: center;
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Button {
+                                    text: "▲ " + I18n.t("Lên", "Up", "上");
+                                    clicked => { root.send-camera-ptz("up"); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: center;
+                                Button {
+                                    text: "◄ " + I18n.t("Trái", "Left", "左");
+                                    clicked => { root.send-camera-ptz("left"); }
+                                }
+                                Button {
+                                    text: "⏹ " + I18n.t("Dừng", "Stop", "停");
+                                    clicked => { root.send-camera-ptz("stop"); }
+                                }
+                                Button {
+                                    text: "► " + I18n.t("Phải", "Right", "右");
+                                    clicked => { root.send-camera-ptz("right"); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Button {
+                                    text: "▼ " + I18n.t("Xuống", "Down", "下");
+                                    clicked => { root.send-camera-ptz("down"); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: center;
+                                Button {
+                                    text: "+ " + I18n.t("Phóng to", "Zoom In", "放大");
+                                    clicked => { root.send-camera-ptz("zoom_in"); }
+                                }
+                                Button {
+                                    text: "- " + I18n.t("Thu nhỏ", "Zoom Out", "缩小");
+                                    clicked => { root.send-camera-ptz("zoom_out"); }
+                                }
+                            }
+
+                            Rectangle { height: 1px; background: Theme.gray-bg; }
+
+                            Button {
+                                text: I18n.t("📸 Chụp Ảnh", "📸 Snapshot", "📸 抓图");
+                                clicked => { root.save-camera-snapshot(root.camera-live-ip); }
+                            }
+
+                            Button {
+                                text: I18n.t("⚡ Khởi Động Lại", "⚡ Reboot", "⚡ 重启设备");
+                                clicked => { root.send-camera-ptz("reboot"); }
+                            }
+
+                            Button {
+                                text: I18n.t("▶ Mở Trình Phát Ngoài", "▶ Open External VLC", "▶ 外部播放器");
+                                clicked => { root.open-camera-stream(root.camera-live-rtsp); }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    Button {
+                        text: I18n.t("🔄 Thử Lại", "🔄 Retry", "🔄 重试");
+                        clicked => {
+                            root.camera-live-status = "Connecting...";
+                            root.start-camera-live-stream(root.camera-live-ip, "", "");
+                        }
+                    }
+
+                    Button {
+                        text: I18n.t("🛡️ Chẩn Đoán Camera", "🛡️ Camera Diagnosis", "🛡️ 诊断摄像头");
+                        clicked => {
+                            root.audit-camera-security(root.camera-live-ip);
+                        }
+                    }
+                }
+
+                if root.camera-security-status != "" : HorizontalLayout {
+                    spacing: 6px;
+                    alignment: center;
+                    Text {
+                        text: root.camera-security-status;
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: root.camera-security-is-vulnerable ? Theme.danger : Theme.emerald;
+                        horizontal-alignment: center;
+                    }
+                }
+
+                if root.camera-security-status != "" && !root.camera-security-is-vulnerable : Rectangle {
+                    background: Theme.bg-card-alt;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.border-strong;
+                    HorizontalLayout {
+                        padding: 10px;
+                        spacing: 8px;
+                        Text {
+                            text: I18n.t("Mật khẩu đúng của camera (lưu 1 lần, xem mãi):", "The camera's real password (saved once, view forever):", "Mật khẩu đúng của camera (lưu 1 lần, xem mãi):");
+                            font-size: 11px;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                        LineEdit {
+                            text <=> root.camera-save-user;
+                            placeholder-text: "admin";
+                            width: 80px;
+                        }
+                        LineEdit {
+                            text <=> root.camera-save-pass;
+                            placeholder-text: I18n.t("mk cũ; mk khác…", "pass; another…", "mk cũ; mk khác…");
+                            width: 160px;
+                            input-type: password;
+                        }
+                        Button {
+                            text: I18n.t("💾 Lưu & Xem", "💾 Save & View", "💾 保存并查看");
+                            clicked => {
+                                root.save-camera-credential(root.camera-live-ip, root.camera-save-user, root.camera-save-pass);
+                                root.camera-save-user = "";
+                                root.camera-save-pass = "";
+                                root.stop-camera-live-stream();
+                                root.start-camera-live-stream(root.camera-live-ip, "", "");
+                            }
+                        }
+                    }
+                }
+
+                // Track 5: Unlock nâng cao — chỉ hiện khi Chẩn Đoán Camera 3 lớp FAIL
+                // (status != "" && !vulnerable) theo guardrail plan §2.7.
+                if root.camera-security-status != "" && !root.camera-security-is-vulnerable : Rectangle {
+                    background: Theme.bg-card-alt;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.danger-solid;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text {
+                            text: I18n.t4("🔓 Unlock nâng cao (từ điển hãng)", "🔓 Advanced Unlock (vendor dictionary)", "🔓 高级解锁（厂商字典）", "🔓 Расширенная разблокировка (словарь вендоров)");
+                            font-size: 11px;
+                            font-weight: 800;
+                            color: Theme.danger-text;
+                        }
+                        Text {
+                            text: I18n.t4("⚠ Chỉ dùng cho camera CỦA BẠN trên LAN nhà. App sẽ thử mật khẩu hãng mặc định qua ONVIF→RTSP→HTTP, rate-limit + ghi audit log, dừng khi tìm ra. Không đổi gì trên thiết bị.",
+                                "⚠ For YOUR camera on YOUR home LAN only. The app tries vendor default passwords over ONVIF→RTSP→HTTP with rate-limit + audit log, stops when found. Nothing is changed on the device.",
+                                "⚠ 仅用于你家中局域网内自己的摄像头。应用通过 ONVIF→RTSP→HTTP 尝试厂商默认密码，限速并记录审计日志，找到即停。不会改动设备。",
+                                "⚠ Только для ВАШЕЙ камеры в домашней LAN. Приложение подбирает заводские пароли вендора по ONVIF→RTSP→HTTP с ограничением скорости и записью в журнал, останавливается при успехе. Устройство не изменяется.");
+                            font-size: 10px;
+                            color: Theme.warn-text;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            CheckBox {
+                                text: I18n.t4("Đây là thiết bị của tôi trên LAN này", "This is my device on this LAN", "这是本局域网中我的设备", "Это моё устройство в этой LAN");
+                                checked <=> root.camera-unlock-optin;
+                            }
+                            Button {
+                                text: root.camera-unlock-busy
+                                    ? I18n.t4("⏳ Đang thử…", "⏳ Trying…", "⏳ 尝试中…", "⏳ Подбор…")
+                                    : I18n.t4("🔓 Thử từ điển", "🔓 Try dictionary", "🔓 尝试字典", "🔓 Попробовать словарь");
+                                enabled: root.camera-unlock-optin && !root.camera-unlock-busy;
+                                clicked => { root.camera-unlock-advanced(root.camera-live-ip); }
+                            }
+                        }
+                        if root.camera-unlock-status != "" : Text {
+                            text: root.camera-unlock-status;
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: root.camera-unlock-busy ? Theme.warning : Theme.emerald;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component ConfirmModal inherits Rectangle {
+    in-out property <string> initial-panel-password;
+    in-out property <string> quarantine-target;
+    callback toggle-device-quarantine(string, bool);
+    if root.quarantine-target != "" || root.initial-panel-password != "" : Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Theme.shadow-soft;
+        TouchArea { }
+        Rectangle {
+            width: 580px;
+            height: 280px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.bg-card-alt;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            VerticalLayout {
+                padding: 24px;
+                spacing: 16px;
+                Text {
+                    text: root.initial-panel-password != "" ? I18n.t4("Mật khẩu Web Panel — chỉ hiển thị lần này", "Web Panel password — shown once", "Web Panel 密码 — 仅显示一次", "Пароль Web Panel — показан один раз") : I18n.t4("Xác nhận chặn DNS", "Confirm DNS blocking", "确认阻止 DNS", "Подтвердите блокировку DNS");
+                    color: Theme.text-bright;
+                    font-size: 18px;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.initial-panel-password != "" ? I18n.t4("Tài khoản: admin. Lưu mật khẩu dưới đây, đăng nhập Web Panel rồi đổi mật khẩu. Không phải mật khẩu ứng dụng.", "Account: admin. Save this password, sign in to Web Panel and change it. This is not an application login.", "账户：admin。请保存以下密码，登录 Web Panel 后更改。这不是应用登录密码。", "Аккаунт: admin. Сохраните пароль, войдите в Web Panel и смените его. Это не пароль приложения.") : I18n.t4("Chỉ chặn DNS đi qua ShieldGhita cho IP này; không ngắt toàn bộ Internet. IP có thể đổi chủ. Bạn có thể mở chặn ngay bằng nút Mở.", "Only blocks DNS through ShieldGhita for this IP, not all Internet access. IP ownership may change. Use Free to unblock at any time.", "仅阻止此 IP 通过 ShieldGhita 的 DNS，并非全部互联网访问。IP 的归属可能改变。可随时点击解除。", "Блокирует только DNS через ShieldGhita для этого IP, не весь Интернет. Владелец IP может измениться. Блокировку можно снять в любое время.");
+                    color: Theme.text-soft;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.initial-panel-password != "" ? root.initial-panel-password : root.quarantine-target;
+                    font-size: 18px;
+                    color: Theme.accent;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 12px;
+                    if root.initial-panel-password == "" : Button {
+                        text: I18n.t4("Hủy", "Cancel", "取消", "Отмена");
+                        clicked => { root.quarantine-target = ""; }
+                    }
+                    Button {
+                        text: root.initial-panel-password != "" ? I18n.t4("Đã lưu — đóng", "Saved — close", "已保存 — 关闭", "Сохранено — закрыть") : I18n.t4("Chặn DNS", "Block DNS", "阻止 DNS", "Блокировать DNS");
+                        clicked => {
+                            if root.initial-panel-password != "" { root.initial-panel-password = ""; }
+                            else {
+                                root.toggle-device-quarantine(root.quarantine-target, true);
+                                root.quarantine-target = "";
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

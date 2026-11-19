@@ -1,14 +1,14 @@
 import { Button, ListView, LineEdit, ComboBox } from "std-widgets.slint";
-import { I18n, AdStatItem, ClientRuleItem } from "common.slint";
+import { AdStatItem, ClientRuleItem, I18n, Theme } from "common.slint";
 
 component AdStatRow inherits Rectangle {
     in property <AdStatItem> item;
 
     height: 34px;
-    background: #111827;
+    background: Theme.bg-card-alt;
     border-radius: 6px;
     border-width: 1px;
-    border-color: #1f2937;
+    border-color: Theme.border;
 
     HorizontalLayout {
         padding-left: 12px;
@@ -20,7 +20,7 @@ component AdStatRow inherits Rectangle {
             text: item.label;
             font-size: 11px;
             font-family: "Consolas";
-            color: #cbd5e1;
+            color: Theme.text-soft;
             overflow: elide;
             horizontal-stretch: 1;
             vertical-alignment: center;
@@ -30,7 +30,7 @@ component AdStatRow inherits Rectangle {
             text: item.count;
             font-size: 12px;
             font-weight: 800;
-            color: #f87171;
+            color: Theme.danger-soft;
             vertical-alignment: center;
         }
     }
@@ -41,10 +41,10 @@ component ClientRuleRow inherits Rectangle {
     callback remove-rule(string);
 
     height: 34px;
-    background: #111827;
+    background: Theme.bg-card-alt;
     border-radius: 6px;
     border-width: 1px;
-    border-color: rule.mode-id == 2 ? #7c3aed : rule.mode-id == 1 ? #059669 : #334155;
+    border-color: rule.mode-id == 2 ? Theme.purple : rule.mode-id == 1 ? Theme.success-solid : Theme.border-strong;
 
     HorizontalLayout {
         padding-left: 12px;
@@ -56,7 +56,7 @@ component ClientRuleRow inherits Rectangle {
             text: "💻 " + rule.ip;
             font-size: 11px;
             font-family: "Consolas";
-            color: #f1f5f9;
+            color: Theme.text-primary;
             overflow: elide;
             horizontal-stretch: 1;
             vertical-alignment: center;
@@ -66,7 +66,7 @@ component ClientRuleRow inherits Rectangle {
             text: rule.mode;
             font-size: 10px;
             font-weight: 800;
-            color: rule.mode-id == 2 ? #c4b5fd : rule.mode-id == 1 ? #6ee7b7 : #94a3b8;
+            color: rule.mode-id == 2 ? Theme.violet-soft : rule.mode-id == 1 ? Theme.mint : Theme.text-secondary;
             vertical-alignment: center;
         }
 
@@ -116,13 +116,13 @@ export component AdBlockStatsTab inherits Rectangle {
                     text: I18n.t4("📊 THỐNG KÊ CHẶN QUẢNG CÁO", "📊 AD-BLOCK STATISTICS", "📊 广告拦截统计", "📊 СТАТИСТИКА БЛОКИРОВКИ");
                     font-size: 15px;
                     font-weight: 800;
-                    color: #22c55e;
+                    color: Theme.success-strong;
                 }
 
                 Text {
                     text: I18n.t4("Điều khiển chặn theo từng thiết bị LAN • Tạm dừng có hẹn giờ • Thống kê thời gian thực", "Per-device blocking control • Timed pause • Real-time statistics", "按设备控制拦截 • 定时暂停 • 实时统计", "Управление блокировкой по устройствам • Пауза по таймеру • Статистика в реальном времени");
                     font-size: 11px;
-                    color: #94a3b8;
+                    color: Theme.text-secondary;
                 }
             }
         }
@@ -133,10 +133,10 @@ export component AdBlockStatsTab inherits Rectangle {
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
 
                 VerticalLayout {
                     padding: 8px;
@@ -146,24 +146,24 @@ export component AdBlockStatsTab inherits Rectangle {
                         text: I18n.t4("ĐÃ CHẶN (KỂ TỪ KHI BẬT APP)", "BLOCKED (THIS SESSION)", "已拦截（本次会话）", "ЗАБЛОКИРОВАНО (СЕАНС)");
                         font-size: 10px;
                         font-weight: 700;
-                        color: #64748b;
+                        color: Theme.text-muted;
                     }
 
                     Text {
                         text: root.total-today;
                         font-size: 20px;
                         font-weight: 800;
-                        color: #22c55e;
+                        color: Theme.success-strong;
                     }
                 }
             }
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: root.pause-left != "" ? #1e1b4b : #111827;
+                background: root.pause-left != "" ? Theme.indigo-bg : Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: root.pause-left != "" ? #6366f1 : #1f2937;
+                border-color: root.pause-left != "" ? Theme.indigo : Theme.border;
 
                 VerticalLayout {
                     padding: 8px;
@@ -173,14 +173,14 @@ export component AdBlockStatsTab inherits Rectangle {
                         text: I18n.t4("TRẠNG THÁI TẠM DỪNG", "PAUSE STATE", "暂停状态", "СОСТОЯНИЕ ПАУЗЫ");
                         font-size: 10px;
                         font-weight: 700;
-                        color: #64748b;
+                        color: Theme.text-muted;
                     }
 
                     Text {
                         text: root.pause-left == "" ? I18n.t4("Đang chặn bình thường", "Blocking active", "正常拦截中", "Блокировка активна") : root.pause-left;
                         font-size: 13px;
                         font-weight: 800;
-                        color: root.pause-left != "" ? #a5b4fc : #34d399;
+                        color: root.pause-left != "" ? Theme.indigo-text : Theme.success;
                         overflow: elide;
                     }
                 }
@@ -194,7 +194,7 @@ export component AdBlockStatsTab inherits Rectangle {
             Text {
                 text: I18n.t4("⏸ Tạm dừng chặn:", "⏸ Pause blocking:", "⏸ 暂停拦截:", "⏸ Пауза:");
                 font-size: 12px;
-                color: #cbd5e1;
+                color: Theme.text-soft;
                 vertical-alignment: center;
             }
 
@@ -233,10 +233,10 @@ export component AdBlockStatsTab inherits Rectangle {
 
         if root.status != "" : Rectangle {
             height: 36px;
-            background: #0f172a;
+            background: Theme.bg-panel;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #0284c7;
+            border-color: Theme.accent-solid;
 
             HorizontalLayout {
                 padding-left: 14px;
@@ -247,7 +247,7 @@ export component AdBlockStatsTab inherits Rectangle {
                     text: root.status;
                     font-size: 12px;
                     font-weight: 700;
-                    color: #38bdf8;
+                    color: Theme.accent;
                     overflow: elide;
                     vertical-alignment: center;
                 }
@@ -260,10 +260,10 @@ export component AdBlockStatsTab inherits Rectangle {
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: #0b1220;
+                background: Theme.bg-input;
                 border-radius: 10px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
 
                 VerticalLayout {
                     padding: 10px;
@@ -273,13 +273,13 @@ export component AdBlockStatsTab inherits Rectangle {
                         text: I18n.t4("🔥 TOP TÊN MIỀN BỊ CHẶN", "🔥 TOP BLOCKED DOMAINS", "🔥 拦截最多的域名", "🔥 ТОП ДОМЕНОВ");
                         font-size: 12px;
                         font-weight: 800;
-                        color: #fbbf24;
+                        color: Theme.warning;
                     }
 
                     if root.top-domains.length == 0 : Text {
                         text: I18n.t4("Chưa có dữ liệu — chờ các truy vấn bị chặn.", "No data yet — waiting for blocked queries.", "暂无数据 — 等待被拦截的查询。", "Данных пока нет.");
                         font-size: 11px;
-                        color: #64748b;
+                        color: Theme.text-muted;
                         vertical-alignment: center;
                         vertical-stretch: 1;
                         horizontal-alignment: center;
@@ -296,10 +296,10 @@ export component AdBlockStatsTab inherits Rectangle {
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: #0b1220;
+                background: Theme.bg-input;
                 border-radius: 10px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
 
                 VerticalLayout {
                     padding: 10px;
@@ -309,13 +309,13 @@ export component AdBlockStatsTab inherits Rectangle {
                         text: I18n.t4("💻 TOP THIẾT BỊ BỊ CHẶN NHIỀU", "💻 TOP BLOCKED CLIENTS", "💻 拦截最多的设备", "💻 ТОП КЛИЕНТОВ");
                         font-size: 12px;
                         font-weight: 800;
-                        color: #a78bfa;
+                        color: Theme.violet;
                     }
 
                     if root.top-clients.length == 0 : Text {
                         text: I18n.t4("Chưa có dữ liệu.", "No data yet.", "暂无数据。", "Данных пока нет.");
                         font-size: 11px;
-                        color: #64748b;
+                        color: Theme.text-muted;
                         vertical-alignment: center;
                         vertical-stretch: 1;
                         horizontal-alignment: center;
@@ -332,10 +332,10 @@ export component AdBlockStatsTab inherits Rectangle {
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: #0b1220;
+                background: Theme.bg-input;
                 border-radius: 10px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
 
                 VerticalLayout {
                     padding: 10px;
@@ -345,13 +345,13 @@ export component AdBlockStatsTab inherits Rectangle {
                         text: I18n.t4("🕐 THEO GIỜ (48H GẦN NHẤT)", "🕐 BY HOUR (LAST 48H)", "🕐 按小时（近48小时）", "🕐 ПО ЧАСАМ (48 Ч)");
                         font-size: 12px;
                         font-weight: 800;
-                        color: #38bdf8;
+                        color: Theme.accent;
                     }
 
                     if root.hourly.length == 0 : Text {
                         text: I18n.t4("Chưa có dữ liệu.", "No data yet.", "暂无数据。", "Данных пока нет.");
                         font-size: 11px;
-                        color: #64748b;
+                        color: Theme.text-muted;
                         vertical-alignment: center;
                         vertical-stretch: 1;
                         horizontal-alignment: center;
@@ -369,10 +369,10 @@ export component AdBlockStatsTab inherits Rectangle {
 
         Rectangle {
             vertical-stretch: 1;
-            background: #0b1220;
+            background: Theme.bg-input;
             border-radius: 10px;
             border-width: 1px;
-            border-color: #1e293b;
+            border-color: Theme.bg-card;
 
             VerticalLayout {
                 padding: 10px;
@@ -391,13 +391,13 @@ export component AdBlockStatsTab inherits Rectangle {
                             text: I18n.t4("🎛️ CHẾ ĐỘ CHẶN THEO THIẾT BỊ", "🎛️ PER-DEVICE BLOCKING MODE", "🎛️ 按设备拦截模式", "🎛️ РЕЖИМ ПО УСТРОЙСТВАМ");
                             font-size: 12px;
                             font-weight: 800;
-                            color: #6ee7b7;
+                            color: Theme.mint;
                         }
 
                         Text {
                             text: I18n.t4("Tin cậy = không chặn quảng cáo • Nghiêm ngặt = chặn mọi tên miền (khoá mạng con)", "Trusted = no ad blocking • Strict = block all domains (child lock)", "信任 = 不拦截广告 • 严格 = 拦截所有域名（儿童锁）", "Доверенный = без блокировки • Строгий = блокировать всё (родительский контроль)");
                             font-size: 10px;
-                            color: #94a3b8;
+                            color: Theme.text-secondary;
                         }
                     }
 
@@ -426,7 +426,7 @@ export component AdBlockStatsTab inherits Rectangle {
                 if root.rules.length == 0 : Text {
                     text: I18n.t4("Chưa có luật riêng cho thiết bị nào. Nhập IP máy trong LAN rồi chọn chế độ.", "No per-device rules yet. Enter a LAN device IP and pick a mode.", "尚无设备规则。请输入局域网设备 IP 并选择模式。", "Правил пока нет. Введите IP устройства и выберите режим.");
                     font-size: 11px;
-                    color: #64748b;
+                    color: Theme.text-muted;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     vertical-stretch: 1;
@@ -444,10 +444,10 @@ export component AdBlockStatsTab inherits Rectangle {
 
         Rectangle {
             height: 92px;
-            background: #0b1220;
+            background: Theme.bg-input;
             border-radius: 10px;
             border-width: 1px;
-            border-color: #334155;
+            border-color: Theme.border-strong;
 
             VerticalLayout {
                 padding: 10px;
@@ -461,7 +461,7 @@ export component AdBlockStatsTab inherits Rectangle {
                         text: I18n.t4("🧴 VỆ SINH TỆP HOSTS", "🧴 HOSTS FILE HYGIENE", "🧴 HOSTS 文件检查", "🧴 ФАЙЛ HOSTS");
                         font-size: 12px;
                         font-weight: 800;
-                        color: #93c5fd;
+                        color: Theme.info-text;
                     }
 
                     Button {
@@ -474,7 +474,7 @@ export component AdBlockStatsTab inherits Rectangle {
                 Text {
                     text: root.hosts-text != "" ? root.hosts-text : I18n.t4("Kiểm tra file hosts hệ thống xem có mục nghiêm trọng ghi đè DNS (cấm quảng cáo bị phá, redirect lừa đảo...).", "Check the system hosts file for DNS-overriding entries (broken ad blocking, phishing redirects...).", "检查系统 hosts 文件是否被篡改（广告拦截被破坏、钓鱼重定向等）。", "Проверка hosts-файла на записи, подменяющие DNS.");
                     font-size: 11px;
-                    color: root.hosts-warning ? #fbbf24 : #94a3b8;
+                    color: root.hosts-warning ? Theme.warning : Theme.text-secondary;
                     wrap: word-wrap;
                     overflow: elide;
                 }

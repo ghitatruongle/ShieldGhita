@@ -26,6 +26,10 @@ pub struct AppConfig {
     pub language: String,
     #[serde(default = "default_true")]
     pub enable_block_notifications: bool,
+    /// Auto-update checker (0.1.5-alpha2): query the GitHub releases API once
+    /// at startup and every 12h. False = feature fully off (no network call).
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
     #[serde(default = "default_log_max_entries")]
     pub log_max_entries: usize,
     #[serde(default = "default_auto_update_hours")]
@@ -202,6 +206,7 @@ impl Default for AppConfig {
             minimize_to_tray: true,
             language: "vi".to_string(),
             enable_block_notifications: true,
+            check_updates: true,
             log_max_entries: 1000,
             auto_update_blocklist_hours: 24,
             last_blocklist_update: None,

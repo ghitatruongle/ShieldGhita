@@ -1,13 +1,13 @@
 [package]
 name = "shield_ghita"
-version = "0.1.5-alpha1"
+version = "0.1.5-alpha2"
 edition = "2021"
 [features]
 default = []
 # Track 4: argon2 is no longer admin-gated — Vault (public edition) uses it as KDF.
 admin = ["dep:rcgen", "dep:tokio-rustls", "dep:qrcode"]
 [dependencies]
-slint = { version = "1.8", features = ["raw-window-handle-06"] }
+slint = { version = "1.17", features = ["raw-window-handle-06"] }
 # Needed to extract the Win32 HWND from slint::Window so the pick-file dialog
 # can be parented to the main window (same 0.6.x already in the tree via winit).
 raw-window-handle = "0.6"
@@ -68,7 +68,7 @@ windows-service = "0.7"
 i-slint-backend-testing = "=1.17.1"
 
 [build-dependencies]
-slint-build = "1.8"
+slint-build = "1.17"
 winres = "0.1"
 
 [profile.dev]

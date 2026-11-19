@@ -1,0 +1,502 @@
+// 0.1.5-alpha2 Track 3: extracted from app_window.slint — the composition
+// root keeps the AppWindow property surface; this file owns tab content.
+import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { I18n, Theme } from "../common.slint";
+import { DnsBenchmarkItem, NetworkHealthReport, PingResultItem } from "../common.slint";
+import { TabButton, StatCard, Spinner } from "../widgets.slint";
+component DnsBenchmarkRow inherits Rectangle {
+    in property <DnsBenchmarkItem> item;
+
+    height: 48px;
+    rh := TouchArea { }
+    if rh.has-hover : Rectangle {
+        x: 0; y: 0; width: 100%; height: 100%;
+        background: Theme.white;
+        opacity: 0.06;
+    }
+    background: item.is-fastest ? Theme.ok-tint : Theme.bg-card-alt;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: item.is-fastest ? Theme.emerald : Theme.border;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 14px;
+        alignment: center;
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 240px;
+            Text { text: item.provider-name; font-size: 13px; font-weight: 700; color: Theme.text-primary; }
+            Text { text: "IP: " + item.ip; font-size: 11px; color: Theme.text-secondary; }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        if item.is-fastest : Rectangle {
+            height: 22px;
+            border-radius: 11px;
+            background: Theme.success-solid;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                alignment: center;
+                Text { text: I18n.t4("⚡ NHANH NHẤT", "⚡ FASTEST", "⚡ 最快", "⚡ САМЫЙ БЫСТРЫЙ"); font-size: 10px; font-weight: 800; color: Theme.white; vertical-alignment: center; }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            min-width: 100px;
+            Text {
+                text: item.status;
+                font-size: 13px;
+                font-weight: 800;
+                color: item.is-fastest ? Theme.success : (item.response-ms < 100 ? Theme.accent : Theme.warning-deep);
+                horizontal-alignment: right;
+            }
+        }
+    }
+}
+
+export component DiagnosticsTab inherits Rectangle {
+    in-out property <int> active-diag-view;
+    in-out property <string> benchmark-domain-input;
+    in-out property <[DnsBenchmarkItem]> dns-benchmarks;
+    in-out property <NetworkHealthReport> health-report;
+    in-out property <bool> is-running-benchmark;
+    in-out property <bool> is-running-health;
+    in-out property <bool> is-running-ping;
+    in-out property <bool> is-running-speed;
+    in-out property <float> net-down-mbps;
+    in-out property <string> net-if-name;
+    in-out property <float> net-up-mbps;
+    in-out property <PingResultItem> ping-result;
+    in-out property <string> ping-target-input;
+    callback run-dns-benchmark(string);
+    callback run-network-health();
+    callback run-ping(string);
+    callback run-speed-test();
+    in-out property <string> speed-detail;
+    in-out property <float> speed-download;
+    in-out property <int> speed-ping-ms;
+    in-out property <float> speed-upload;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Button {
+                            text: root.active-diag-view == 0 ? (I18n.t4("● ⚡ Đo Tốc Độ DNS", "● ⚡ DNS Benchmark", "● ⚡ DNS 测速", "● ⚡ Тест DNS")) : (I18n.t4("⚡ Đo Tốc Độ DNS", "⚡ DNS Benchmark", "⚡ DNS 测速", "⚡ Тест DNS"));
+                            clicked => { root.active-diag-view = 0; }
+                        }
+                        Button {
+                            text: root.active-diag-view == 1 ? (I18n.t4("● 🚀 Test Tốc Độ", "● 🚀 Speed Test", "● 🚀 测速", "● 🚀 Тест скорости")) : (I18n.t4("🚀 Test Tốc Độ", "🚀 Speed Test", "🚀 测速", "🚀 Тест скорости"));
+                            clicked => { root.active-diag-view = 1; }
+                        }
+                        Button {
+                            text: root.active-diag-view == 2 ? (I18n.t4("● 🩺 Sức khỏe mạng", "● 🩺 Ping & Health", "● 🩺 Ping 与健康", "● 🩺 Ping и здоровье сети")) : (I18n.t4("🩺 Sức khỏe mạng", "🩺 Ping & Health", "🩺 Ping 与健康", "🩺 Ping и здоровье сети"));
+                            clicked => { root.active-diag-view = 2; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text {
+                            text: root.active-diag-view == 0 ? (I18n.t4("So sánh tốc độ phân giải DNS với các máy chủ công cộng lớn nhất thế giới:", "Benchmark DNS resolution speeds against major global upstream servers:", "与全球顶级上游公共 DNS 服务器对比解析速度:", "Сравнить скорость разрешения DNS с ведущими мировыми серверами:")) : (root.active-diag-view == 1 ? (I18n.t4("Đo tốc độ tải xuống / tải lên Internet qua kết nối đang dùng (Cloudflare):", "Measure Internet download / upload speed on the active connection (Cloudflare):", "测量当前连接的互联网下载 / 上传速度（Cloudflare）:", "Измерение скорости загрузки и отдачи интернета (Cloudflare):")) : (I18n.t4("Đo độ trễ Ping, Jitter, Packet Loss và kiểm tra sức khỏe mạng toàn diện:", "Test Ping latency, Jitter, Packet Loss, and full network connectivity health:", "测试 Ping 延迟、抖动、丢包率及全方位网络连接健康:", "Проверка задержки Ping, джиттера, потерь и здоровья сети:")));
+                            font-size: 12px;
+                            font-weight: 600;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        height: 64px;
+                        background: Theme.bg-deep;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.bg-card;
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 16px;
+                            Text { text: "📡 " + (root.net-if-name == "" ? "…" : root.net-if-name); font-size: 12px; font-weight: 700; color: Theme.text-secondary; vertical-alignment: center; horizontal-stretch: 1; }
+                            Text { text: "⬇ " + root.net-down-mbps + " Mbps"; font-size: 20px; font-weight: 800; color: Theme.success; vertical-alignment: center; }
+                            Text { text: "⬆ " + root.net-up-mbps + " Mbps"; font-size: 20px; font-weight: 800; color: Theme.accent; vertical-alignment: center; }
+                        }
+                    }
+
+                    if root.active-diag-view == 0 : VerticalLayout {
+                        spacing: 10px;
+                        vertical-stretch: 1;
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            height: 38px;
+                            Text {
+                                text: I18n.t4("Tên miền kiểm tra:", "Benchmark Domain:", "测试域名:", "Тестовый домен:");
+                                font-size: 13px;
+                                font-weight: 700;
+                                color: Theme.text-soft;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                text <=> root.benchmark-domain-input;
+                                placeholder-text: "google.com";
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: root.is-running-benchmark ? (I18n.t4("⏳ Đang kiểm tra…", "⏳ Testing…", "⏳ 正在测试…", "⏳ Проверка…")) : (I18n.t4("🚀 Bắt đầu Benchmark", "🚀 Run Benchmark", "🚀 开始测速", "🚀 Начать тест"));
+                                clicked => {
+                                    if !root.is-running-benchmark {
+                                        root.is-running-benchmark = true;
+                                        root.run-dns-benchmark(root.benchmark-domain-input);
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.dns-benchmarks.length == 0 : Text {
+                            text: I18n.t4("Bấm '🚀 Bắt đầu Benchmark' để đo độ trễ các máy chủ DNS phổ biến.", "Click '🚀 Run Benchmark' to test response times of popular DNS servers.", "点击'🚀 开始测速'测试常用 DNS 服务器的响应时间。", "Нажмите '🚀 Начать тест' для замера отклика популярных DNS-серверов.");
+                            font-size: 12px;
+                            color: Theme.text-muted;
+                            horizontal-alignment: center;
+                        }
+
+                        ListView {
+                            vertical-stretch: 1;
+                            for item in root.dns-benchmarks : DnsBenchmarkRow {
+                                item: item;
+                            }
+                        }
+                    }
+
+                    if root.active-diag-view == 1 : VerticalLayout {
+                        spacing: 10px;
+                        vertical-stretch: 1;
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            height: 38px;
+                            Rectangle { horizontal-stretch: 1; }
+                            Button {
+                                text: root.is-running-speed ? (I18n.t4("⏳ Đang đo…", "⏳ Testing…", "⏳ 正在测速…", "⏳ Замер…")) : (I18n.t4("🚀 Bắt Đầu Test Tốc Độ", "🚀 Run Speed Test", "🚀 开始测速", "🚀 Тест скорости"));
+                                clicked => {
+                                    if !root.is-running-speed {
+                                        root.is-running-speed = true;
+                                        root.run-speed-test();
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            height: 95px;
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: Theme.bg-card-alt;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    alignment: center;
+                                    Text { text: I18n.t4("TẢI XUỐNG (DOWNLOAD)", "DOWNLOAD", "下载", "СКАЧИВАНИЕ"); font-size: 10px; font-weight: 700; color: Theme.success; }
+                                    Text { text: root.speed-download >= 0 ? (root.speed-download + " Mbps") : "—"; font-size: 24px; font-weight: 800; color: Theme.success; }
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: Theme.bg-card-alt;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    alignment: center;
+                                    Text { text: I18n.t4("TẢI LÊN (UPLOAD)", "UPLOAD", "上传", "ОТДАЧА"); font-size: 10px; font-weight: 700; color: Theme.accent; }
+                                    Text { text: root.speed-upload >= 0 ? (root.speed-upload + " Mbps") : "—"; font-size: 24px; font-weight: 800; color: Theme.accent; }
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: Theme.bg-card-alt;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    alignment: center;
+                                    Text { text: I18n.t4("ĐỘ TRỄ (PING)", "PING LATENCY", "延迟", "ЗАДЕРЖКА"); font-size: 10px; font-weight: 700; color: Theme.violet; }
+                                    Text { text: root.speed-ping-ms >= 0 ? (root.speed-ping-ms + " ms") : "—"; font-size: 24px; font-weight: 800; color: Theme.violet-light; }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                            background: Theme.bg-deep;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.bg-card;
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 6px;
+                                Text {
+                                    text: root.speed-detail != "" ? root.speed-detail : I18n.t4("Bấm '🚀 Bắt Đầu Test Tốc Độ' để đo. Kết quả chi tiết sẽ hiển thị tại đây.", "Press '🚀 Run Speed Test' to measure. Detailed progress will appear here.", "点击'🚀 开始测速'进行测量。详细进度将在此处显示。", "Нажмите '🚀 Тест скорости' для измерения. Подробности будут здесь.");
+                                    font-size: 11px;
+                                    color: Theme.text-secondary;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+
+                    if root.active-diag-view == 2 : VerticalLayout {
+                        spacing: 10px;
+                        vertical-stretch: 1;
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            height: 38px;
+                            Text {
+                                text: I18n.t4("Mục tiêu:", "Target:", "目标:", "Цель:");
+                                font-size: 13px;
+                                font-weight: 700;
+                                color: Theme.text-soft;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                text <=> root.ping-target-input;
+                                placeholder-text: "1.1.1.1";
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: "1.1.1.1";
+                                clicked => { root.ping-target-input = "1.1.1.1"; }
+                            }
+                            Button {
+                                text: "8.8.8.8";
+                                clicked => { root.ping-target-input = "8.8.8.8"; }
+                            }
+                            Button {
+                                text: root.is-running-ping ? (I18n.t4("⏳ Đang Ping…", "⏳ Pinging…", "⏳ 正在 Ping…", "⏳ Ping…")) : (I18n.t4("🚀 Đo Ping", "🚀 Run Ping", "🚀 开始 Ping", "🚀 Измерить Ping"));
+                                clicked => {
+                                    if !root.is-running-ping {
+                                        root.is-running-ping = true;
+                                        root.run-ping(root.ping-target-input);
+                                    }
+                                }
+                            }
+                            Button {
+                                text: root.is-running-health ? (I18n.t4("⏳ Đang kiểm tra…", "⏳ Checking…", "⏳ 正在检查…", "⏳ Проверка…")) : (I18n.t4("🩺 Kiểm Tra Sức Khỏe Mạng", "🩺 Check Health", "🩺 检查健康", "🩺 Здоровье сети"));
+                                clicked => {
+                                    if !root.is-running-health {
+                                        root.is-running-health = true;
+                                        root.run-network-health();
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            height: 85px;
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: Theme.bg-card-alt;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 8px;
+                                    alignment: center;
+                                    Text { text: I18n.t4("MIN PING", "MIN PING", "最小延迟", "МИН PING"); font-size: 10px; font-weight: 700; color: Theme.success; }
+                                    Text { text: root.ping-result.min-ms >= 0 ? (root.ping-result.min-ms + " ms") : "—"; font-size: 20px; font-weight: 800; color: Theme.success; }
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: Theme.bg-card-alt;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 8px;
+                                    alignment: center;
+                                    Text { text: I18n.t4("AVG PING", "AVG PING", "平均延迟", "СРЕДН PING"); font-size: 10px; font-weight: 700; color: Theme.accent; }
+                                    Text { text: root.ping-result.avg-ms >= 0 ? (root.ping-result.avg-ms + " ms") : "—"; font-size: 20px; font-weight: 800; color: Theme.accent; }
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: Theme.bg-card-alt;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 8px;
+                                    alignment: center;
+                                    Text { text: I18n.t4("MAX PING", "MAX PING", "最大延迟", "МАКС PING"); font-size: 10px; font-weight: 700; color: Theme.warning; }
+                                    Text { text: root.ping-result.max-ms >= 0 ? (root.ping-result.max-ms + " ms") : "—"; font-size: 20px; font-weight: 800; color: Theme.warning; }
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: Theme.bg-card-alt;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 8px;
+                                    alignment: center;
+                                    Text { text: I18n.t4("JITTER (ĐỘ LỆCH)", "JITTER", "抖动", "ДЖИТТЕР"); font-size: 10px; font-weight: 700; color: Theme.violet-light; }
+                                    Text { text: root.ping-result.min-ms >= 0 ? (root.ping-result.jitter-ms + " ms") : "—"; font-size: 20px; font-weight: 800; color: Theme.violet-light; }
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: Theme.bg-card-alt;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                VerticalLayout {
+                                    padding: 8px;
+                                    alignment: center;
+                                    Text { text: I18n.t4("RỚT GÓI (LOSS)", "PACKET LOSS", "丢包率", "ПОТЕРИ ПАКЕТОВ"); font-size: 10px; font-weight: 700; color: root.ping-result.loss-pct > 0 ? Theme.danger : Theme.success; }
+                                    Text { text: root.ping-result.min-ms >= 0 ? (root.ping-result.loss-pct + "%") : "—"; font-size: 20px; font-weight: 800; color: root.ping-result.loss-pct > 0 ? Theme.danger : Theme.success; }
+                                }
+                            }
+                        }
+
+                        if root.ping-result.status-text != "" : Rectangle {
+                            height: 38px;
+                            background: Theme.indigo-bg;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.indigo-mid;
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 10px;
+                                alignment: center;
+                                Text { text: "📊 " + root.ping-result.status-text; font-size: 12px; font-weight: 800; color: Theme.indigo-text; vertical-alignment: center; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: root.ping-result.details; font-size: 11px; color: Theme.text-soft; vertical-alignment: center; }
+                            }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                            background: Theme.bg-deep;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.bg-card;
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 10px;
+
+                                Text {
+                                    text: I18n.t4("🩺 BÁO CÁO SỨC KHỎE MẠNG TOÀN DIỆN (4 LỚP KIỂM TRA)", "🩺 FULL NETWORK HEALTH REPORT (4-STAGE DIAGNOSTICS)", "🩺 全方位网络健康报告 (4层检查)", "🩺 ОТЧЕТ О ЗДОРОВЬЕ СЕТИ (4 УРОВНЯ ПРОВЕРКИ)");
+                                    font-size: 12px;
+                                    font-weight: 800;
+                                    color: Theme.accent;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    height: 60px;
+
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        background: Theme.bg-card-alt;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            alignment: center;
+                                            Text { text: I18n.t4("1. ROUTER GATEWAY", "1. ROUTER GATEWAY", "1. 局域网网关", "1. ШЛЮЗ РОУТЕРА"); font-size: 10px; font-weight: 700; color: Theme.text-secondary; }
+                                            Text { text: root.health-report.gateway-status; font-size: 13px; font-weight: 800; color: Theme.success; }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        background: Theme.bg-card-alt;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            alignment: center;
+                                            Text { text: I18n.t4("2. PHÂN GIẢI DNS", "2. DNS RESOLUTION", "2. DNS 解析", "2. РАЗРЕШЕНИЕ DNS"); font-size: 10px; font-weight: 700; color: Theme.text-secondary; }
+                                            Text { text: root.health-report.dns-status; font-size: 13px; font-weight: 800; color: Theme.accent; }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        background: Theme.bg-card-alt;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            alignment: center;
+                                            Text { text: I18n.t4("3. KẾT NỐI INTERNET", "3. GLOBAL INTERNET", "3. 全球互联网", "3. ВЫХОД В ИНТЕРНЕТ"); font-size: 10px; font-weight: 700; color: Theme.text-secondary; }
+                                            Text { text: root.health-report.internet-status; font-size: 13px; font-weight: 800; color: Theme.violet; }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        background: Theme.bg-card-alt;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            alignment: center;
+                                            Text { text: I18n.t4("4. ĐỘ ỔN ĐỊNH", "4. STABILITY & JITTER", "4. 稳定性与抖动", "4. СТАБИЛЬНОСТЬ И ДЖИТТЕР"); font-size: 10px; font-weight: 700; color: Theme.text-secondary; }
+                                            Text { text: root.health-report.stability-status; font-size: 13px; font-weight: 800; color: Theme.warning; }
+                                        }
+                                    }
+
+                                    if root.health-report.summary-score >= 0 : Rectangle {
+                                        width: 110px;
+                                        background: root.health-report.summary-score >= 80 ? Theme.ok-bg : (root.health-report.summary-score >= 50 ? Theme.warn-bg : Theme.danger-bg);
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: root.health-report.summary-score >= 80 ? Theme.success-solid : (root.health-report.summary-score >= 50 ? Theme.warning-deep : Theme.danger-solid);
+                                        VerticalLayout {
+                                            padding: 6px;
+                                            alignment: center;
+                                            Text { text: I18n.t4("ĐIỂM MẠNG", "SCORE", "评分", "БАЛЛ"); font-size: 9px; font-weight: 800; color: Theme.text-body; horizontal-alignment: center; }
+                                            Text { text: root.health-report.summary-score + "/100"; font-size: 18px; font-weight: 800; color: Theme.white; horizontal-alignment: center; }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: root.health-report.overall-text != "" ? root.health-report.overall-text : I18n.t4("Bấm '🩺 Kiểm Tra Sức Khỏe Mạng' để quét tự động 4 chặng kết nối.", "Click '🩺 Check Network Health' to automatically verify 4 network stages.", "点击'🩺 检查网络健康'自动检测 4 个网络阶段。", "Нажмите '🩺 Здоровье сети' для автоматической 4-этапной диагностики.");
+                                    font-size: 12px;
+                                    color: Theme.text-secondary;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+                }
+
+}
+

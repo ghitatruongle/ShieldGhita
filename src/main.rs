@@ -128,6 +128,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _tray_icon = app::ui_bridge::setup_ui_bridge(&ui, state.clone())?;
     phase_log!("ui-bridge");
+
+    // Track 1 (0.1.5-alpha2): auto-update checker — one-way GET to the GitHub
+    // releases API; silent on network failure, `check_updates=false` disables.
+    {
+        let ui_weak = ui.as_weak();
+        let config = state.config.clone();
+        state
+            .runtime
+            .spawn(modules::update_check::watch_for_updates(config, ui_weak));
+    }
     let _ = phase_at; // last phase stamp consumed (silences unused_assignments)
     info!(
         "Startup baseline: UI & services ready in {} ms",

@@ -1,0 +1,140 @@
+// 0.1.5-alpha2 Track 3: extracted from app_window.slint — the composition
+// root keeps the AppWindow property surface; this file owns tab content.
+import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { I18n, Theme } from "../common.slint";
+import { TabButton, StatCard, Spinner } from "../widgets.slint";
+export component OverviewTab inherits Rectangle {
+    in-out property <int> absorbed-count;
+    in-out property <int> active-rules-count;
+    in-out property <bool> attack-detection-enabled;
+    in-out property <int> blocked-count;
+    in-out property <int> blocked-today;
+    in-out property <int> blocked-week;
+    in-out property <string> host-lan-ip;
+    in-out property <int> lan-devices-count;
+    in-out property <bool> master-locked;
+    in-out property <bool> network-wide-adblock;
+    in-out property <bool> protection-enabled;
+    in-out property <int> threats-blocked-count;
+    callback toggle-attack-detection(bool);
+    callback toggle-master-lock(bool);
+    callback toggle-network-wide-adblock(bool);
+    callback toggle-protection(bool);
+    in-out property <int> total-queries;
+    callback update-blocklist();
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 16px;
+
+                    HorizontalLayout {
+                        spacing: 14px;
+
+                        StatCard {
+                            horizontal-stretch: 1;
+                            card-title: I18n.t("TỔNG TRUY VẤN DNS", "TOTAL DNS QUERIES", "DNS 查询总数");
+                            big-value: root.total-queries;
+                            accent: Theme.accent;
+                            sub1: I18n.t("Xử lý song song siêu tốc qua DoH", "Ultra-fast parallel DoH engine", "DoH 超高速并行处理引擎");
+                        }
+
+                        StatCard {
+                            horizontal-stretch: 1;
+                            card-title: I18n.t("QUẢNG CÁO & THEO DÕI ĐÃ CHẶN", "ADS & TRACKERS BLOCKED", "已拦截广告和跟踪器");
+                            big-value: root.blocked-count;
+                            accent: Theme.success-strong;
+                            sub1: (I18n.t("Hôm nay: ", "Today: ", "今日: ")) + root.blocked-today + (I18n.t(" • Tuần này: ", " • This week: ", " • 本周: ")) + root.blocked-week;
+                            sub1-color: Theme.ok-text;
+                            sub2: (I18n.t("Đã lọc ngầm bởi Silent Sinkhole: ", "Silently absorbed: ", "静默黑洞已吸收: ")) + root.absorbed-count;
+                            sub2-color: Theme.ok-bright;
+                        }
+
+                        StatCard {
+                            horizontal-stretch: 1;
+                            card-title: I18n.t("MỐI NGUY & TẤN CÔNG ĐÃ CHẶN", "THREATS & ATTACKS BLOCKED", "已拦截威胁和攻击");
+                            big-value: root.threats-blocked-count;
+                            accent: Theme.danger-soft;
+                            sub1: I18n.t("IDS/IPS & Chống rò rỉ DNS Tunneling", "IDS/IPS & Anti-DNS Tunneling", "IDS/IPS 与 DNS 隧道防护");
+                            sub1-color: Theme.danger-text;
+                        }
+
+                        StatCard {
+                            horizontal-stretch: 1;
+                            card-title: I18n.t("THIẾT BỊ MẠNG LAN HOẠT ĐỘNG", "ACTIVE LAN DEVICES", "活跃局域网设备");
+                            big-value: root.lan-devices-count;
+                            accent: Theme.violet;
+                            sub1: (I18n.t("Quy tắc lọc đang kích hoạt: ", "Active filter rules: ", "生效中的过滤规则: ")) + root.active-rules-count;
+                            sub1-color: Theme.text-soft;
+                        }
+                    }
+
+                    Rectangle {
+                        background: Theme.bg-card-alt;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 14px;
+                            Text { text: I18n.t("⚡ Trung tâm điều khiển mạng tối cao (Master Controller Quick Actions):", "⚡ Master Internet Controller Quick Actions:", "⚡ 网络总控中心 (快速操作):"); font-size: 14px; font-weight: 700; color: Theme.text-body; }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Button {
+                                    text: root.protection-enabled ? (I18n.t("⏸️ Tạm dừng bảo vệ máy", "⏸️ Pause Protection", "⏸️ 暂停防护")) : (I18n.t("▶️ Bật bảo vệ máy", "▶️ Enable Protection", "▶️ 启用防护"));
+                                    clicked => { root.toggle-protection(!root.protection-enabled); }
+                                }
+                                Button {
+                                    text: root.master-locked ? (I18n.t("🔓 Mở khóa Internet", "🔓 Unlock Internet", "🔓 解锁互联网")) : (I18n.t("🔒 Khóa toàn bộ Internet (Kill Switch)", "🔒 Master Internet Lock (Kill Switch)", "🔒 一键断网 (Kill Switch)"));
+                                    clicked => { root.toggle-master-lock(!root.master-locked); }
+                                }
+                                Button {
+                                    text: root.network-wide-adblock ? (I18n.t("🌐 Chống QC toàn mạng: BẬT", "🌐 Network Adblock: ON", "🌐 全网广告拦截: 开")) : (I18n.t("🌐 Chống QC toàn mạng: TẮT", "🌐 Network Adblock: OFF", "🌐 全网广告拦截: 关"));
+                                    clicked => { root.toggle-network-wide-adblock(!root.network-wide-adblock); }
+                                }
+                                Button {
+                                    text: root.attack-detection-enabled ? (I18n.t("🛡️ Chống tấn công: BẬT", "🛡️ IDS/IPS Attack Shield: ON", "🛡️ 入侵防御: 开")) : (I18n.t("🛡️ Chống tấn công: TẮT", "🛡️ IDS/IPS Attack Shield: OFF", "🛡️ 入侵防御: 关"));
+                                    clicked => { root.toggle-attack-detection(!root.attack-detection-enabled); }
+                                }
+                                Button {
+                                    text: I18n.t("🔄 Cập nhật Bộ lọc", "🔄 Update Blocklists", "🔄 更新过滤库");
+                                    clicked => { root.update-blocklist(); }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        background: Theme.bg-card-alt;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 12px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: I18n.t("📡 Hướng dẫn cấu hình Chống quảng cáo Toàn mạng LAN:", "📡 Quick LAN Setup Guide:", "📡 局域网全网去广告快速设置指南:"); font-size: 14px; font-weight: 700; color: Theme.accent; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: (I18n.t("Địa chỉ IP máy tính này: ", "Host Machine IP: ", "本机 IP 地址: ")) + root.host-lan-ip; font-size: 13px; font-weight: 800; color: Theme.success-strong; }
+                            }
+                            Text {
+                                text: I18n.t(
+                                    "• Bật tính năng 'Chống quảng cáo toàn mạng' ở trên hoặc trong Cài đặt.\n• Đặt DNS trên Router Wi-Fi hoặc trên Điện thoại (iPhone/Android)/Smart TV thành: ",
+                                    "• Enable 'Network-wide Ad Blocking' above or in Settings.\n• Set DNS on your Wi-Fi Router or Phone/Smart TV to: ",
+                                    "• 在上方或“设置”中启用“全网广告拦截”。\n• 将 Wi-Fi 路由器或手机/智能电视的 DNS 设置为：",
+                                ) + root.host-lan-ip + I18n.t(
+                                    "\n• Mọi thiết bị kết nối vào Wi-Fi sẽ tự động sạch 100% quảng cáo và được bảo vệ như máy tính này.",
+                                    "\n• All connected LAN devices will have ads blocked automatically without extra software.",
+                                    "\n• 所有接入 Wi-Fi 的设备都将自动屏蔽广告，并获得与本机相同的防护。",
+                                );
+                                font-size: 12px;
+                                color: Theme.text-secondary;
+                            }
+                        }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+}

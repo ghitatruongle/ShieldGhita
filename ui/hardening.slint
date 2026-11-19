@@ -1,16 +1,16 @@
 import { Button, ListView, ScrollView } from "std-widgets.slint";
-import { I18n, PentestFindingItem } from "common.slint";
+import { I18n, PentestFindingItem, Theme } from "common.slint";
 
 component HardenRow inherits Rectangle {
     in property <PentestFindingItem> item;
 
     height: 84px;
-    background: #111827;
+    background: Theme.bg-card-alt;
     border-radius: 8px;
     border-width: 1px;
-    border-color: item.severity == "CRITICAL" ? #dc2626 :
-                  item.severity == "HIGH" ? #ea580c :
-                  item.severity == "MEDIUM" ? #d97706 : #334155;
+    border-color: item.severity == "CRITICAL" ? Theme.danger-solid :
+                  item.severity == "HIGH" ? Theme.orange-deep :
+                  item.severity == "MEDIUM" ? Theme.amber-deep : Theme.border-strong;
 
     HorizontalLayout {
         padding-left: 14px;
@@ -22,19 +22,19 @@ component HardenRow inherits Rectangle {
             width: 78px;
             height: 24px;
             border-radius: 6px;
-            background: item.severity == "CRITICAL" ? #ef444433 :
-                        item.severity == "HIGH" ? #f9731633 :
-                        item.severity == "MEDIUM" ? #f59e0b33 : #3b82f633;
+            background: item.severity == "CRITICAL" ? Theme.danger-dim :
+                        item.severity == "HIGH" ? Theme.orange-dim :
+                        item.severity == "MEDIUM" ? Theme.warn-dim : Theme.blue-dim;
             border-width: 1px;
-            border-color: item.severity == "CRITICAL" ? #ef4444 :
-                          item.severity == "HIGH" ? #f97316 :
-                          item.severity == "MEDIUM" ? #f59e0b : #3b82f6;
+            border-color: item.severity == "CRITICAL" ? Theme.danger :
+                          item.severity == "HIGH" ? Theme.orange :
+                          item.severity == "MEDIUM" ? Theme.warning-deep : Theme.blue-mid;
 
             Text {
                 text: item.severity;
                 font-size: 9px;
                 font-weight: 800;
-                color: #f1f5f9;
+                color: Theme.text-primary;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -49,14 +49,14 @@ component HardenRow inherits Rectangle {
                 text: item.detail;
                 font-size: 12px;
                 font-weight: 700;
-                color: #f1f5f9;
+                color: Theme.text-primary;
                 overflow: elide;
             }
 
             Text {
                 text: item.recommendation;
                 font-size: 11px;
-                color: #cbd5e1;
+                color: Theme.text-soft;
                 overflow: elide;
                 wrap: word-wrap;
                 max-height: 30px;
@@ -65,7 +65,7 @@ component HardenRow inherits Rectangle {
             Text {
                 text: "🛠 " + item.category + " • " + item.target;
                 font-size: 10px;
-                color: #86efac;
+                color: Theme.ok-text;
                 overflow: elide;
             }
         }
@@ -102,13 +102,13 @@ export component HardeningTab inherits Rectangle {
                         text: I18n.t4("🧱 CHỐNG HACK CHUYÊN SÂU", "🧱 DEEP HARDENING", "🧱 深度加固", "🧱 ГЛУБОКОЕ УКРЕПЛЕНИЕ");
                         font-size: 15px;
                         font-weight: 800;
-                        color: #fbbf24;
+                        color: Theme.warning;
                     }
 
                     Text {
                         text: I18n.t4("Rà điểm thường trú (Run keys, lịch tác vụ, dịch vụ) • Giám sát Event Log (brute-force 4625, dịch vụ mới 7045) • Lịch sử USB • Nguyên vẹn tệp thực thi", "Persistence sweep (Run keys, tasks, services) • Event Log watch (brute-force 4625, new services 7045) • USB history • Executable integrity", "持久化扫描（启动键、计划任务、服务）• 事件日志监控（4625 暴力破解、7045 新服务）• USB 历史 • 可执行文件完整性", "Поиск закрепления (Run-ключи, задачи, службы) • Журнал событий (4625/7045) • История USB • Целостность исполняемого файла");
                         font-size: 11px;
-                        color: #94a3b8;
+                        color: Theme.text-secondary;
                     }
                 }
             }
@@ -150,7 +150,7 @@ export component HardeningTab inherits Rectangle {
                     text: I18n.t4("🔧 Khắc phục:", "🔧 Fix:", "🔧 修复：", "🔧 Исправить:");
                     font-size: 12px;
                     font-weight: 800;
-                    color: #6ee7b7;
+                    color: Theme.mint;
                     vertical-alignment: center;
                 }
 
@@ -204,7 +204,7 @@ export component HardeningTab inherits Rectangle {
                     text: I18n.t4("↩ Hoàn tác:", "↩ Undo:", "↩ 撤销：", "↩ Отменить:");
                     font-size: 12px;
                     font-weight: 800;
-                    color: #fbbf24;
+                    color: Theme.warning;
                     vertical-alignment: center;
                 }
 
@@ -220,10 +220,10 @@ export component HardeningTab inherits Rectangle {
 
             if root.harden-status != "" : Rectangle {
                 height: 40px;
-                background: #0f172a;
+                background: Theme.bg-panel;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #0284c7;
+                border-color: Theme.accent-solid;
 
                 HorizontalLayout {
                     padding-left: 14px;
@@ -234,7 +234,7 @@ export component HardeningTab inherits Rectangle {
                         text: root.harden-status;
                         font-size: 12px;
                         font-weight: 700;
-                        color: #38bdf8;
+                        color: Theme.accent;
                         overflow: elide;
                         vertical-alignment: center;
                     }
@@ -243,10 +243,10 @@ export component HardeningTab inherits Rectangle {
 
             if root.harden-findings.length == 0 && !root.harden-busy : Rectangle {
                 vertical-stretch: 1;
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
 
                 VerticalLayout {
                     alignment: center;
@@ -261,7 +261,7 @@ export component HardeningTab inherits Rectangle {
                     Text {
                         text: I18n.t4("Chọn một kiểm tra phía trên để bắt đầu. Kết quả xếp theo mức độ nghiêm trọng.", "Pick a check above to start. Results sorted by severity.", "选择上方一项检查开始。结果按严重程度排序。", "Выберите проверку выше. Результаты по серьёзности.");
                         font-size: 12px;
-                        color: #64748b;
+                        color: Theme.text-muted;
                         horizontal-alignment: center;
                         wrap: word-wrap;
                     }

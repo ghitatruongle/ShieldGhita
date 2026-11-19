@@ -6,12 +6,12 @@ export component FileFindingRow inherits Rectangle {
     in property <FileScanFindingItem> finding;
 
     height: 76px;
-    background: #111827;
+    background: Theme.bg-card-alt;
     border-radius: 8px;
     border-width: 1px;
-    border-color: finding.severity == "CRITICAL" ? #dc2626 :
-                  finding.severity == "HIGH" ? #ea580c :
-                  finding.severity == "MEDIUM" ? #d97706 : #334155;
+    border-color: finding.severity == "CRITICAL" ? Theme.danger-solid :
+                  finding.severity == "HIGH" ? Theme.orange-deep :
+                  finding.severity == "MEDIUM" ? Theme.amber-deep : Theme.border-strong;
 
     HorizontalLayout {
         padding-left: 14px;
@@ -23,21 +23,21 @@ export component FileFindingRow inherits Rectangle {
             width: 72px;
             height: 24px;
             border-radius: 6px;
-            background: finding.severity == "CRITICAL" ? #ef444433 :
-                        finding.severity == "HIGH" ? #f9731633 :
-                        finding.severity == "MEDIUM" ? #f59e0b33 : #3b82f633;
+            background: finding.severity == "CRITICAL" ? Theme.danger-dim :
+                        finding.severity == "HIGH" ? Theme.orange-dim :
+                        finding.severity == "MEDIUM" ? Theme.warn-dim : Theme.blue-dim;
             border-width: 1px;
-            border-color: finding.severity == "CRITICAL" ? #ef4444 :
-                          finding.severity == "HIGH" ? #f97316 :
-                          finding.severity == "MEDIUM" ? #f59e0b : #3b82f6;
+            border-color: finding.severity == "CRITICAL" ? Theme.danger :
+                          finding.severity == "HIGH" ? Theme.orange :
+                          finding.severity == "MEDIUM" ? Theme.warning-deep : Theme.blue-mid;
 
             Text {
                 text: finding.severity;
                 font-size: 10px;
                 font-weight: 800;
-                color: finding.severity == "CRITICAL" ? #fca5a5 :
-                       finding.severity == "HIGH" ? #fdba74 :
-                       finding.severity == "MEDIUM" ? #fde68a : #93c5fd;
+                color: finding.severity == "CRITICAL" ? Theme.danger-text :
+                       finding.severity == "HIGH" ? Theme.orange-text :
+                       finding.severity == "MEDIUM" ? Theme.amber-soft : Theme.info-text;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -52,14 +52,14 @@ export component FileFindingRow inherits Rectangle {
                 text: finding.category;
                 font-size: 12px;
                 font-weight: 700;
-                color: #f1f5f9;
+                color: Theme.text-primary;
                 overflow: elide;
             }
 
             Text {
                 text: finding.description;
                 font-size: 11px;
-                color: #cbd5e1;
+                color: Theme.text-soft;
                 overflow: elide;
             }
 
@@ -67,7 +67,7 @@ export component FileFindingRow inherits Rectangle {
                 text: "🔍 " + finding.snippet;
                 font-size: 10px;
                 font-family: "Consolas";
-                color: #f87171;
+                color: Theme.danger-soft;
                 overflow: elide;
             }
         }
@@ -81,10 +81,10 @@ export component LocationThreatRow inherits Rectangle {
     callback rescan-path(string);
 
     height: 58px;
-    background: #111827;
+    background: Theme.bg-card-alt;
     border-radius: 6px;
     border-width: 1px;
-    border-color: threat.risk-level == "MALICIOUS" ? #dc2626 : #d97706;
+    border-color: threat.risk-level == "MALICIOUS" ? Theme.danger-solid : Theme.amber-deep;
 
     HorizontalLayout {
         padding-left: 12px;
@@ -96,15 +96,15 @@ export component LocationThreatRow inherits Rectangle {
             width: 84px;
             height: 22px;
             border-radius: 6px;
-            background: threat.risk-level == "MALICIOUS" ? #ef444433 : #f59e0b33;
+            background: threat.risk-level == "MALICIOUS" ? Theme.danger-dim : Theme.warn-dim;
             border-width: 1px;
-            border-color: threat.risk-level == "MALICIOUS" ? #ef4444 : #f59e0b;
+            border-color: threat.risk-level == "MALICIOUS" ? Theme.danger : Theme.warning-deep;
 
             Text {
                 text: threat.risk-level;
                 font-size: 9px;
                 font-weight: 800;
-                color: threat.risk-level == "MALICIOUS" ? #fca5a5 : #fde68a;
+                color: threat.risk-level == "MALICIOUS" ? Theme.danger-text : Theme.amber-soft;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -119,14 +119,14 @@ export component LocationThreatRow inherits Rectangle {
                 text: threat.file-name;
                 font-size: 12px;
                 font-weight: 700;
-                color: #f1f5f9;
+                color: Theme.text-primary;
                 overflow: elide;
             }
 
             Text {
                 text: threat.file-path;
                 font-size: 10px;
-                color: #94a3b8;
+                color: Theme.text-secondary;
                 overflow: elide;
             }
         }
@@ -134,7 +134,7 @@ export component LocationThreatRow inherits Rectangle {
         Text {
             text: threat.category;
             font-size: 10px;
-            color: #cbd5e1;
+            color: Theme.text-soft;
             overflow: elide;
             max-width: 120px;
         }
@@ -143,7 +143,7 @@ export component LocationThreatRow inherits Rectangle {
             text: threat.risk-score + "/100";
             font-size: 11px;
             font-weight: 700;
-            color: threat.risk-level == "MALICIOUS" ? #f87171 : #fbbf24;
+            color: threat.risk-level == "MALICIOUS" ? Theme.danger-soft : Theme.warning;
         }
 
         Button {
@@ -204,13 +204,13 @@ export component FileAnalyzerTab inherits Rectangle {
                     text: I18n.t4("🔬 PHÂN TÍCH TỆP & MÃ ĐỘC ẨN", "🔬 FILE ANALYZER & HIDDEN PAYLOAD DETECTOR", "🔬 文件深度分析与隐藏恶意代码检测", "🔬 АНАЛИЗАТОР ФАЙЛОВ И СКРЫТОГО ВРЕДОНОСНОГО ПО");
                     font-size: 15px;
                     font-weight: 800;
-                    color: #fb923c;
+                    color: Theme.orange-soft;
                 }
 
                 Text {
                     text: I18n.t4("Phân tích tĩnh offline • KHÔNG chạy code • Không gửi tệp ra Internet • Kết luận theo bộ mẫu hiện có, không thay thế antivirus.", "Offline static analysis • Does NOT execute code • Does not upload files • Heuristic against current signatures — not a full antivirus.", "离线静态分析 • 不执行代码 • 不上传文件 • 基于现有特征启发式，不能替代杀毒软件。", "Офлайн-статический анализ • НЕ выполняет код • Не отправляет файлы • Эвристика по текущим сигнатурам — не антивирус.");
                     font-size: 11px;
-                    color: #94a3b8;
+                    color: Theme.text-secondary;
                 }
             }
 
@@ -235,10 +235,10 @@ export component FileAnalyzerTab inherits Rectangle {
 
         if root.scan-status != "" : Rectangle {
             height: 38px;
-            background: #0f172a;
+            background: Theme.bg-panel;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #0284c7;
+            border-color: Theme.accent-solid;
             HorizontalLayout {
                 padding-left: 14px;
                 padding-right: 14px;
@@ -248,7 +248,7 @@ export component FileAnalyzerTab inherits Rectangle {
                     text: root.scan-status;
                     font-size: 12px;
                     font-weight: 700;
-                    color: #38bdf8;
+                    color: Theme.accent;
                     vertical-alignment: center;
                 }
             }
@@ -256,10 +256,10 @@ export component FileAnalyzerTab inherits Rectangle {
 
         if root.result.file-path == "" && !root.is-scanning : Rectangle {
             vertical-stretch: 1;
-            background: #111827;
+            background: Theme.bg-card-alt;
             border-radius: 10px;
             border-width: 1px;
-            border-color: #1f2937;
+            border-color: Theme.border;
 
             VerticalLayout {
                 padding: 30px;
@@ -276,14 +276,14 @@ export component FileAnalyzerTab inherits Rectangle {
                     text: I18n.t4("Chưa chọn tệp nào để kiểm tra", "No file selected for analysis", "未选择任何文件", "Файл для анализа не выбран");
                     font-size: 16px;
                     font-weight: 800;
-                    color: #f1f5f9;
+                    color: Theme.text-primary;
                     horizontal-alignment: center;
                 }
 
                 Text {
                     text: I18n.t4("Bấm nút 'Chọn tệp kiểm tra' ở trên để mở bất kỳ file nào (script .bat/.ps1, tài liệu, file thực thi .exe, tệp văn bản nghi ngờ...).\nỨng dụng sẽ thực hiện quét tĩnh an toàn trong sandbox bộ nhớ, tuyệt đối không chạy code, phát hiện tức thì các lệnh nguy hiểm ẩn giấu đằng sau câu chào xã giao.", "Click 'Pick file to scan' above to inspect any file (.bat, .ps1, documents, executables, suspicious texts...).\nThe app performs safe static inspection in memory without running code, detecting hidden malicious commands behind polite greetings.", "点击上方'选择检查文件'按钮检测任何文件（脚本、可执行文件、可疑文本等）。\n程序在内存沙箱中只读静态分析，绝不执行代码，秒级识别打招呼包装下的暗藏指令。", "Нажмите 'Выбрать файл для анализа', чтобы проверить любой подозрительный файл.\nПриложение выполняет безопасный статический анализ без исполнения кода.");
                     font-size: 12px;
-                    color: #94a3b8;
+                    color: Theme.text-secondary;
                     horizontal-alignment: center;
                     wrap: word-wrap;
                 }
@@ -300,12 +300,12 @@ export component FileAnalyzerTab inherits Rectangle {
 
                 Rectangle {
                     horizontal-stretch: 1;
-                    background: root.result.risk-level == "MALICIOUS" ? #3b0712 :
-                                root.result.risk-level == "SUSPICIOUS" ? #2e1065 : #062e24;
+                    background: root.result.risk-level == "MALICIOUS" ? Theme.quarantine-bg :
+                                root.result.risk-level == "SUSPICIOUS" ? Theme.purple-tint : Theme.ok-tint;
                     border-radius: 8px;
                     border-width: 1px;
-                    border-color: root.result.risk-level == "MALICIOUS" ? #ef4444 :
-                                  root.result.risk-level == "SUSPICIOUS" ? #a855f7 : #10b981;
+                    border-color: root.result.risk-level == "MALICIOUS" ? Theme.danger :
+                                  root.result.risk-level == "SUSPICIOUS" ? Theme.violet-bright : Theme.emerald;
 
                     VerticalLayout {
                         padding: 10px;
@@ -315,7 +315,7 @@ export component FileAnalyzerTab inherits Rectangle {
                             text: I18n.t4("MỨC ĐỘ RỦI RO", "THREAT LEVEL", "风险评级", "УРОВЕНЬ УГРОЗЫ");
                             font-size: 10px;
                             font-weight: 700;
-                            color: #94a3b8;
+                            color: Theme.text-secondary;
                         }
 
                         Text {
@@ -324,24 +324,24 @@ export component FileAnalyzerTab inherits Rectangle {
                                   I18n.t4("✅ AN TOÀN", "✅ SAFE", "✅ 安全正常", "✅ БЕЗОПАСНО");
                             font-size: 16px;
                             font-weight: 800;
-                            color: root.result.risk-level == "MALICIOUS" ? #f87171 :
-                                   root.result.risk-level == "SUSPICIOUS" ? #c084fc : #34d399;
+                            color: root.result.risk-level == "MALICIOUS" ? Theme.danger-soft :
+                                   root.result.risk-level == "SUSPICIOUS" ? Theme.violet-light : Theme.success;
                         }
 
                         Text {
                             text: (I18n.t4("Điểm: ", "Score: ", "风险分: ", "Баллы: ")) + root.result.risk-score + "/100";
                             font-size: 11px;
-                            color: #cbd5e1;
+                            color: Theme.text-soft;
                         }
                     }
                 }
 
                 Rectangle {
                     horizontal-stretch: 1;
-                    background: #111827;
+                    background: Theme.bg-card-alt;
                     border-radius: 8px;
                     border-width: 1px;
-                    border-color: #1f2937;
+                    border-color: Theme.border;
 
                     VerticalLayout {
                         padding: 10px;
@@ -351,31 +351,31 @@ export component FileAnalyzerTab inherits Rectangle {
                             text: I18n.t4("DUNG LƯỢNG & ĐỊNH DẠNG", "SIZE & FORMAT", "文件大小与格式", "РАЗМЕР И ФОРМАТ");
                             font-size: 10px;
                             font-weight: 700;
-                            color: #64748b;
+                            color: Theme.text-muted;
                         }
 
                         Text {
                             text: Math.round(root.result.file-size-bytes / 1024) + " KB";
                             font-size: 16px;
                             font-weight: 800;
-                            color: #38bdf8;
+                            color: Theme.accent;
                         }
 
                         Text {
                             text: root.result.is-pe ? (I18n.t4("PE Thực thi", "PE Executable", "PE可执行文件", "Исполняемый PE")) :
                                   (I18n.t4("Script / Dữ liệu", "Script / Data", "脚本/数据文件", "Скрипт / Данные"));
                             font-size: 11px;
-                            color: #94a3b8;
+                            color: Theme.text-secondary;
                         }
                     }
                 }
 
                 Rectangle {
                     horizontal-stretch: 1;
-                    background: #111827;
+                    background: Theme.bg-card-alt;
                     border-radius: 8px;
                     border-width: 1px;
-                    border-color: #1f2937;
+                    border-color: Theme.border;
 
                     VerticalLayout {
                         padding: 10px;
@@ -385,31 +385,31 @@ export component FileAnalyzerTab inherits Rectangle {
                             text: I18n.t4("ĐỘ HỖN LOẠN (ENTROPY)", "SHANNON ENTROPY", "信息熵 (Entropy)", "ЭНТРОПИЯ (ENTROPY)");
                             font-size: 10px;
                             font-weight: 700;
-                            color: #64748b;
+                            color: Theme.text-muted;
                         }
 
                         Text {
                             text: Math.round(root.result.entropy * 100) / 100 + " / 8.0";
                             font-size: 16px;
                             font-weight: 800;
-                            color: root.result.is-packed ? #f59e0b : #a78bfa;
+                            color: root.result.is-packed ? Theme.warning-deep : Theme.violet;
                         }
 
                         Text {
                             text: root.result.is-packed ? (I18n.t4("Nén/Mã hóa (Packed)", "Packed/Encrypted", "高熵压缩/混淆", "Упакован/Зашифрован")) :
                                   (I18n.t4("Bình thường", "Standard", "标准熵值", "Стандартная"));
                             font-size: 11px;
-                            color: root.result.is-packed ? #fbbf24 : #94a3b8;
+                            color: root.result.is-packed ? Theme.warning : Theme.text-secondary;
                         }
                     }
                 }
 
                 Rectangle {
                     horizontal-stretch: 1;
-                    background: #111827;
+                    background: Theme.bg-card-alt;
                     border-radius: 8px;
                     border-width: 1px;
-                    border-color: #1f2937;
+                    border-color: Theme.border;
 
                     VerticalLayout {
                         padding: 10px;
@@ -419,31 +419,31 @@ export component FileAnalyzerTab inherits Rectangle {
                             text: I18n.t4("PHÁT HIỆN ĐÁNG NGỜ", "FINDINGS COUNT", "告警特征数", "НАЙДЕНО УГРОЗ");
                             font-size: 10px;
                             font-weight: 700;
-                            color: #64748b;
+                            color: Theme.text-muted;
                         }
 
                         Text {
                             text: root.result.findings-count + "";
                             font-size: 16px;
                             font-weight: 800;
-                            color: root.result.findings-count > 0 ? #f87171 : #4ade80;
+                            color: root.result.findings-count > 0 ? Theme.danger-soft : Theme.ok-bright;
                         }
 
                         Text {
                             text: root.result.findings-count > 0 ? (I18n.t4("Cần kiểm tra kỹ", "Review needed", "需复核", "Требует внимания")) :
                                   (I18n.t4("Không có dấu hiệu lạ", "Clean", "无异常", "Чисто"));
                             font-size: 11px;
-                            color: #94a3b8;
+                            color: Theme.text-secondary;
                         }
                     }
                 }
             }
 
             Rectangle {
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
                 height: 52px;
 
                 HorizontalLayout {
@@ -456,7 +456,7 @@ export component FileAnalyzerTab inherits Rectangle {
                         text: "📁 " + root.result.file-name;
                         font-size: 12px;
                         font-weight: 700;
-                        color: #f1f5f9;
+                        color: Theme.text-primary;
                         overflow: elide;
                         min-width: 180px;
                     }
@@ -467,7 +467,7 @@ export component FileAnalyzerTab inherits Rectangle {
                         text: "SHA256: " + root.result.sha256;
                         font-size: 11px;
                         font-family: "Consolas";
-                        color: #64748b;
+                        color: Theme.text-muted;
                         overflow: elide;
                     }
 
@@ -498,15 +498,15 @@ export component FileAnalyzerTab inherits Rectangle {
                 text: (I18n.t4("📋 CHI TIẾT CÁC ĐẶC TRƯNG MÃ ĐỘC PHÁT HIỆN ĐƯỢC (", "📋 DETECTED MALICIOUS INDICATORS (", "📋 检测到的恶意特征详情 (", "📋 НАЙДЕННЫЕ ИНДИКАТОРЫ УГРОЗ (")) + root.findings.length + "):";
                 font-size: 12px;
                 font-weight: 700;
-                color: #cbd5e1;
+                color: Theme.text-soft;
             }
 
             if root.findings.length == 0 : Rectangle {
                 vertical-stretch: 1;
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
 
                 VerticalLayout {
                     padding: 24px;
@@ -517,14 +517,14 @@ export component FileAnalyzerTab inherits Rectangle {
                         text: "✨ " + I18n.t4("Không phát hiện câu lệnh ẩn, steganography hay mã độc nhúng trong tệp.", "No hidden commands, stego or embedded payloads detected in this file.", "未在文件中发现隐藏指令、隐写术或嵌入的恶意代码。", "В файле не обнаружено скрытых команд, стеганографии или вредоносного ПО.");
                         font-size: 13px;
                         font-weight: 700;
-                        color: #34d399;
+                        color: Theme.success;
                         horizontal-alignment: center;
                     }
 
                     Text {
                         text: root.result.summary-text != "" ? root.result.summary-text : I18n.t4("Tệp an toàn đối với các mẫu kiểm tra nhận diện hiện tại.", "File is considered safe according to current behavioral indicators.", "按照当前特征库规则，此文件安全。", "Файл считается безопасным по текущим сигнатурам.");
                         font-size: 11px;
-                        color: #94a3b8;
+                        color: Theme.text-secondary;
                         horizontal-alignment: center;
                     }
                 }
@@ -540,10 +540,10 @@ export component FileAnalyzerTab inherits Rectangle {
 
         Rectangle {
             height: 268px;
-            background: #0b1220;
+            background: Theme.bg-input;
             border-radius: 10px;
             border-width: 1px;
-            border-color: #b45309;
+            border-color: Theme.amber-brown;
 
             VerticalLayout {
                 padding: 12px;
@@ -562,13 +562,13 @@ export component FileAnalyzerTab inherits Rectangle {
                             text: I18n.t4("🗂️ QUÉT VỊ TRÍ CHỈ ĐỊNH", "🗂️ LOCATION / DRIVE SCAN", "🗂️ 指定位置扫描", "🗂️ СКАНИРОВАНИЕ ПОЛОЖЕНИЯ");
                             font-size: 13px;
                             font-weight: 800;
-                            color: #fbbf24;
+                            color: Theme.warning;
                         }
 
                         Text {
                             text: I18n.t4("Quét tĩnh toàn bộ thư mục/ổ đĩa • Chỉ cảnh báo, KHÔNG xoá cách ly • Phân tích 8 MB đầu mỗi tệp", "Static scan of a folder or drive • Alert only, does NOT delete or quarantine • Analyses first 8 MB of each file", "静态扫描文件夹或磁盘 • 仅告警，不删除不隔离 • 每个文件分析前 8 MB", "Статическое сканирование папки или диска • Только оповещение, не удаляет и не изолирует • Анализ первых 8 МБ файла");
                             font-size: 10px;
-                            color: #94a3b8;
+                            color: Theme.text-secondary;
                         }
                     }
 
@@ -605,16 +605,16 @@ export component FileAnalyzerTab inherits Rectangle {
                 if root.location-root != "" : Text {
                     text: "📍 " + root.location-root;
                     font-size: 10px;
-                    color: #94a3b8;
+                    color: Theme.text-secondary;
                     overflow: elide;
                 }
 
                 if root.location-busy || root.location-status != "" : Rectangle {
                     height: 46px;
-                    background: #0f172a;
+                    background: Theme.bg-panel;
                     border-radius: 6px;
                     border-width: 1px;
-                    border-color: #0284c7;
+                    border-color: Theme.accent-solid;
 
                     VerticalLayout {
                         padding-left: 12px;
@@ -627,14 +627,14 @@ export component FileAnalyzerTab inherits Rectangle {
                             text: root.location-status;
                             font-size: 11px;
                             font-weight: 700;
-                            color: #38bdf8;
+                            color: Theme.accent;
                             overflow: elide;
                         }
 
                         Rectangle {
                             height: 6px;
                             border-radius: 3px;
-                            background: #1f2937;
+                            background: Theme.border;
 
                             Rectangle {
                                 x: 0px;
@@ -642,7 +642,7 @@ export component FileAnalyzerTab inherits Rectangle {
                                 width: parent.width * root.location-progress / 100;
                                 height: 100%;
                                 border-radius: 3px;
-                                background: #0ea5e9;
+                                background: Theme.sky;
                                 // Track 5: progress bar trượt mượt khi % thay đổi
                                 animate width { duration: 150ms; }
                             }
@@ -653,7 +653,7 @@ export component FileAnalyzerTab inherits Rectangle {
                 if root.location-threats.length == 0 && !root.location-busy : Text {
                     text: I18n.t4("Chưa có kết quả quét vị trí. Chọn một thư mục hoặc ổ đĩa ở trên để bắt đầu.", "No location scan results yet. Pick a folder or drive above to begin.", "尚无位置扫描结果。请在上方选择文件夹或磁盘以开始。", "Результатов ещё нет. Выберите папку или диск выше.");
                     font-size: 11px;
-                    color: #64748b;
+                    color: Theme.text-muted;
                     horizontal-alignment: center;
                     wrap: word-wrap;
                     vertical-alignment: center;

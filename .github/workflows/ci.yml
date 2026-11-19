@@ -50,10 +50,8 @@ jobs:
         with:
           tool: cargo-audit
 
-      # v0.1.1-alpha decision: stay informational until findings are triaged.
-      # Flip to enforce after a clean audit run:
-      #   run: cargo audit --deny warnings
-      # and remove continue-on-error.
+      # Enforcing gate (0.1.5-alpha2): cargo-audit exits non-zero on any known
+      # vulnerability, so a CVE in the dependency tree can no longer merge silently.
+      # Warnings/unmaintained notices stay informational (exit 0).
       - name: Run dependency audit
-        continue-on-error: true
         run: cargo audit

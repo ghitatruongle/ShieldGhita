@@ -1,0 +1,110 @@
+// 0.1.5-alpha2 Track 3: extracted from app_window.slint — the composition
+// root keeps the AppWindow property surface; this file owns tab content.
+import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { I18n, Theme } from "../common.slint";
+import { TabButton, StatCard, Spinner } from "../widgets.slint";
+export component FilterRulesTab inherits Rectangle {
+    callback add-allowed-rule(string);
+    callback add-custom-rule(string);
+    in-out property <[string]> allowed-rules;
+    in-out property <[string]> custom-rules;
+    callback remove-allowed-rule(string);
+    callback remove-custom-rule(string);
+
+                HorizontalLayout {
+                    padding: 16px;
+                    spacing: 16px;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 10px;
+
+                        Text { text: I18n.t("⛔ Danh sách chặn tùy chỉnh (Blacklist):", "⛔ Custom Blacklist (Block):", "⛔ 自定义黑名单 (屏蔽):"); font-size: 14px; font-weight: 700; color: Theme.danger-soft; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            block-input := LineEdit {
+                                placeholder-text: I18n.t("Nhập domain muốn chặn...", "Enter domain to block...", "输入要屏蔽的域名...");
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: I18n.t("➕ Chặn", "➕ Block", "➕ 屏蔽");
+                                clicked => {
+                                    root.add-custom-rule(block-input.text);
+                                    block-input.text = "";
+                                }
+                            }
+                        }
+
+                        ListView {
+                            vertical-stretch: 1;
+                            for rule in root.custom-rules : Rectangle {
+                                height: 36px;
+                                rh := TouchArea { }
+                                if rh.has-hover : Rectangle {
+                                    x: 0; y: 0; width: 100%; height: 100%;
+                                    background: Theme.white;
+                                    opacity: 0.06;
+                                }
+                                background: Theme.bg-card-alt;
+                                border-radius: 4px;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 6px;
+                                    Text { text: "🚫 " + rule; font-size: 12px; color: Theme.danger-text; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button {
+                                        text: I18n.t("Xóa", "Delete", "删除");
+                                        clicked => { root.remove-custom-rule(rule); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle { width: 1px; background: Theme.border; }
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 10px;
+
+                        Text { text: I18n.t("✅ Danh sách cho phép (Whitelist - Ưu tiên cao nhất):", "✅ Whitelist (Always Allow - Highest Priority):", "✅ 白名单 (始终允许 - 最高优先级):"); font-size: 14px; font-weight: 700; color: Theme.ok-bright; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            allow-input := LineEdit {
+                                placeholder-text: I18n.t("Nhập domain luôn cho phép...", "Enter domain to always allow...", "输入始终允许的域名...");
+                                horizontal-stretch: 1;
+                            }
+                            Button {
+                                text: I18n.t("➕ Cho phép", "➕ Allow", "➕ 允许");
+                                clicked => {
+                                    root.add-allowed-rule(allow-input.text);
+                                    allow-input.text = "";
+                                }
+                            }
+                        }
+
+                        ListView {
+                            vertical-stretch: 1;
+                            for rule in root.allowed-rules : Rectangle {
+                                height: 36px;
+                                rh2 := TouchArea { }
+                                if rh2.has-hover : Rectangle {
+                                    x: 0; y: 0; width: 100%; height: 100%;
+                                    background: Theme.white;
+                                    opacity: 0.06;
+                                }
+                                background: Theme.bg-card-alt;
+                                border-radius: 4px;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 6px;
+                                    Text { text: "✅ " + rule; font-size: 12px; color: Theme.ok-text; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button {
+                                        text: I18n.t("Xóa", "Delete", "删除");
+                                        clicked => { root.remove-allowed-rule(rule); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+}

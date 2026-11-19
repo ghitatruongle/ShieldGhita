@@ -1,0 +1,313 @@
+// 0.1.5-alpha2 Track 3: extracted from app_window.slint — the composition
+// root keeps the AppWindow property surface; this file owns the content.
+import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { I18n, Theme } from "common.slint";
+import { TabButton, StatCard, Spinner } from "widgets.slint";
+
+export component HeaderBar inherits HorizontalLayout {
+    spacing: 16px;
+    alignment: center;
+    in-out property <string> app-version;
+    in-out property <float> cpu-usage;
+    in-out property <bool> is-admin-edition;
+    in-out property <string> live-traffic-rate;
+    in-out property <float> mem-usage;
+    callback open-latest-release();
+    in-out property <bool> protection-enabled;
+    in-out property <int> security-score;
+    in-out property <string> security-score-hint;
+    in-out property <string> status-text;
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                Image {
+                    source: @image-url("assets/logo.png");
+                    width: 32px;
+                    height: 32px;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 0px;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: "Shield Ghita";
+                            font-size: 20px;
+                            font-weight: 800;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            height: 18px;
+                            border-radius: 9px;
+                            background: Theme.accent-solid;
+                            if version-touch.has-hover : Rectangle {
+                                y: -22px;
+                                width: 180px;
+                                height: 20px;
+                                x: (parent.width - self.width) / 2;
+                                background: Theme.bg-chrome;
+                                border-radius: 5px;
+                                border-width: 1px;
+                                border-color: Theme.border-strong;
+                                Text { text: I18n.t4("Mở trang Release mới nhất", "Open the latest release page", "打开最新发布页", "Открыть страницу последнего релиза"); font-size: 9px; color: Theme.text-primary; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                            version-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.open-latest-release(); }
+                            }
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                alignment: center;
+                                Text {
+                                    text: "v" + root.app-version;
+                                    font-size: 10px;
+                                    font-weight: 800;
+                                    color: Theme.white;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        if root.is-admin-edition : Rectangle {
+                            height: 18px;
+                            border-radius: 9px;
+                            background: Theme.purple;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                alignment: center;
+                                Text {
+                                    text: I18n.t("👑 BẢN QUẢN TRỊ", "👑 ADMIN EDITION", "👑 管理员版");
+                                    font-size: 10px;
+                                    font-weight: 800;
+                                    color: Theme.white;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                    Text {
+                        text: I18n.t("Bảo mật mạng, Ngăn chặn xâm nhập & Chặn quảng cáo LAN", "Cyber Security, IDS/IPS & LAN Adblock Controller", "网络安全、入侵防御与局域网广告拦截");
+                        font-size: 11px;
+                        color: Theme.text-secondary;
+                    }
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: center;
+
+                Rectangle {
+                    height: 28px;
+                    border-radius: 14px;
+                    background: root.protection-enabled ? Theme.ok-bg : Theme.danger-bg;
+                    border-width: 1px;
+                    border-color: root.protection-enabled ? Theme.success-solid : Theme.danger-solid;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        alignment: center;
+                        Text {
+                            text: root.status-text;
+                            font-size: 12px;
+                            font-weight: 800;
+                            color: root.protection-enabled ? Theme.mint : Theme.danger-text;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 28px;
+                    border-radius: 14px;
+                    background: Theme.indigo-bg;
+                    border-width: 1px;
+                    border-color: Theme.indigo-mid;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        alignment: center;
+                        Text {
+                            text: (I18n.t("🛡 Điểm an ninh: ", "🛡 Security Score: ", "🛡 安全评分: ")) + root.security-score + "/100";
+                            font-size: 12px;
+                            font-weight: 800;
+                            color: Theme.indigo-text;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                if root.security-score-hint != "" : Text {
+                    text: root.security-score-hint;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    height: 28px;
+                    border-radius: 14px;
+                    background: Theme.bg-panel;
+                    border-width: 1px;
+                    border-color: Theme.border-strong;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 8px;
+                        alignment: center;
+                        Text {
+                            text: "CPU: " + Math.round(root.cpu-usage) + "%";
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "RAM: " + Math.round(root.mem-usage * 10.0) / 10.0 + " GB";
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "⚡ " + root.live-traffic-rate;
+                            font-size: 11px;
+                            font-weight: 800;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+        }
+}
+
+export component TabBar inherits VerticalLayout {
+    in-out property <int> active-tab;
+    in-out property <bool> is-admin-edition;
+    spacing: 4px;
+
+    // Row 1 — 8 tabs fit at full label width even at min window width.
+    HorizontalLayout {
+        spacing: 6px;
+            TabButton {
+                text: I18n.t4("📊 Tổng quan", "📊 Overview", "📊 总览", "📊 Обзор");
+                active: root.active-tab == 0;
+                active-color: Theme.accent;
+                clicked => { root.active-tab = 0; }
+            }
+
+            TabButton {
+                text: I18n.t4("🛡 An ninh", "🛡 Security", "🛡 安全", "🛡 Безопасность");
+                active: root.active-tab == 1;
+                active-color: Theme.success;
+                clicked => { root.active-tab = 1; }
+            }
+
+            TabButton {
+                text: I18n.t4("🚀 Giám sát", "🚀 Monitor & Logs", "🚀 监控与日志", "🚀 Мониторинг");
+                active: root.active-tab == 2;
+                active-color: Theme.violet;
+                clicked => { root.active-tab = 2; }
+            }
+
+            TabButton {
+                text: I18n.t4("🚫 Bộ lọc", "🚫 Filter Rules", "🚫 过滤规则", "🚫 Фильтры");
+                active: root.active-tab == 3;
+                active-color: Theme.danger-soft;
+                clicked => { root.active-tab = 3; }
+            }
+
+            TabButton {
+                text: I18n.t4("⚙ Cài đặt", "⚙ Settings", "⚙ 设置", "⚙ Настройки");
+                active: root.active-tab == 4;
+                active-color: Theme.accent;
+                clicked => { root.active-tab = 4; }
+            }
+
+            TabButton {
+                text: I18n.t4("🩺 Chẩn đoán", "🩺 Diagnostics", "🩺 网络诊断", "🩺 Диагностика");
+                active: root.active-tab == 6;
+                active-color: Theme.accent;
+                clicked => { root.active-tab = 6; }
+            }
+
+            TabButton {
+                text: I18n.t4("🧠 RAM Map", "🧠 RAM Map", "🧠 内存图谱", "🧠 Карта RAM");
+                active: root.active-tab == 7;
+                active-color: Theme.pink;
+                clicked => { root.active-tab = 7; }
+            }
+
+            TabButton {
+                text: I18n.t4("🔬 Soi Tệp", "🔬 File Scan", "🔬 文件分析", "🔬 Анализ файлов");
+                active: root.active-tab == 8;
+                active-color: Theme.orange-soft;
+                clicked => { root.active-tab = 8; }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+    }
+
+    // Row 2
+    HorizontalLayout {
+        spacing: 6px;
+            TabButton {
+                text: I18n.t4("📊 Thống Kê", "📊 Statistics", "📊 统计", "📊 Статистика");
+                active: root.active-tab == 9;
+                active-color: Theme.success-strong;
+                clicked => { root.active-tab = 9; }
+            }
+
+            TabButton {
+                text: I18n.t4("🛡 Diệt Virus", "🛡 Antivirus", "🛡 杀毒", "🛡 Антивирус");
+                active: root.active-tab == 10;
+                active-color: Theme.success;
+                clicked => { root.active-tab = 10; }
+            }
+
+            TabButton {
+                text: I18n.t4("🔎 Kiểm Toán", "🔎 Audit", "🔎 审计", "🔎 Аудит");
+                active: root.active-tab == 11;
+                active-color: Theme.blue;
+                clicked => { root.active-tab = 11; }
+            }
+
+            if root.is-admin-edition : TabButton {
+                text: I18n.t4("👑 Quản trị Admin", "👑 Admin Suite", "👑 管理员套件", "👑 Панель Admin");
+                active: root.active-tab == 5;
+                active-color: Theme.violet-light;
+                clicked => { root.active-tab = 5; }
+            }
+
+            // Track 4: Vault and "Chống Hack" are public edition features now.
+            TabButton {
+                text: I18n.t4("🔐 Vault", "🔐 Vault", "🔐 保险库", "🔐 Хранилище");
+                active: root.active-tab == 12;
+                active-color: Theme.violet-light;
+                clicked => { root.active-tab = 12; }
+            }
+
+            if root.is-admin-edition : TabButton {
+                text: I18n.t4("🧰 Pentest", "🧰 Pentest", "🧰 渗透测试", "🧰 Пентест");
+                active: root.active-tab == 13;
+                active-color: Theme.danger-soft;
+                clicked => { root.active-tab = 13; }
+            }
+
+            TabButton {
+                text: I18n.t4("🧱 Chống Hack", "🧱 Hardening", "🧱 加固", "🧱 Укрепление");
+                active: root.active-tab == 14;
+                active-color: Theme.warning;
+                clicked => { root.active-tab = 14; }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+    }
+}
+

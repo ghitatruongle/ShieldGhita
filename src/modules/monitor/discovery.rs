@@ -284,6 +284,140 @@ pub async fn probe_mdns_hints() -> Vec<DiscoveryHint> {
     hints
 }
 
+/// Giải mã escape DNS trong tên (`\ `→space, `\.`→`.`, `\;`→`;`) —
+/// mDNS escape khoảng trắng trong label bằng backslash.
+pub fn unescape_dns_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut chars = name.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some(next) => out.push(next),
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c)
+        }
+    }
+    out
+}
+
+/// Track 8 — Nhận diện thiết bị: hỏi mDNS PTR ngược cho `ip` trên 224.0.0.251:5353.
+/// Điện thoại/máy tính/smart home tự khai báo tên mà chủ thiết bị đã đặt
+/// (VD "Bàn của An @ iPhone") qua bản ghi PTR `x.x.x.x.in-addr.arpa`.
+/// CHỈ hỏi multicast LAN, không mở surface mạng mới (cùng cổng/protocol
+/// với probe_mdns_hints hiện có).
+pub async fn probe_mdns_reverse_name(ip: &str) -> Option<String> {
+    let octets: Vec<u8> = ip
+        .trim()
+        .parse::<std::net::IpAddr>()
+        .ok()?
+        .to_string()
+        .split('.')
+        .filter_map(|o| o.parse().ok())
+        .collect();
+    if octets.len() != 4 {
+        return None;
+    }
+
+    // DNS header TXID=0, flags=0, QD=1 + PTR query cho in-addr.arpa.
+    let mut query = vec![
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    for label in [
+        octets[3].to_string(),
+        octets[2].to_string(),
+        octets[1].to_string(),
+        octets[0].to_string(),
+        "in-addr".to_string(),
+        "arpa".to_string(),
+    ] {
+        query.push(label.len() as u8);
+        query.extend_from_slice(label.as_bytes());
+    }
+    query.push(0x00);
+    query.extend_from_slice(&12u16.to_be_bytes()); // PTR
+    query.extend_from_slice(&1u16.to_be_bytes()); // IN
+
+    let socket = UdpSocket::bind("0.0.0.0:0").await.ok()?;
+    let target: SocketAddr = "224.0.0.251:5353".parse().ok()?;
+    if socket.send_to(&query, target).await.is_err() {
+        return None;
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(1200);
+    let mut buf = [0u8; 4096];
+    while Instant::now() < deadline {
+        let remain = deadline.saturating_duration_since(Instant::now());
+        if remain.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remain, socket.recv_from(&mut buf)).await {
+            Ok(Ok((len, src))) => {
+                // Chỉ nhận trả lời TỪ IP đang hỏi — probe chạy song song, nếu
+                // thiết bị trả lời multicast thì socket này có thể nhận packet
+                // của thiết bị khác → gán nhầm tên.
+                if src.ip().to_string() != ip {
+                    continue;
+                }
+                if let Some(name) = extract_ptr_name(&buf[..len]) {
+                    if !name.is_empty() {
+                        return Some(name);
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
+/// Tách PTR rdata đầu tiên từ gói mDNS trả lời — trả về tên (bỏ đuôi .local).
+pub fn extract_ptr_name(buf: &[u8]) -> Option<String> {
+    if buf.len() < 12 {
+        return None;
+    }
+    let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
+    if ancount == 0 {
+        return None;
+    }
+    // Bỏ qua question section (QDCOUNT tên + 4 byte mỗi câu).
+    let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    let mut pos = 12;
+    for _ in 0..qdcount {
+        read_dns_name(buf, &mut pos)?;
+        pos += 4;
+    }
+    for _ in 0..ancount {
+        read_dns_name(buf, &mut pos)?;
+        if pos + 10 > buf.len() {
+            return None;
+        }
+        let rr_type = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
+        let rdlength = u16::from_be_bytes([buf[pos + 8], buf[pos + 9]]) as usize;
+        let rdata = pos + 10;
+        if rdata + rdlength > buf.len() {
+            return None;
+        }
+        if rr_type == 12 {
+            let mut rpos = rdata;
+            if let Some(ptr) = read_dns_name(buf, &mut rpos) {
+                let name = unescape_dns_name(&ptr);
+                // "Tên@iPhone._companion-link._tcp.local" → lấy tới trước service part
+                let cut = name.find("._").unwrap_or(name.len());
+                let device = name[..cut].trim_matches('.').to_string();
+                let device = device.strip_suffix(".local").unwrap_or(&device).to_string();
+                if !device.is_empty() && device.len() <= 64 {
+                    return Some(device);
+                }
+            }
+            return None;
+        }
+        pos = rdata + rdlength;
+    }
+    None
+}
+
 pub async fn collect_hints() -> HashMap<String, DiscoveryHint> {
     let (mdns, ssdp) = tokio::join!(probe_mdns_hints(), probe_ssdp_hints());
     let mut map: HashMap<String, DiscoveryHint> = HashMap::new();
@@ -310,6 +444,47 @@ pub async fn collect_hints() -> HashMap<String, DiscoveryHint> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unescape_dns_name() {
+        assert_eq!(unescape_dns_name("B\\ àn\\ của\\ An"), "B àn của An");
+        assert_eq!(unescape_dns_name("no-escape"), "no-escape");
+    }
+
+    #[test]
+    fn test_extract_ptr_name_fixture() {
+        // PTR answer: header(12) + question (name + 4) + answer:
+        // name ptr + type 12 + class/ttl(8) + rdlength 2 + rdata ptr.
+        // Question name = "1.0.0.127.in-addr.arpa" (compressed count hidden)
+        // Xây fixture: question "5.1.168.192.in-addr.arpa" uncompressed.
+        let mut buf = vec![0u8; 12];
+        buf[4] = 0;
+        buf[5] = 1; // QD=1
+        buf[6] = 0;
+        buf[7] = 1; // AN=1
+        for label in ["5", "1", "168", "192", "in-addr", "arpa"] {
+            buf.push(label.len() as u8);
+            buf.extend_from_slice(label.as_bytes());
+        }
+        buf.push(0);
+        buf.extend_from_slice(&0u16.to_be_bytes()); // type A? any
+        buf.extend_from_slice(&1u16.to_be_bytes()); // class
+                                                    // Answer: name = ptr to question (0xC00C), type 12, class 1, ttl 0, rdlength
+        buf.extend_from_slice(&[0xC0, 0x0C]);
+        buf.extend_from_slice(&12u16.to_be_bytes());
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        let mut rdata = Vec::new();
+        for label in ["Tên máy của An", "_companion-link", "_tcp", "local"] {
+            rdata.push(label.len() as u8);
+            rdata.extend_from_slice(label.as_bytes());
+        }
+        rdata.push(0);
+        buf.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+        buf.extend_from_slice(&rdata);
+        let name = extract_ptr_name(&buf).expect("PTR name must extract");
+        assert_eq!(name, "Tên máy của An");
+    }
 
     #[test]
     fn test_ssdp_keyword() {

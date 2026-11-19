@@ -1,5 +1,5 @@
 import { Button, ScrollView, LineEdit } from "std-widgets.slint";
-import { I18n } from "common.slint";
+import { I18n, Theme } from "common.slint";
 
 export component VaultTab inherits Rectangle {
     in-out property <string> vault-password: "";
@@ -35,22 +35,22 @@ export component VaultTab inherits Rectangle {
                         text: I18n.t4("🔐 VAULT MÃ HÓA DỮ LIỆU", "🔐 DATA ENCRYPTION VAULT", "🔐 数据加密保险库", "🔐 ХРАНИЛИЩЕ ШИФРОВАНИЯ");
                         font-size: 15px;
                         font-weight: 800;
-                        color: #c084fc;
+                        color: Theme.violet-light;
                     }
 
                     Text {
                         text: I18n.t4("AES-256-GCM + Argon2id • Mã hóa xong XÓA GỐC an toàn (ghi đè 3 vòng) • Giải mã không sai một bit • File .sgvault chỉ mở được bằng mật khẩu", "AES-256-GCM + Argon2id • Original securely erased after encryption (3-pass overwrite) • Bit-exact decryption • .sgvault only opens with the password", "AES-256-GCM + Argon2id • 加密后安全删除原文件（3 次覆写）• 解密完全一致 • .sgvault 仅凭密码打开", "AES-256-GCM + Argon2id • Оригинал надёжно стирается после шифрования • Расшифровка без потерь • .sgvault открывается только с паролем");
                         font-size: 11px;
-                        color: #94a3b8;
+                        color: Theme.text-secondary;
                     }
                 }
             }
 
             Rectangle {
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 10px;
                 border-width: 1px;
-                border-color: #7c3aed;
+                border-color: Theme.purple;
                 height: 96px;
 
                 VerticalLayout {
@@ -61,7 +61,7 @@ export component VaultTab inherits Rectangle {
                         text: I18n.t4("MẬT KHẨU CHỦ (dùng cho mọi thao tác mã hóa/giải mã)", "MASTER PASSWORD (used for all encrypt/decrypt actions)", "主密码（用于所有加密/解密操作）", "МАСТЕР-ПАРОЛЬ (для всех операций)");
                         font-size: 10px;
                         font-weight: 700;
-                        color: #94a3b8;
+                        color: Theme.text-secondary;
                     }
 
                     HorizontalLayout {
@@ -84,10 +84,10 @@ export component VaultTab inherits Rectangle {
             }
 
             if root.vault-generated != "" : Rectangle {
-                background: #1e1b4b;
+                background: Theme.indigo-bg;
                 border-radius: 10px;
                 border-width: 1px;
-                border-color: #8b5cf6;
+                border-color: Theme.violet-deep;
                 height: 78px;
 
                 VerticalLayout {
@@ -102,7 +102,7 @@ export component VaultTab inherits Rectangle {
                             text: I18n.t4("MẬT KHẨU TẠO:", "GENERATED PASSWORD:", "生成的密码:", "СГЕНЕРИРОВАННЫЙ ПАРОЛЬ:");
                             font-size: 10px;
                             font-weight: 700;
-                            color: #a5b4fc;
+                            color: Theme.indigo-text;
                             vertical-alignment: center;
                         }
 
@@ -111,7 +111,7 @@ export component VaultTab inherits Rectangle {
                             font-size: 14px;
                             font-family: "Consolas";
                             font-weight: 800;
-                            color: #e9d5ff;
+                            color: Theme.lilac;
                             overflow: elide;
                             horizontal-stretch: 1;
                             vertical-alignment: center;
@@ -134,7 +134,7 @@ export component VaultTab inherits Rectangle {
                             text: root.vault-strength-label;
                             font-size: 11px;
                             font-weight: 800;
-                            color: root.vault-strength >= 80 ? #34d399 : root.vault-strength >= 55 ? #fbbf24 : #f87171;
+                            color: root.vault-strength >= 80 ? Theme.success : root.vault-strength >= 55 ? Theme.warning : Theme.danger-soft;
                             vertical-alignment: center;
                         }
 
@@ -142,14 +142,14 @@ export component VaultTab inherits Rectangle {
                             width: 220px;
                             height: 8px;
                             border-radius: 4px;
-                            background: #1f2937;
+                            background: Theme.border;
 
                             Rectangle {
                                 x: 0;
                                 width: parent.width * root.vault-strength / 100;
                                 height: 100%;
                                 border-radius: 4px;
-                                background: root.vault-strength >= 80 ? #34d399 : root.vault-strength >= 55 ? #fbbf24 : #f87171;
+                                background: root.vault-strength >= 80 ? Theme.success : root.vault-strength >= 55 ? Theme.warning : Theme.danger-soft;
                             }
                         }
                     }
@@ -193,10 +193,10 @@ export component VaultTab inherits Rectangle {
 
             if root.vault-status != "" : Rectangle {
                 height: 40px;
-                background: #0f172a;
+                background: Theme.bg-panel;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #0284c7;
+                border-color: Theme.accent-solid;
 
                 HorizontalLayout {
                     padding-left: 14px;
@@ -207,7 +207,7 @@ export component VaultTab inherits Rectangle {
                         text: root.vault-status;
                         font-size: 12px;
                         font-weight: 700;
-                        color: #38bdf8;
+                        color: Theme.accent;
                         overflow: elide;
                         wrap: word-wrap;
                         vertical-alignment: center;
@@ -217,10 +217,10 @@ export component VaultTab inherits Rectangle {
 
             Rectangle {
                 vertical-stretch: 1;
-                background: #0b1220;
+                background: Theme.bg-input;
                 border-radius: 10px;
                 border-width: 1px;
-                border-color: #334155;
+                border-color: Theme.border-strong;
 
                 VerticalLayout {
                     padding: 14px;
@@ -230,7 +230,7 @@ export component VaultTab inherits Rectangle {
                         text: I18n.t4("📖 CÁCH HOẠT ĐỘNG", "📖 HOW IT WORKS", "📖 工作原理", "📖 КАК ЭТО РАБОТАЕТ");
                         font-size: 12px;
                         font-weight: 800;
-                        color: #93c5fd;
+                        color: Theme.info-text;
                     }
 
                     Text {
@@ -241,7 +241,7 @@ export component VaultTab inherits Rectangle {
                             "1. Мастер-пароль хешируется Argon2id (64 МБ памяти, устойчиво к GPU-подбору) в ключ AES-256.\n2. Для каждого файла свой salt + nonce — одинаковые файлы шифруются по-разному.\n3. Тег GCM проверяет целостность: изменение даже 1 бита отклоняется.\n4. После шифрования оригинал перезаписывается 3 прохода и удаляется.\n⚠ ВАЖНО: забытый мастер-пароль = потерянные данные. Бэкдоров нет."
                         );
                         font-size: 11px;
-                        color: #cbd5e1;
+                        color: Theme.text-soft;
                         wrap: word-wrap;
                     }
                 }

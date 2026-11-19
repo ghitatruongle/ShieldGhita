@@ -271,6 +271,10 @@ pub mod packet;
 pub mod resolve;
 pub mod server;
 
+// Track 2 (0.1.5-alpha2): fuzz harness — compiled only under .
+#[cfg(test)]
+mod fuzz_tests;
+
 const BLOCKED_PUBLIC_SUFFIXES: &[&str] = &[
     "com.vn",
     "net.vn",
@@ -539,6 +543,19 @@ mod tests {
         assert!(DnsBlocker::validate_domain("a..b").is_err());
         assert!(DnsBlocker::validate_domain("bad domain.com").is_err());
         assert!(DnsBlocker::validate_domain(&"x".repeat(300)).is_err());
+        // Paste-friendly input: scheme, path, port and wildcard prefix are stripped.
+        assert_eq!(
+            DnsBlocker::validate_domain("https://Ads.Example.com/path").unwrap(),
+            "ads.example.com"
+        );
+        assert_eq!(
+            DnsBlocker::validate_domain("*.doubleclick.net").unwrap(),
+            "doubleclick.net"
+        );
+        assert_eq!(
+            DnsBlocker::validate_domain("ads.example.com:8080").unwrap(),
+            "ads.example.com"
+        );
     }
 
     #[test]

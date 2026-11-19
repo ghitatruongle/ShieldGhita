@@ -1,0 +1,239 @@
+// 0.1.5-alpha2 Track 3: extracted from app_window.slint — the composition
+// root keeps the AppWindow property surface; this file owns the content.
+import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { I18n, Theme } from "../common.slint";
+import { TabButton, StatCard, Spinner, TooltipButton } from "../widgets.slint";
+
+export component OnboardingOverlay inherits Rectangle {
+    callback dismiss-onboarding();
+    in property <float> overlay-fade;
+    in-out property <bool> show-onboarding;
+    if root.show-onboarding : Rectangle {
+        z: 120;
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: Theme.overlay-deep;
+        // Track 5: overlay mờ dần vào khi bật (tham chiếu property animate ở Window)
+        opacity: root.overlay-fade;
+        TouchArea {
+            clicked => { }
+        }
+        Rectangle {
+            x: (root.width - 520px) / 2;
+            y: (root.height - 360px) / 2;
+            width: 520px;
+            height: 360px;
+            background: Theme.bg-panel;
+            border-radius: 14px;
+            border-width: 2px;
+            border-color: Theme.accent;
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                Text {
+                    text: I18n.t4("👋 Chào mừng Shield Ghita", "👋 Welcome to Shield Ghita", "👋 欢迎使用 Shield Ghita", "👋 Добро пожаловать в Shield Ghita");
+                    font-size: 20px;
+                    font-weight: 800;
+                    color: Theme.accent;
+                }
+                Text {
+                    text: I18n.t4("1️⃣ Bật Bảo vệ để chặn quảng cáo & theo dõi toàn hệ thống", "1️⃣ Enable Protection to block ads & trackers system-wide", "1️⃣ 开启防护以全系统拦截广告与跟踪", "1️⃣ Включите защиту для блокировки рекламы");
+                    font-size: 13px;
+                    color: Theme.text-body;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: I18n.t4("2️⃣ Dùng tab Soi Tệp để phân tích file nghi ngờ (offline, không xoá)", "2️⃣ Use File Scan to inspect suspicious files (offline, never deletes)", "2️⃣ 使用文件分析检查可疑文件（离线，不删除）", "2️⃣ Анализируйте файлы во вкладке File Scan");
+                    font-size: 13px;
+                    color: Theme.text-body;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: I18n.t4("3️⃣ Quét thư mục / ổ đĩa để tìm mã độc ẩn — chỉ cảnh báo, không xoá", "3️⃣ Scan folders/drives for hidden payloads — alert only, never deletes", "3️⃣ 扫描文件夹/磁盘发现隐藏载荷 — 仅告警，不删除", "3️⃣ Сканируйте папки — только оповещение");
+                    font-size: 13px;
+                    color: Theme.text-body;
+                    wrap: word-wrap;
+                }
+                Rectangle { vertical-stretch: 1; }
+                Button {
+                    text: I18n.t4("Bắt đầu thôi!", "Get Started!", "开始使用！", "Начать!");
+                    clicked => { root.dismiss-onboarding(); }
+                }
+            }
+        }
+    }
+}
+
+export component ToastPane inherits Rectangle {
+    callback dismiss-toast();
+    in-out property <bool> show-toast;
+    in-out property <string> toast-domain;
+    in-out property <bool> toast-is-threat;
+    in property <float> toast-slide;
+    in-out property <string> toast-time;
+    in-out property <string> toast-title;
+    if root.show-toast : Rectangle {
+        z: 100;
+        // Track 5: trượt vào từ ngoài mép phải cửa sổ + mờ dần (toast-slide 0→1, 200ms)
+        x: root.width - 410px + (1.0 - root.toast-slide) * 410px;
+        // Below the two-row tab bar (~152px) so it never covers the tabs.
+        y: 160px;
+        width: 390px;
+        height: 72px;
+        opacity: root.toast-slide;
+        background: root.toast-is-threat ? Theme.danger-bg : Theme.indigo-bg;
+        border-radius: 10px;
+        border-width: 2px;
+        border-color: root.toast-is-threat ? Theme.danger : Theme.indigo-soft;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-x: 0px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-blur: 20px;
+
+        HorizontalLayout {
+            padding: 10px;
+            spacing: 12px;
+            alignment: center;
+
+            Text {
+                text: root.toast-is-threat ? "🚨" : "🛡️";
+                font-size: 26px;
+                vertical-alignment: center;
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text {
+                    text: root.toast-title != "" ? root.toast-title : (I18n.t("ĐÃ CHẶN QUẢNG CÁO & THEO DÕI", "AD & TRACKER BLOCKED", "已拦截广告和跟踪器"));
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: root.toast-is-threat ? Theme.danger-text : Theme.indigo-text;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.toast-domain + " (" + root.toast-time + ")";
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: Theme.white;
+                    overflow: elide;
+                }
+            }
+
+            TooltipButton {
+                text: "✖";
+                tip: I18n.t4("Đóng thông báo", "Dismiss notification", "关闭通知", "Закрыть уведомление");
+                width: 32px;
+                clicked => { root.dismiss-toast(); }
+            }
+        }
+    }
+}
+
+export component UpdateBanner inherits Rectangle {
+    callback dismiss-update-banner();
+    callback open-update-release();
+    in-out property <bool> update-available;
+    in-out property <string> update-version;
+    if root.update-available : Rectangle {
+        z: 100;
+        // Track 1 (0.1.5-alpha2): update banner — persists below the toast slot.
+        x: root.width - 410px;
+        y: 244px;
+        width: 390px;
+        height: 88px;
+        background: Theme.bg-card;
+        border-radius: 10px;
+        border-width: 2px;
+        border-color: Theme.accent;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-x: 0px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-blur: 20px;
+
+        HorizontalLayout {
+            padding: 10px;
+            spacing: 10px;
+            alignment: center;
+
+            Text {
+                text: "🆕";
+                font-size: 26px;
+                vertical-alignment: center;
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+                Text {
+                    text: I18n.t4("🆕 CÓ BẢN MỚI SẴN SÀNG", "🆕 NEW VERSION AVAILABLE", "🆕 有新版本可用", "🆕 ДОСТУПНА НОВАЯ ВЕРСИЯ");
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: Theme.accent;
+                }
+                Text {
+                    text: root.update-version + I18n.t4(" sẵn sàng — bấm tải để mở trang Release", " ready — click Download/Dismiss to open the release page", " 已就绪 — 点击下载打开发布页", " готова — нажмите Скачать, чтобы открыть страницу выпуска");
+                    font-size: 11px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 4px;
+                TooltipButton {
+                    text: I18n.t4("⬇️ Tải", "⬇️ Download", "⬇️ 下载", "⬇️ Скачать");
+                    tip: I18n.t4("Mở trang tải về GitHub", "Open the GitHub download page", "打开 GitHub 下载页", "Открыть страницу загрузки GitHub");
+                    clicked => { root.open-update-release(); }
+                }
+                TooltipButton {
+                    text: I18n.t4("Ẩn", "Dismiss", "隐藏", "Скрыть");
+                    tip: I18n.t4("Ẩn banner này", "Hide this banner", "隐藏此横幅", "Скрыть этот баннер");
+                    clicked => { root.dismiss-update-banner(); }
+                }
+            }
+        }
+    }
+}
+
+export component ServiceBanner inherits Rectangle {
+    in-out property <bool> service-down;
+    callback service-switch-local();
+    if root.service-down : Rectangle {
+        z: 145;
+        // Docked at the bottom edge — never covers the header/title row.
+        x: 0;
+        y: root.height - 56px;
+        width: root.width;
+        height: 56px;
+        background: Theme.danger-bg;
+
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 12px;
+            spacing: 12px;
+            alignment: center;
+
+            Text {
+                text: I18n.t("⚠ Service ShieldGhitaCore đã DỪNG — chế độ remote không có bảo vệ.", "⚠ ShieldGhitaCore service is STOPPED — remote mode has no protection.", "⚠ ShieldGhitaCore 服务已停止 — 远程模式无保护。");
+                font-size: 12px;
+                font-weight: 700;
+                color: Theme.danger-text;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Button {
+                text: I18n.t("▶ Chạy Local ngay", "▶ Switch to Local now", "▶ 立即本地运行");
+                clicked => { root.service-switch-local(); }
+            }
+        }
+    }
+}
+

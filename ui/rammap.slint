@@ -1,11 +1,11 @@
 import { Button, ListView, CheckBox, LineEdit } from "std-widgets.slint";
-import { I18n, RamProcessItem } from "common.slint";
+import { I18n, RamProcessItem, Theme } from "common.slint";
 
 component RamStatRow inherits Rectangle {
     in property <string> label;
     in property <float> value-mb: 0;
     in property <float> total-mb: 1;
-    in property <color> bar-color: #38bdf8;
+    in property <color> bar-color: Theme.accent;
 
     height: 26px;
     HorizontalLayout {
@@ -14,7 +14,7 @@ component RamStatRow inherits Rectangle {
         padding-right: 4px;
         Text {
             text: root.label;
-            color: #94a3b8;
+            color: Theme.text-secondary;
             font-size: 11px;
             font-weight: 600;
             width: 150px;
@@ -27,10 +27,15 @@ component RamStatRow inherits Rectangle {
                 width: parent.width;
                 height: 10px;
                 y: (parent.height - self.height) / 2;
-                background: #1f2937;
+                background: Theme.border;
                 border-radius: 4px;
                 Rectangle {
+                    // Pin x/y: an unpositioned sized Rectangle is CENTERED in
+                    // Slint, which made the fill float mid-track.
+                    x: 0px;
+                    y: 0px;
                     width: root.total-mb > 0 ? parent.width * Math.min(1.0, root.value-mb / root.total-mb) : 0px;
+                    height: 100%;
                     background: root.bar-color;
                     border-radius: 4px;
                 }
@@ -38,7 +43,7 @@ component RamStatRow inherits Rectangle {
         }
         Text {
             text: Math.round(root.value-mb) + " MB";
-            color: #e2e8f0;
+            color: Theme.text-body;
             font-size: 11px;
             font-weight: 700;
             width: 90px;
@@ -93,102 +98,102 @@ export component RamMapTab inherits Rectangle {
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
                 VerticalLayout {
                     padding: 8px;
                     alignment: center;
-                    Text { text: I18n.t4("TỔNG RAM", "TOTAL RAM", "总内存", "ВСЕГО RAM"); font-size: 10px; font-weight: 700; color: #94a3b8; }
-                    Text { text: Math.round(root.total-mb) + " MB"; font-size: 16px; font-weight: 800; color: #f8fafc; }
-                    Text { text: Math.round(root.total-mb / 1024 * 10) / 10 + " GB"; font-size: 10px; color: #64748b; }
+                    Text { text: I18n.t4("TỔNG RAM", "TOTAL RAM", "总内存", "ВСЕГО RAM"); font-size: 10px; font-weight: 700; color: Theme.text-secondary; }
+                    Text { text: Math.round(root.total-mb) + " MB"; font-size: 16px; font-weight: 800; color: Theme.text-bright; }
+                    Text { text: Math.round(root.total-mb / 1024 * 10) / 10 + " GB"; font-size: 10px; color: Theme.text-muted; }
                 }
             }
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
                 VerticalLayout {
                     padding: 8px;
                     alignment: center;
-                    Text { text: I18n.t4("ĐANG DÙNG", "IN USE", "使用中", "ИСПОЛЬЗУЕТСЯ"); font-size: 10px; font-weight: 700; color: #94a3b8; }
-                    Text { text: Math.round(root.active-mb) + " MB"; font-size: 16px; font-weight: 800; color: #f43f5e; }
-                    Text { text: root.used-pct-text; font-size: 10px; color: #f43f5e; font-weight: 700; }
+                    Text { text: I18n.t4("ĐANG DÙNG", "IN USE", "使用中", "ИСПОЛЬЗУЕТСЯ"); font-size: 10px; font-weight: 700; color: Theme.text-secondary; }
+                    Text { text: Math.round(root.active-mb) + " MB"; font-size: 16px; font-weight: 800; color: Theme.rose; }
+                    Text { text: root.used-pct-text; font-size: 10px; color: Theme.rose; font-weight: 700; }
                 }
             }
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
                 VerticalLayout {
                     padding: 8px;
                     alignment: center;
-                    Text { text: I18n.t4("KHẢ DỤNG", "AVAILABLE", "可用内存", "ДОСТУПНО"); font-size: 10px; font-weight: 700; color: #94a3b8; }
-                    Text { text: Math.round(root.available-mb) + " MB"; font-size: 16px; font-weight: 800; color: #34d399; }
-                    Text { text: Math.round(root.available-mb / 1024 * 10) / 10 + " GB"; font-size: 10px; color: #64748b; }
+                    Text { text: I18n.t4("KHẢ DỤNG", "AVAILABLE", "可用内存", "ДОСТУПНО"); font-size: 10px; font-weight: 700; color: Theme.text-secondary; }
+                    Text { text: Math.round(root.available-mb) + " MB"; font-size: 16px; font-weight: 800; color: Theme.success; }
+                    Text { text: Math.round(root.available-mb / 1024 * 10) / 10 + " GB"; font-size: 10px; color: Theme.text-muted; }
                 }
             }
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
                 VerticalLayout {
                     padding: 8px;
                     alignment: center;
-                    Text { text: I18n.t4("DỰ TRỮ (STANDBY)", "STANDBY", "待机缓存", "ОЖИДАНИЕ"); font-size: 10px; font-weight: 700; color: #94a3b8; }
-                    Text { text: Math.round(root.standby-mb) + " MB"; font-size: 16px; font-weight: 800; color: #38bdf8; }
-                    Text { text: I18n.t4("Bộ nhớ đệm", "Cached", "高速缓存", "Кэшировано"); font-size: 10px; color: #64748b; }
+                    Text { text: I18n.t4("DỰ TRỮ (STANDBY)", "STANDBY", "待机缓存", "ОЖИДАНИЕ"); font-size: 10px; font-weight: 700; color: Theme.text-secondary; }
+                    Text { text: Math.round(root.standby-mb) + " MB"; font-size: 16px; font-weight: 800; color: Theme.accent; }
+                    Text { text: I18n.t4("Bộ nhớ đệm", "Cached", "高速缓存", "Кэшировано"); font-size: 10px; color: Theme.text-muted; }
                 }
             }
 
             Rectangle {
                 horizontal-stretch: 1;
-                background: #111827;
+                background: Theme.bg-card-alt;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: #1f2937;
+                border-color: Theme.border;
                 VerticalLayout {
                     padding: 8px;
                     alignment: center;
-                    Text { text: I18n.t4("HOÀN TOÀN TRỐNG", "FREE", "完全空闲", "СВОБОДНО"); font-size: 10px; font-weight: 700; color: #94a3b8; }
-                    Text { text: Math.round(root.free-mb) + " MB"; font-size: 16px; font-weight: 800; color: #a78bfa; }
-                    Text { text: I18n.t4("Chưa cấp phát", "Unallocated", "未分配", "Не выделено"); font-size: 10px; color: #64748b; }
+                    Text { text: I18n.t4("HOÀN TOÀN TRỐNG", "FREE", "完全空闲", "СВОБОДНО"); font-size: 10px; font-weight: 700; color: Theme.text-secondary; }
+                    Text { text: Math.round(root.free-mb) + " MB"; font-size: 16px; font-weight: 800; color: Theme.violet; }
+                    Text { text: I18n.t4("Chưa cấp phát", "Unallocated", "未分配", "Не выделено"); font-size: 10px; color: Theme.text-muted; }
                 }
             }
         }
 
         Rectangle {
-            background: #0b0f19;
+            background: Theme.bg-base;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #1f2937;
+            border-color: Theme.border;
 
             VerticalLayout {
                 padding: 10px;
                 spacing: 4px;
-                RamStatRow { label: I18n.t4("Đang dùng (Active)", "Active", "正在使用", "Активно"); value-mb: root.active-mb; total-mb: root.total-mb; bar-color: #f43f5e; }
-                RamStatRow { label: I18n.t4("Dự trữ (Standby)", "Standby", "待机内存", "Ожидание"); value-mb: root.standby-mb; total-mb: root.total-mb; bar-color: #38bdf8; }
-                RamStatRow { label: I18n.t4("Đã sửa đổi (Modified)", "Modified", "已修改", "Изменено"); value-mb: root.modified-mb; total-mb: root.total-mb; bar-color: #fbbf24; }
-                RamStatRow { label: I18n.t4("Trống sạch (Free/Zero)", "Free / Zeroed", "空闲/清零", "Свободно/Ноль"); value-mb: root.free-mb + root.zero-mb; total-mb: root.total-mb; bar-color: #34d399; }
-                RamStatRow { label: I18n.t4("System File Cache", "System File Cache", "系统文件缓存", "Системный кэш файлов"); value-mb: root.page-cache-mb; total-mb: root.total-mb; bar-color: #a78bfa; }
-                RamStatRow { label: I18n.t4("Kernel Memory", "Kernel Memory", "内核内存", "Память ядра"); value-mb: root.kernel-mb; total-mb: root.total-mb; bar-color: #94a3b8; }
+                RamStatRow { label: I18n.t4("Đang dùng (Active)", "Active", "正在使用", "Активно"); value-mb: root.active-mb; total-mb: root.total-mb; bar-color: Theme.rose; }
+                RamStatRow { label: I18n.t4("Dự trữ (Standby)", "Standby", "待机内存", "Ожидание"); value-mb: root.standby-mb; total-mb: root.total-mb; bar-color: Theme.accent; }
+                RamStatRow { label: I18n.t4("Đã sửa đổi (Modified)", "Modified", "已修改", "Изменено"); value-mb: root.modified-mb; total-mb: root.total-mb; bar-color: Theme.warning; }
+                RamStatRow { label: I18n.t4("Trống sạch (Free/Zero)", "Free / Zeroed", "空闲/清零", "Свободно/Ноль"); value-mb: root.free-mb + root.zero-mb; total-mb: root.total-mb; bar-color: Theme.success; }
+                RamStatRow { label: I18n.t4("System File Cache", "System File Cache", "系统文件缓存", "Системный кэш файлов"); value-mb: root.page-cache-mb; total-mb: root.total-mb; bar-color: Theme.violet; }
+                RamStatRow { label: I18n.t4("Kernel Memory", "Kernel Memory", "内核内存", "Память ядра"); value-mb: root.kernel-mb; total-mb: root.total-mb; bar-color: Theme.text-secondary; }
             }
         }
 
         if !root.lists-available : Text {
             text: I18n.t4("⚠ Windows không cung cấp chi tiết trang nhớ — các dòng Standby/Modified/Free chỉ là số 0, chưa đáng tin.", "⚠ Page-list details unavailable from Windows — Standby/Modified/Free rows show 0 and are not reliable.", "⚠ 无法获取页面明细 — 待机/修改/空闲行显示为 0，不可靠。", "⚠ Windows не предоставляет детали страниц — строки Standby/Modified/Free недостоверны.");
             font-size: 10px;
-            color: #fbbf24;
+            color: Theme.warning;
         }
 
         HorizontalLayout {
@@ -197,7 +202,7 @@ export component RamMapTab inherits Rectangle {
                 text: I18n.t4("Giải phóng RAM:", "Free Memory:", "释放内存:", "Очистить RAM:");
                 font-size: 11px;
                 font-weight: 700;
-                color: #94a3b8;
+                color: Theme.text-secondary;
                 vertical-alignment: center;
             }
             Button {
@@ -259,7 +264,7 @@ export component RamMapTab inherits Rectangle {
             Text {
                 text: I18n.t4("Tùy chỉnh (MB):", "Custom (MB):", "自定义 (MB):", "Свой порог (MB):");
                 font-size: 11px;
-                color: #94a3b8;
+                color: Theme.text-secondary;
                 vertical-alignment: center;
             }
 
@@ -294,7 +299,7 @@ export component RamMapTab inherits Rectangle {
                 text: (I18n.t4("Ngưỡng hiện tại: ", "Current threshold: ", "当前设定: ", "Текущий порог: ")) + root.auto-clean-threshold-mb + " MB";
                 font-size: 11px;
                 font-weight: 700;
-                color: #38bdf8;
+                color: Theme.accent;
                 vertical-alignment: center;
             }
         }
@@ -302,7 +307,7 @@ export component RamMapTab inherits Rectangle {
         if root.last-action != "" : Text {
             text: root.last-action;
             font-size: 11px;
-            color: #86efac;
+            color: Theme.ok-text;
             wrap: word-wrap;
         }
 
@@ -313,7 +318,7 @@ export component RamMapTab inherits Rectangle {
                 text: I18n.t4("📋 DANH SÁCH TIẾN TRÌNH & DỌN NHANH (TASK MANAGER)", "📋 PROCESSES & 1-CLICK TASK TERMINATION", "📋 运行进程管理与快捷结束任务", "📋 ДИСПЕТЧЕР ПРОЦЕССОВ И БЫСТРОЕ ЗАВЕРШЕНИЕ");
                 font-size: 12px;
                 font-weight: 800;
-                color: #a78bfa;
+                color: Theme.violet;
                 vertical-alignment: center;
             }
             Rectangle { horizontal-stretch: 1; }
@@ -329,7 +334,7 @@ export component RamMapTab inherits Rectangle {
             Text {
                 text: (I18n.t4("Tiến trình tiêu tốn RAM nhiều nhất: ", "Top RAM-consuming processes: ", "内存占用最高的进程: ", "Процессы с наибольшим RAM: ")) + root.processes.length;
                 font-size: 11px;
-                color: #64748b;
+                color: Theme.text-muted;
                 vertical-alignment: center;
             }
         }
@@ -337,19 +342,19 @@ export component RamMapTab inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
-            background: #111827;
+            background: Theme.bg-card-alt;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #1f2937;
+            border-color: Theme.border;
             clip: true;
 
             ListView {
                 for p in root.processes : Rectangle {
                     height: 40px;
                     border-width: root.selected-pid == p.pid ? 2px : 1px;
-                    border-color: root.selected-pid == p.pid ? #38bdf8 : #1e293b;
+                    border-color: root.selected-pid == p.pid ? Theme.accent : Theme.bg-card;
                     border-radius: 6px;
-                    background: root.selected-pid == p.pid ? #1e3a8a : #0f172a;
+                    background: root.selected-pid == p.pid ? Theme.blue-tint : Theme.bg-panel;
 
                     TouchArea {
                         clicked => {
@@ -363,7 +368,6 @@ export component RamMapTab inherits Rectangle {
                         spacing: 10px;
                         padding-left: 10px;
                         padding-right: 10px;
-                        alignment: center;
 
                         VerticalLayout {
                             horizontal-stretch: 1;
@@ -374,30 +378,33 @@ export component RamMapTab inherits Rectangle {
                                 spacing: 8px;
                                 Text {
                                     text: p.name;
-                                    color: #f1f5f9;
+                                    color: Theme.text-primary;
                                     font-size: 12px;
                                     font-weight: 700;
+                                    width: 220px;
                                     overflow: elide;
                                 }
                                 Text {
                                     text: "PID " + p.pid;
-                                    color: #64748b;
+                                    color: Theme.text-muted;
                                     font-size: 10px;
+                                    width: 75px;
                                     vertical-alignment: center;
                                 }
                             }
 
                             if p.exe-path != "" : Text {
                                 text: p.exe-path;
-                                color: #475569;
+                                color: Theme.border-soft;
                                 font-size: 9px;
+                                width: 100%;
                                 overflow: elide;
                             }
                         }
 
                         Text {
                             text: Math.round(p.working-set-mb) + " MB (" + Math.round(p.percent-ram) + "%)";
-                            color: #a78bfa;
+                            color: Theme.violet;
                             font-size: 11px;
                             font-weight: 700;
                             vertical-alignment: center;
@@ -421,14 +428,14 @@ export component RamMapTab inherits Rectangle {
                         if p.is-critical : Rectangle {
                             height: 24px;
                             border-radius: 4px;
-                            background: #334155;
+                            background: Theme.border-strong;
                             HorizontalLayout {
                                 padding-left: 6px;
                                 padding-right: 6px;
                                 alignment: center;
                                 Text {
                                     text: "🔒 " + I18n.t4("Hệ thống", "System", "系统", "Система");
-                                    color: #94a3b8;
+                                    color: Theme.text-secondary;
                                     font-size: 10px;
                                     font-weight: 700;
                                     vertical-alignment: center;

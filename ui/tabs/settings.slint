@@ -1,0 +1,438 @@
+// 0.1.5-alpha2 Track 3: extracted from app_window.slint — the composition
+// root keeps the AppWindow property surface; this file owns tab content.
+import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { I18n, Theme } from "../common.slint";
+import { TabButton, StatCard, Spinner, TooltipButton } from "../widgets.slint";
+export component SettingsTab inherits Rectangle {
+    in-out property <bool> admin-panel-enabled;
+    in-out property <string> app-version;
+    in-out property <bool> arp-spoof-detection;
+    in-out property <bool> attack-detection-enabled;
+    in-out property <bool> auto-block-attacks;
+    in-out property <bool> autostart-enabled;
+    in-out property <bool> blocklist-feed-failed;
+    in-out property <string> blocklist-feed-status;
+    callback change-language(string);
+    in-out property <int> dns-conflict-mode;
+    callback dns-conflict-mode-changed(int);
+    in-out property <string> dns-conflict-text;
+    callback emergency-restore-network();
+    in-out property <bool> enable-notifications;
+    in-out property <string> host-lan-ip;
+    in-out property <bool> is-admin-edition;
+    in-out property <string> last-update-text;
+    in-out property <bool> minimize-to-tray-enabled;
+    in-out property <bool> minimize-to-tray-on-minimize;
+    in-out property <bool> network-override-active;
+    in-out property <bool> network-wide-adblock;
+    callback open-latest-release();
+    callback service-install();
+    callback service-refresh();
+    callback service-start();
+    in-out property <string> service-status;
+    callback service-stop();
+    callback service-uninstall();
+    in-out property <bool> silent-sinkhole;
+    in-out property <bool> start-hidden-in-tray;
+    callback toggle-admin-panel(bool);
+    callback toggle-arp-spoof-detection(bool);
+    callback toggle-attack-detection(bool);
+    callback toggle-auto-block-attacks(bool);
+    callback toggle-autostart(bool);
+    callback toggle-minimize-to-tray(bool);
+    callback toggle-minimize-to-tray-on-minimize(bool);
+    callback toggle-network-wide-adblock(bool);
+    callback toggle-notifications(bool);
+    callback toggle-silent-sinkhole(bool);
+    callback toggle-start-hidden-in-tray(bool);
+    in-out property <bool> wfp-available;
+
+                ScrollView {
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    Rectangle {
+                        background: root.dns-conflict-text != "" ? Theme.conflict-bg : Theme.bg-card-alt;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: root.dns-conflict-text != "" ? Theme.danger : Theme.border;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 8px;
+
+                            Text {
+                                text: "🧯 " + I18n.t4("AN TOÀN MẠNG (XUNG ĐỘT DNS / VPN)", "NETWORK SAFETY (DNS / VPN CONFLICT)", "网络安全（DNS/VPN 冲突）", "БЕЗОПАСНОСТЬ СЕТИ (КОНФЛИКТ DNS/VPN)");
+                                font-size: 14px;
+                                font-weight: 700;
+                                color: Theme.danger-soft;
+                            }
+
+                            if root.dns-conflict-text != "" : Text {
+                                text: root.dns-conflict-text;
+                                font-size: 11px;
+                                color: Theme.danger-text;
+                                wrap: word-wrap;
+                            }
+
+                            if root.dns-conflict-text == "" : Text {
+                                text: I18n.t4("Chưa phát hiện phần mềm nào chiếm quyền DNS của máy.", "No software currently owns this machine's DNS.", "未检测到占用本机 DNS 的软件。", "Ни одна программа не управляет DNS этой машины.");
+                                font-size: 11px;
+                                color: Theme.ok-text;
+                                wrap: word-wrap;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: center;
+
+                                Text {
+                                    text: I18n.t4("Khi phát hiện xung đột:", "On conflict:", "检测到冲突时：", "При конфликте:");
+                                    font-size: 12px;
+                                    color: Theme.text-soft;
+                                    vertical-alignment: center;
+                                }
+
+                                ComboBox {
+                                    width: 300px;
+                                    model: [
+                                        I18n.t4("Tự nhường — chỉ chặn cho thiết bị LAN", "Yield — LAN devices only", "自动让路 — 仅拦截局域网设备", "Уступить — только LAN"),
+                                        I18n.t4("Vẫn ghi đè DNS hệ thống", "Still override system DNS", "仍覆盖系统 DNS", "Всё равно переопределять DNS"),
+                                    ];
+                                    current-index <=> root.dns-conflict-mode;
+                                    selected => { root.dns-conflict-mode-changed(root.dns-conflict-mode); }
+                                }
+
+                                if root.network-override-active : Button {
+                                    text: I18n.t4("🆘 Khôi phục mạng ngay", "🆘 Restore network now", "🆘 立即恢复网络", "🆘 Восстановить сеть");
+                                    clicked => { root.emergency-restore-network(); }
+                                }
+                            }
+
+                            Text {
+                                text: I18n.t4("WFP (chặn IP/cổng): ", "WFP (IP/port blocking): ", "WFP（IP/端口拦截）：", "WFP (блокировка IP/портов): ") + (root.wfp-available
+                                    ? I18n.t4("đang khả dụng", "available", "可用", "доступен")
+                                    : I18n.t4("KHÔNG khả dụng — driver lọc bị VPN/phần mềm bảo mật khác chiếm (lỗi 50)", "UNAVAILABLE — filtering engine owned by another VPN/security product (error 50)", "不可用 — 过滤驱动被其他 VPN/安全软件占用（错误 50）", "НЕДОСТУПНО — фильтрация занята другим VPN/средством защиты (ошибка 50)"));
+                                font-size: 11px;
+                                color: root.wfp-available ? Theme.ok-text : Theme.warning;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        background: Theme.bg-card-alt;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: root.network-wide-adblock ? Theme.accent : Theme.border;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: center;
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    horizontal-stretch: 1;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Text { text: "🌐 " + (I18n.t("Chống quảng cáo toàn mạng LAN (DNS Proxy Port 53)", "Network-wide LAN Adblocker (Port 53)", "局域网全网去广告 (DNS 代理端口 53)")); font-size: 14px; font-weight: 700; color: Theme.accent; }
+                                        Rectangle {
+                                            height: 20px;
+                                            border-radius: 10px;
+                                            background: root.network-wide-adblock ? Theme.success-solid : Theme.gray-bg;
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                alignment: center;
+                                                Text { text: root.network-wide-adblock ? (I18n.t("ĐANG HOẠT ĐỘNG", "ACTIVE", "运行中")) : (I18n.t("ĐANG TẮT", "DISABLED", "已关闭")); font-size: 10px; font-weight: 800; color: Theme.white; vertical-alignment: center; }
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        text: I18n.t("Mở cổng DNS 53 cho tất cả các thiết bị cùng mạng Wi-Fi (iPhone, Android, Smart TV, PC). Đặt DNS Router về IP máy này để tự động chặn sạch quảng cáo.", "Listen on UDP/TCP port 53 for all LAN devices. Set your Wi-Fi Router DNS to this PC's IP to block ads network-wide.", "向同一 Wi-Fi 网络内的所有设备 (iPhone、Android、智能电视、PC) 开放 DNS 端口 53。将路由器 DNS 指向本机 IP 即可自动屏蔽全网广告。");
+                                        font-size: 12px;
+                                        color: Theme.text-secondary;
+                                    }
+                                }
+                                Button {
+                                    text: root.network-wide-adblock ? (I18n.t("TẮT TÍNH NĂNG", "DISABLE", "关闭功能")) : (I18n.t("BẬT TOÀN MẠNG", "ENABLE", "全网启用"));
+                                    clicked => { root.toggle-network-wide-adblock(!root.network-wide-adblock); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: 32px;
+                                    background: Theme.bg-panel;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: Theme.border-strong;
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        alignment: start;
+                                        Text { text: (I18n.t("📡 Địa chỉ IP máy chủ LAN: ", "📡 Host Server IP: ", "📡 局域网主机 IP: ")) + root.host-lan-ip + " : 53"; font-size: 12px; font-weight: 800; color: Theme.success-strong; vertical-alignment: center; }
+                                    }
+                                }
+                                Button {
+                                    text: root.silent-sinkhole ? (I18n.t("🛡️ Silent Sinkhole: BẬT", "🛡️ Silent Sinkhole: ON", "🛡️ 静默黑洞: 开")) : (I18n.t("🛡️ Silent Sinkhole: TẮT", "🛡️ Silent Sinkhole: OFF", "🛡️ 静默黑洞: 关"));
+                                    clicked => { root.toggle-silent-sinkhole(!root.silent-sinkhole); }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        background: Theme.bg-card-alt;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: root.attack-detection-enabled ? Theme.emerald : Theme.border;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: "🛡️ " + (I18n.t("Hệ thống Phòng thủ An ninh & Chống Xâm nhập (IDS / IPS / ARP)", "Intrusion Detection & Prevention Defense (IDS / IPS / ARP)", "安全防御与入侵防护系统 (IDS / IPS / ARP)")); font-size: 14px; font-weight: 700; color: Theme.success; }
+                                Rectangle {
+                                    height: 20px;
+                                    border-radius: 10px;
+                                    background: root.attack-detection-enabled ? Theme.success-solid : Theme.gray-bg;
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        alignment: center;
+                                        Text { text: root.attack-detection-enabled ? (I18n.t("BẢO VỆ TỐI CAO", "MAX SHIELD", "最高防护")) : (I18n.t("ĐANG TẮT", "OFF", "已关闭")); font-size: 10px; font-weight: 800; color: Theme.white; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: Theme.bg-panel;
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: Theme.bg-card;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        spacing: 6px;
+                                        Text { text: I18n.t("Phát hiện tấn công (IDS)", "Intrusion Detection (IDS)", "入侵检测 (IDS)"); font-size: 12px; font-weight: 700; color: Theme.accent; }
+                                        Text { text: I18n.t("Giám sát DoS Flood, Tunneling, Port Scan & Botnet", "Monitors DoS, Tunneling, Port Scan & Botnet", "监控 DoS 洪水、隧道、端口扫描与僵尸网络"); font-size: 11px; color: Theme.text-secondary; }
+                                        Button {
+                                            text: root.attack-detection-enabled ? (I18n.t("✅ ĐANG BẬT", "✅ ON", "✅ 已开启")) : (I18n.t("⚪ ĐANG TẮT", "⚪ OFF", "⚪ 已关闭"));
+                                            clicked => { root.toggle-attack-detection(!root.attack-detection-enabled); }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: Theme.bg-panel;
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: Theme.bg-card;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        spacing: 6px;
+                                        Text { text: I18n.t("Tự động khóa IP (IPS)", "Auto-Block Threat (IPS)", "自动封锁 IP (IPS)"); font-size: 12px; font-weight: 700; color: Theme.danger-soft; }
+                                        Text { text: I18n.t("Tự động cô lập nguồn độc hại 5 phút", "Auto-mitigates & drops source IP", "自动隔离恶意源 5 分钟"); font-size: 11px; color: Theme.text-secondary; }
+                                        Button {
+                                            text: root.auto-block-attacks ? (I18n.t("✅ ĐANG BẬT", "✅ ON", "✅ 已开启")) : (I18n.t("⚪ ĐANG TẮT", "⚪ OFF", "⚪ 已关闭"));
+                                            clicked => { root.toggle-auto-block-attacks(!root.auto-block-attacks); }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: Theme.bg-panel;
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: Theme.bg-card;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        spacing: 6px;
+                                        Text { text: I18n.t("Chống ARP Spoofing", "Anti-ARP Spoofing", "防 ARP 欺骗"); font-size: 12px; font-weight: 700; color: Theme.warning; }
+                                        Text { text: I18n.t("Bảo vệ Router Gateway chống nghe lén", "Protects Gateway from MITM snooping", "保护网关路由器免遭窃听"); font-size: 11px; color: Theme.text-secondary; }
+                                        Button {
+                                            text: root.arp-spoof-detection ? (I18n.t("✅ ĐANG BẬT", "✅ ON", "✅ 已开启")) : (I18n.t("⚪ ĐANG TẮT", "⚪ OFF", "⚪ 已关闭"));
+                                            clicked => { root.toggle-arp-spoof-detection(!root.arp-spoof-detection); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        background: Theme.bg-card-alt;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+
+                            Text { text: "⚙️ " + (I18n.t("Vận hành Hệ thống & Tùy chọn Ứng dụng:", "System Operation & Preferences:", "系统运行与应用偏好:")); font-size: 14px; font-weight: 700; color: Theme.text-body; }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Button {
+                                    horizontal-stretch: 1;
+                                    text: root.autostart-enabled ? (I18n.t("✅ Khởi động cùng Windows: BẬT", "✅ Autostart: ON", "✅ 开机自启: 开")) : (I18n.t("⚪ Khởi động cùng Windows: TẮT", "⚪ Autostart: OFF", "⚪ 开机自启: 关"));
+                                    clicked => { root.toggle-autostart(!root.autostart-enabled); }
+                                }
+                                Button {
+                                    horizontal-stretch: 1;
+                                    text: root.enable-notifications ? (I18n.t("🔔 Thông báo chặn QC: BẬT", "🔔 Block Notifications: ON", "🔔 拦截广告通知: 开")) : (I18n.t("⚪ Thông báo chặn QC: TẮT", "⚪ Block Notifications: OFF", "⚪ 拦截广告通知: 关"));
+                                    clicked => { root.toggle-notifications(!root.enable-notifications); }
+                                }
+                                Button {
+                                    horizontal-stretch: 1;
+                                    text: root.minimize-to-tray-enabled ? (I18n.t("✅ Đóng vào Khay: BẬT", "✅ Close to Tray: ON", "✅ 关闭到托盘: 开")) : (I18n.t("⚪ Đóng vào Khay: TẮT", "⚪ Close to Tray: OFF", "⚪ 关闭到托盘: 关"));
+                                    clicked => { root.toggle-minimize-to-tray(!root.minimize-to-tray-enabled); }
+                                }
+                                Button {
+                                    horizontal-stretch: 1;
+                                    text: I18n.lang == 0 ? "🌐 Tiếng Việt ➜ English" : (I18n.lang == 1 ? "🌐 English ➜ 中文" : (I18n.lang == 2 ? "🌐 中文 ➜ Русский" : "🌐 Русский ➜ Tiếng Việt"));
+                                    clicked => { root.change-language(I18n.lang == 0 ? "en" : (I18n.lang == 1 ? "zh" : (I18n.lang == 2 ? "ru" : "vi"))); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Button {
+                                    horizontal-stretch: 1;
+                                    text: root.minimize-to-tray-on-minimize ? (I18n.t("🔽 Thu nhỏ vào Khay: BẬT", "🔽 Minimize to Tray: ON", "🔽 最小化到托盘: 开")) : (I18n.t("⚪ Thu nhỏ vào Taskbar: TẮT", "⚪ Minimize to Taskbar: OFF", "⚪ 最小化到任务栏: 关"));
+                                    clicked => { root.toggle-minimize-to-tray-on-minimize(!root.minimize-to-tray-on-minimize); }
+                                }
+                                Button {
+                                    horizontal-stretch: 1;
+                                    text: root.start-hidden-in-tray ? (I18n.t("👻 Khởi động ẩn trong Khay: BẬT", "👻 Start Hidden in Tray: ON", "👻 启动时隐藏到托盘: 开")) : (I18n.t("⚪ Khởi động hiện cửa sổ: TẮT", "⚪ Start with Window: OFF", "⚪ 启动时显示窗口: 关"));
+                                    clicked => { root.toggle-start-hidden-in-tray(!root.start-hidden-in-tray); }
+                                }
+                            }
+
+                            if root.is-admin-edition : HorizontalLayout {
+                                spacing: 12px;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 2px;
+
+                                    Button {
+                                        horizontal-stretch: 1;
+                                        text: root.admin-panel-enabled
+                                            ? (I18n.t("🌐 Web Panel LAN: BẬT", "🌐 Web Panel LAN: ON", "🌐 网页面板: 开"))
+                                            : (I18n.t("⚪ Web Panel LAN: TẮT", "⚪ Web Panel LAN: OFF", "⚪ 网页面板: 关"));
+                                        clicked => { root.toggle-admin-panel(!root.admin-panel-enabled); }
+                                    }
+
+                                    Text {
+                                        text: I18n.t("Tắt/bật web panel port 2525 — áp dụng khi khởi động lại app. Quét QR ở tab Admin để mở từ điện thoại.", "Toggles the LAN web panel on port 2525 — applied on app restart. Scan the QR in the Admin tab to open it from your phone.", "切换 2525 端口网页面板 — 重启应用后生效。扫描 Admin 标签页中的二维码从手机打开。");
+                                        font-size: 10px;
+                                        color: Theme.text-muted;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: I18n.t("⌨ Phím tắt toàn cục: Ctrl+Alt+S bật/tắt bảo vệ", "⌨ Global hotkey: Ctrl+Alt+S toggles protection", "⌨ 全局快捷键：Ctrl+Alt+S 开关防护");
+                                font-size: 10px;
+                                color: Theme.text-muted;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 2;
+                                    spacing: 2px;
+
+                                    Text {
+                                        text: "🧩 " + (I18n.t("Service Mode — ShieldGhitaCore", "Service Mode — ShieldGhitaCore", "服务模式 — ShieldGhitaCore"));
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        color: Theme.accent;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: root.service-status;
+                                        font-size: 10px;
+                                        color: Theme.text-secondary;
+                                        overflow: elide;
+                                        wrap: word-wrap;
+                                    }
+                                }
+
+                                Button {
+                                    text: I18n.t("⚙ Cài & Bật", "⚙ Install & Start", "⚙ 安装并启动");
+                                    clicked => { root.service-install(); }
+                                }
+                                Button {
+                                    text: I18n.t("⏸ Dừng", "⏸ Stop", "⏸ 停止");
+                                    clicked => { root.service-stop(); }
+                                }
+                                Button {
+                                    text: I18n.t("▶ Chạy", "▶ Start", "▶ 启动");
+                                    clicked => { root.service-start(); }
+                                }
+                                Button {
+                                    text: I18n.t("🗑 Gỡ", "🗑 Uninstall", "🗑 卸载");
+                                    clicked => { root.service-uninstall(); }
+                                }
+                                TooltipButton {
+                                    text: "🔄";
+                                    tip: I18n.t4("Làm mới trạng thái service", "Refresh service status", "刷新服务状态", "Обновить статус службы");
+                                    clicked => { root.service-refresh(); }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        background: Theme.bg-card-alt;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 8px;
+
+                            HorizontalLayout {
+                                spacing: 16px;
+                                alignment: center;
+                                Text { text: "Shield Ghita v" + root.app-version; font-size: 13px; font-weight: 800; color: Theme.accent; }
+                                Text { text: "• Engine: Rust 2021 + Slint UI + Win32 WFP"; font-size: 12px; color: Theme.text-secondary; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: root.last-update-text; font-size: 12px; font-weight: 700; color: Theme.success-strong; }
+                                Text {
+                                    text: root.blocklist-feed-status;
+                                    font-size: 11px;
+                                    color: root.blocklist-feed-failed ? Theme.danger-soft : Theme.text-secondary;
+                                    overflow: elide;
+                                }
+                                Button {
+                                    text: I18n.t("🌐 Bản mới nhất", "🌐 Latest Release", "🌐 最新版本");
+                                    clicked => { root.open-latest-release(); }
+                                }
+                            }
+
+                            Text {
+                                text: I18n.t("Phần mềm bảo vệ an ninh mạng, chống rò rỉ dữ liệu, ngăn chặn tấn công xâm nhập & triệt tiêu 100% quảng cáo toàn mạng LAN thế hệ mới.", "Next-generation cyber shield protecting network privacy, preventing intrusion attacks, and eliminating ads across your entire LAN.", "新一代网络安全防护软件：防止数据泄露、阻止入侵攻击，并彻底消除整个局域网的广告。");
+                                font-size: 11px;
+                                color: Theme.text-muted;
+                            }
+                        }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+                }
+                } // ScrollView — Settings cards stack beyond the 640px fold
+}

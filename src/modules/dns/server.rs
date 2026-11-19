@@ -28,6 +28,22 @@ impl DnsBlocker {
             }
         };
 
+        match tokio::net::TcpListener::bind(&bind_addr).await {
+            Ok(listener) => {
+                info!("Master DNS Proxy server running on TCP {}", bind_addr);
+                let tcp_blocker = self.clone();
+                let tcp_doh = doh_urls.clone();
+                let tcp_mon = mon.clone();
+                tokio::spawn(async move {
+                    tcp_blocker.serve_tcp(listener, tcp_doh, tcp_mon).await;
+                });
+            }
+            Err(e) => warn!(
+                "DNS TCP listener unavailable on {}: {} — UDP keeps serving, but a client forced to retry a truncated answer (TC=1) will fail",
+                bind_addr, e
+            ),
+        }
+
         let mut buf = [0u8; 4096];
         // Bound concurrent handlers so a LAN flood (network-wide mode binds
         // 0.0.0.0) cannot exhaust memory by spawning one task per datagram.
@@ -55,24 +71,106 @@ impl DnsBlocker {
 
             tokio::spawn(async move {
                 let _permit = permit;
-                blocker
-                    .handle_dns_packet(packet, src, sock, doh, monitor)
-                    .await;
+                if let Some(resp) = blocker.build_response(packet, src, doh, monitor).await {
+                    let _ = sock.send_to(&resp, src).await;
+                }
             });
         }
     }
 
-    async fn handle_dns_packet(
-        &self,
-        pkt: Vec<u8>,
-        src: SocketAddr,
-        sock: Arc<UdpSocket>,
+    async fn serve_tcp(
+        self: Arc<Self>,
+        listener: tokio::net::TcpListener,
         doh_urls: Vec<String>,
         mon: Arc<crate::modules::monitor::NetworkMonitor>,
     ) {
+        let conn_sem = Arc::new(tokio::sync::Semaphore::new(64));
+        loop {
+            let (stream, peer) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    log_recv_error(&e);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    continue;
+                }
+            };
+            let Ok(permit) = conn_sem.clone().try_acquire_owned() else {
+                drop(stream);
+                continue;
+            };
+            let blocker = self.clone();
+            let doh = doh_urls.clone();
+            let monitor = mon.clone();
+            tokio::spawn(async move {
+                let _permit = permit;
+                if let Err(e) = blocker.handle_tcp_client(stream, peer, doh, monitor).await {
+                    tracing::debug!("DNS TCP client {} finished: {}", peer, e);
+                }
+            });
+        }
+    }
+
+    async fn handle_tcp_client(
+        &self,
+        mut stream: tokio::net::TcpStream,
+        peer: SocketAddr,
+        doh_urls: Vec<String>,
+        mon: Arc<crate::modules::monitor::NetworkMonitor>,
+    ) -> std::io::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        const MAX_TCP_DNS_BYTES: usize = 4096;
+        const TCP_IDLE: Duration = Duration::from_secs(10);
+
+        loop {
+            let mut len_buf = [0u8; 2];
+            match tokio::time::timeout(TCP_IDLE, stream.read_exact(&mut len_buf)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Ok(()),
+            }
+            let msg_len = u16::from_be_bytes(len_buf) as usize;
+            if !(12..=MAX_TCP_DNS_BYTES).contains(&msg_len) {
+                return Ok(());
+            }
+            let mut packet = vec![0u8; msg_len];
+            match tokio::time::timeout(TCP_IDLE, stream.read_exact(&mut packet)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Ok(()),
+            }
+
+            let Some(resp) = self
+                .build_response(packet, peer, doh_urls.clone(), mon.clone())
+                .await
+            else {
+                continue;
+            };
+            if resp.len() > u16::MAX as usize {
+                continue;
+            }
+            let mut framed = Vec::with_capacity(resp.len() + 2);
+            framed.extend_from_slice(&(resp.len() as u16).to_be_bytes());
+            framed.extend_from_slice(&resp);
+            match tokio::time::timeout(TCP_IDLE, stream.write_all(&framed)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Ok(()),
+            }
+            let _ = tokio::time::timeout(TCP_IDLE, stream.flush()).await;
+        }
+    }
+
+    async fn build_response(
+        &self,
+        pkt: Vec<u8>,
+        src: SocketAddr,
+        doh_urls: Vec<String>,
+        mon: Arc<crate::modules::monitor::NetworkMonitor>,
+    ) -> Option<Vec<u8>> {
         let (query_name, qtype) = match Self::parse_query_info(&pkt) {
             Some(info) => info,
-            None => return,
+            None => return None,
         };
 
         let src_ip = src.ip().to_string();
@@ -82,7 +180,7 @@ impl DnsBlocker {
                 "Security Hard Rate Limit: dropping query burst from {}",
                 src_ip
             );
-            return;
+            return None;
         }
 
         if mon.security_engine.is_ip_temporarily_blocked(&src_ip) {
@@ -90,7 +188,7 @@ impl DnsBlocker {
                 "Security IPS: Dropping query from blacklisted IP {}",
                 src_ip
             );
-            return;
+            return None;
         }
 
         if mon.security_engine.is_quarantined(&src_ip) {
@@ -98,10 +196,7 @@ impl DnsBlocker {
                 "Quarantine Enforced: Dropping all DNS resolution for isolated device {}",
                 src_ip
             );
-            if let Some(r) = Self::build_nxdomain(&pkt) {
-                let _ = sock.send_to(&r, src).await;
-            }
-            return;
+            return Self::build_nxdomain(&pkt);
         }
 
         self.total_queries.fetch_add(1, Ordering::Relaxed);
@@ -116,10 +211,7 @@ impl DnsBlocker {
                 .record_activity(&src_ip, &query_name, true, true);
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
             mon.add_log(&query_name, &src_ip, true);
-            if let Some(r) = Self::build_nxdomain(&pkt) {
-                let _ = sock.send_to(&r, src).await;
-            }
-            return;
+            return Self::build_nxdomain(&pkt);
         }
 
         if let Some(_incident) = mon.security_engine.inspect_dns_query(&src_ip, &query_name) {
@@ -128,15 +220,12 @@ impl DnsBlocker {
             if mon.security_engine.is_auto_block_enabled() {
                 self.blocked_count.fetch_add(1, Ordering::Relaxed);
                 mon.add_log(&query_name, &src_ip, true);
-                if let Some(r) = Self::build_nxdomain(&pkt) {
-                    let _ = sock.send_to(&r, src).await;
-                }
-                return;
+                return Self::build_nxdomain(&pkt);
             }
         }
 
         if let Some(over) = self.apply_response_policy(&src_ip, &query_name, qtype) {
-            let resp = if qtype == 1 {
+            return if qtype == 1 {
                 Self::build_sinkhole_a_record(&pkt, over.ipv4)
                     .or_else(|| Self::build_nxdomain(&pkt))
             } else if qtype == 28 {
@@ -145,10 +234,6 @@ impl DnsBlocker {
             } else {
                 Self::build_nxdomain(&pkt)
             };
-            if let Some(r) = resp {
-                let _ = sock.send_to(&r, src).await;
-            }
-            return;
         }
 
         // Strict mode never applies to this machine's own loopback traffic:
@@ -169,7 +254,7 @@ impl DnsBlocker {
             let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
             let _ = self.blocked_events_tx.send((query_name.clone(), timestamp));
 
-            let resp = if qtype == 1 {
+            return if qtype == 1 {
                 if self.is_silent_sinkhole() {
                     Self::build_sinkhole_a_record(&pkt, [127, 0, 0, 1])
                         .or_else(|| Self::build_nxdomain(&pkt))
@@ -183,11 +268,6 @@ impl DnsBlocker {
             } else {
                 Self::build_nxdomain(&pkt)
             };
-
-            if let Some(r) = resp {
-                let _ = sock.send_to(&r, src).await;
-            }
-            return;
         }
 
         mon.add_log(&query_name, &src_ip, false);
@@ -202,13 +282,9 @@ impl DnsBlocker {
                     query_name, src_ip
                 );
                 self.record_rebind_incident(&src_ip, &query_name, &mon);
-                if let Some(nx) = Self::build_nxdomain(&pkt) {
-                    let _ = sock.send_to(&nx, src).await;
-                }
-                return;
+                return Self::build_nxdomain(&pkt);
             }
-            let _ = sock.send_to(&resp, src).await;
-            return;
+            return Some(resp);
         }
 
         let fwd_resp = self.forward_parallel_racing(&pkt, &doh_urls).await;
@@ -225,10 +301,10 @@ impl DnsBlocker {
             } else {
                 self.store_cache_response(&query_name, qtype, &resp);
             }
-            let _ = sock.send_to(&resp, src).await;
-        } else if let Some(servfail) = Self::build_servfail(&pkt) {
-            let _ = sock.send_to(&servfail, src).await;
+            return Some(resp);
         }
+
+        Self::build_servfail(&pkt)
     }
 
     pub(super) fn forwarded_answer_hits_private_space(
@@ -320,5 +396,72 @@ impl DnsBlocker {
                 ),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tcp_transport_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn test_tcp_query_returns_length_prefixed_sinkhole() {
+        let blocker = Arc::new(DnsBlocker::new());
+        let sec = Arc::new(crate::modules::security::SecurityEngine::new());
+        let mon = Arc::new(crate::modules::monitor::NetworkMonitor::new(50, sec));
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let server_blocker = blocker.clone();
+        let server_mon = mon.clone();
+        let server_task = tokio::spawn(async move {
+            server_blocker
+                .run_dns_server(
+                    "127.0.0.1",
+                    15397,
+                    vec!["https://1.1.1.1/dns-query".to_string()],
+                    server_mon,
+                    Some(ready_tx),
+                )
+                .await;
+        });
+
+        let bound = tokio::time::timeout(Duration::from_secs(5), ready_rx)
+            .await
+            .expect("server startup timeout")
+            .expect("ready channel closed");
+        assert!(bound.is_ok(), "DNS test server failed to bind: {bound:?}");
+
+        let query = DnsBlocker::build_a_query("s.youtube.com").expect("query builder");
+        let mut stream = tokio::net::TcpStream::connect("127.0.0.1:15397")
+            .await
+            .expect("tcp connect");
+        let mut request = Vec::new();
+        request.extend_from_slice(&(query.len() as u16).to_be_bytes());
+        request.extend_from_slice(&query);
+        stream.write_all(&request).await.expect("tcp write");
+
+        let mut len_buf = [0u8; 2];
+        tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut len_buf))
+            .await
+            .expect("tcp read timeout")
+            .expect("tcp read length");
+        let resp_len = u16::from_be_bytes(len_buf) as usize;
+        assert!(resp_len > query.len(), "expected a sinkhole answer record");
+        let mut resp = vec![0u8; resp_len];
+        tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut resp))
+            .await
+            .expect("tcp read timeout")
+            .expect("tcp read body");
+
+        assert_eq!(resp[0], query[0]);
+        assert_eq!(resp[1], query[1]);
+        assert_eq!(resp[2] & 0x80, 0x80, "QR bit must be set");
+        let answer_ip = &resp[resp_len - 4..];
+        assert!(
+            answer_ip == [0, 0, 0, 0] || answer_ip == [127, 0, 0, 1],
+            "unexpected sinkhole address: {answer_ip:?}"
+        );
+
+        server_task.abort();
     }
 }

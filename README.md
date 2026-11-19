@@ -112,7 +112,7 @@
 ## Installation & Getting Started
 
 ### 1. Pre-built Setup Installer
-- Download `ShieldGhita_Setup_v0.1.5-alpha1.exe` and execute with **Administrator** privileges.
+- Download `ShieldGhita_Setup_v0.1.5-alpha2.exe` and execute with **Administrator** privileges.
 - The installer itself runs in English, Tiếng Việt or 简体中文, lets you choose the application language, automatically terminates running instances, cleanly uninstalls previous versions, and deploys the new release safely.
 
 ### 2. Build From Source (For Developers)
@@ -240,7 +240,7 @@ cargo run --release
 ## Hướng dẫn cài đặt & Sử dụng
 
 ### 1. Cài đặt nhanh qua bộ Setup
-- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.5-alpha1.exe` và chạy với quyền **Administrator**.
+- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.5-alpha2.exe` và chạy với quyền **Administrator**.
 - Trình cài đặt hỗ trợ tiếng Việt / English / 简体中文, cho phép chọn ngôn ngữ ứng dụng, tự động dừng ứng dụng cũ, dọn sạch phiên bản trước và cập nhật phiên bản mới một cách an toàn.
 
 ### 2. Chạy từ mã nguồn (Dành cho Developer)

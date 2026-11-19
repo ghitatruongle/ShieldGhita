@@ -55,7 +55,12 @@ impl ClientMode {
     }
 
     pub fn localized_label(self) -> String {
-        crate::modules::i18n::tr4("Mặc định", "Default", "默认", "Обычный").to_string()
+        match self {
+            Self::Default => crate::modules::i18n::tr4("Mặc định", "Default", "默认", "Обычный"),
+            Self::Trusted => crate::modules::i18n::tr4("Tin cậy", "Trusted", "信任", "Доверенный"),
+            Self::Strict => crate::modules::i18n::tr4("Nghiêm ngặt", "Strict", "严格", "Строгий"),
+        }
+        .to_string()
     }
 }
 
@@ -407,5 +412,27 @@ mod tests {
         assert!(snap.top_domains.is_empty());
         assert!(snap.top_clients.is_empty());
         assert!(snap.hourly.is_empty());
+    }
+
+    #[test]
+    fn test_localized_label_distinguishes_each_mode() {
+        let default_label = ClientMode::Default.localized_label();
+        let trusted_label = ClientMode::Trusted.localized_label();
+        let strict_label = ClientMode::Strict.localized_label();
+        assert_ne!(default_label, trusted_label);
+        assert_ne!(default_label, strict_label);
+        assert_ne!(trusted_label, strict_label);
+        assert_eq!(
+            default_label,
+            crate::modules::i18n::tr4("Mặc định", "Default", "默认", "Обычный")
+        );
+        assert_eq!(
+            trusted_label,
+            crate::modules::i18n::tr4("Tin cậy", "Trusted", "信任", "Доверенный")
+        );
+        assert_eq!(
+            strict_label,
+            crate::modules::i18n::tr4("Nghiêm ngặt", "Strict", "严格", "Строгий")
+        );
     }
 }

@@ -1,4 +1,4 @@
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing::info;
@@ -11,8 +11,10 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterDeleteById0,
     FWPM_CONDITION_IP_LOCAL_PORT, FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_FILTER0,
-    FWPM_FILTER_CONDITION0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
-    FWPM_SUBLAYER_UNIVERSAL, FWP_ACTION_BLOCK, FWP_MATCH_EQUAL, FWP_UINT32,
+    FWPM_FILTER_CONDITION0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+    FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+    FWPM_SUBLAYER_UNIVERSAL, FWP_ACTION_BLOCK, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE,
+    FWP_MATCH_EQUAL, FWP_UINT32,
 };
 #[cfg(windows)]
 use windows::Win32::Security::PSECURITY_DESCRIPTOR;
@@ -62,22 +64,19 @@ impl WfpBlocker {
         }
     }
 
-    /// False when the WFP engine is owned by another filtering product (VPN,
-    /// security suite). Callers must surface this instead of pretending the
+    /// False when the WFP engine could not be opened (service stopped, policy,
+    /// or not elevated). Callers must surface this instead of pretending the
     /// IP/port blocking is active.
     pub fn is_available(&self) -> bool {
         self.available.load(Ordering::SeqCst)
     }
 
     pub fn unavailable_reason() -> String {
-        tracing::warn!(
-            "WFP unavailable: FwpmEngineOpen0 is rejected (error 50) when another VPN or security product owns the filtering engine"
-        );
         crate::modules::i18n::tr4(
-            "Driver lọc đang bị VPN/phần mềm bảo mật khác chiếm — chặn IP/cổng không khả dụng (mã lỗi 50).",
-            "The filtering engine is owned by another VPN/security product — IP/port blocking unavailable (error 50).",
-            "过滤驱动被其他 VPN/安全软件占用 — IP/端口拦截不可用（错误 50）。",
-            "Фильтрация занята другим VPN/средством защиты — блокировка IP/портов недоступна (ошибка 50).",
+            "Windows Filtering Platform không khả dụng — chặn IP/cổng bị tắt.",
+            "Windows Filtering Platform unavailable — IP/port blocking is off.",
+            "Windows 过滤平台不可用 — IP/端口拦截已关闭。",
+            "Фильтрация Windows недоступна — блокировка IP/портов отключена.",
         )
         .to_string()
     }
@@ -96,7 +95,16 @@ impl WfpBlocker {
                         windows::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_SESSION_FLAG_DYNAMIC,
                     ..Default::default()
                 };
-            let result = FwpmEngineOpen0(None, 0, None, Some(&session), &mut engine_handle);
+            // RPC_C_AUTHN_WINNT is the authn service BFE accepts; passing 0
+            // (RPC_C_AUTHN_NONE) fails with error 50 on every machine.
+            const RPC_C_AUTHN_WINNT: u32 = 10;
+            let result = FwpmEngineOpen0(
+                None,
+                RPC_C_AUTHN_WINNT,
+                None,
+                Some(&session),
+                &mut engine_handle,
+            );
             if result != 0 {
                 self.available.store(false, Ordering::SeqCst);
                 return Err(format!(
@@ -144,6 +152,40 @@ impl WfpBlocker {
     }
 
     #[cfg(windows)]
+    fn add_block_filter(
+        &self,
+        engine: HANDLE,
+        layer: windows::core::GUID,
+        mut cond: FWPM_FILTER_CONDITION0,
+        display_name: &str,
+        description: &str,
+    ) -> Result<u64, String> {
+        let name = wide_static(display_name);
+        let desc = wide_static(description);
+        let mut filter = FWPM_FILTER0::default();
+        filter.displayData.name = PWSTR(name.as_ptr() as *mut u16);
+        filter.displayData.description = PWSTR(desc.as_ptr() as *mut u16);
+        filter.layerKey = layer;
+        filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
+        filter.action.r#type = FWP_ACTION_BLOCK;
+        filter.numFilterConditions = 1;
+        filter.filterCondition = &mut cond;
+        let mut id: u64 = 0;
+        let status = unsafe {
+            FwpmFilterAdd0(
+                engine,
+                &filter,
+                PSECURITY_DESCRIPTOR::default(),
+                Some(&mut id),
+            )
+        };
+        if status != 0 {
+            return Err(format!("FwpmFilterAdd0 {display_name} failed: {status}"));
+        }
+        Ok(id)
+    }
+
+    #[cfg(windows)]
     pub fn enable(&self) -> Result<(), String> {
         if self.enabled.load(Ordering::Relaxed) {
             return Ok(());
@@ -173,47 +215,66 @@ impl WfpBlocker {
         let mut failures: Vec<String> = Vec::new();
 
         for ip in &ips {
-            let host = match parse_ipv4_host_order(ip) {
-                Ok(v) => v,
-                Err(e) => {
-                    failures.push(e);
-                    continue;
+            match ip.trim().parse::<IpAddr>() {
+                Ok(IpAddr::V4(_)) => {
+                    let host = match parse_ipv4_host_order(ip) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            failures.push(e);
+                            continue;
+                        }
+                    };
+                    let mut cond = FWPM_FILTER_CONDITION0 {
+                        fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                        matchType: FWP_MATCH_EQUAL,
+                        ..Default::default()
+                    };
+                    cond.conditionValue.r#type = FWP_UINT32;
+                    cond.conditionValue.Anonymous.uint32 = host;
+                    match self.add_block_filter(
+                        engine,
+                        FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+                        cond,
+                        &format!("ShieldGhita block IP {ip}"),
+                        "ShieldGhita custom IPv4 block (ALE connect)",
+                    ) {
+                        Ok(id) => {
+                            if let Ok(mut fids) = self.filter_ids.lock() {
+                                fids.push(id);
+                            }
+                            installed += 1;
+                        }
+                        Err(e) => failures.push(e),
+                    }
                 }
-            };
-            let mut cond = FWPM_FILTER_CONDITION0 {
-                fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
-                matchType: FWP_MATCH_EQUAL,
-                ..Default::default()
-            };
-            cond.conditionValue.r#type = FWP_UINT32;
-            cond.conditionValue.Anonymous.uint32 = host;
-            let name = wide_static(&format!("ShieldGhita block IP {ip}"));
-            let desc = wide_static("ShieldGhita custom IP block (ALE connect)");
-            // Rebuild filter locally so name/desc live for the call.
-            let mut filter = FWPM_FILTER0::default();
-            filter.displayData.name = PWSTR(name.as_ptr() as *mut u16);
-            filter.displayData.description = PWSTR(desc.as_ptr() as *mut u16);
-            filter.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4;
-            filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
-            filter.action.r#type = FWP_ACTION_BLOCK;
-            filter.numFilterConditions = 1;
-            filter.filterCondition = &mut cond;
-            let mut id: u64 = 0;
-            let status = unsafe {
-                FwpmFilterAdd0(
-                    engine,
-                    &filter,
-                    PSECURITY_DESCRIPTOR::default(),
-                    Some(&mut id),
-                )
-            };
-            if status != 0 {
-                failures.push(format!("FwpmFilterAdd0 IP {ip} failed: {status}"));
-            } else {
-                if let Ok(mut fids) = self.filter_ids.lock() {
-                    fids.push(id);
+                Ok(IpAddr::V6(v6)) => {
+                    let mut raw = FWP_BYTE_ARRAY16 {
+                        byteArray16: v6.octets(),
+                    };
+                    let mut cond = FWPM_FILTER_CONDITION0 {
+                        fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                        matchType: FWP_MATCH_EQUAL,
+                        ..Default::default()
+                    };
+                    cond.conditionValue.r#type = FWP_BYTE_ARRAY16_TYPE;
+                    cond.conditionValue.Anonymous.byteArray16 = &mut raw;
+                    match self.add_block_filter(
+                        engine,
+                        FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+                        cond,
+                        &format!("ShieldGhita block IP {ip}"),
+                        "ShieldGhita custom IPv6 block (ALE connect)",
+                    ) {
+                        Ok(id) => {
+                            if let Ok(mut fids) = self.filter_ids.lock() {
+                                fids.push(id);
+                            }
+                            installed += 1;
+                        }
+                        Err(e) => failures.push(e),
+                    }
                 }
-                installed += 1;
+                Err(_) => failures.push(format!("invalid IP address: {ip}")),
             }
         }
 
@@ -222,39 +283,32 @@ impl WfpBlocker {
                 failures.push("port 0 is not a valid WFP block target".into());
                 continue;
             }
-            let mut cond = FWPM_FILTER_CONDITION0 {
-                fieldKey: FWPM_CONDITION_IP_LOCAL_PORT,
-                matchType: FWP_MATCH_EQUAL,
-                ..Default::default()
-            };
-            cond.conditionValue.r#type = FWP_UINT32;
-            cond.conditionValue.Anonymous.uint32 = u32::from(*port);
-            let name = wide_static(&format!("ShieldGhita block local port {port}"));
-            let desc = wide_static("ShieldGhita custom local-port block (ALE accept)");
-            let mut filter = FWPM_FILTER0::default();
-            filter.displayData.name = PWSTR(name.as_ptr() as *mut u16);
-            filter.displayData.description = PWSTR(desc.as_ptr() as *mut u16);
-            filter.layerKey = FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4;
-            filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
-            filter.action.r#type = FWP_ACTION_BLOCK;
-            filter.numFilterConditions = 1;
-            filter.filterCondition = &mut cond;
-            let mut id: u64 = 0;
-            let status = unsafe {
-                FwpmFilterAdd0(
+            for layer in [
+                FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+                FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+            ] {
+                let mut cond = FWPM_FILTER_CONDITION0 {
+                    fieldKey: FWPM_CONDITION_IP_LOCAL_PORT,
+                    matchType: FWP_MATCH_EQUAL,
+                    ..Default::default()
+                };
+                cond.conditionValue.r#type = FWP_UINT32;
+                cond.conditionValue.Anonymous.uint32 = u32::from(*port);
+                match self.add_block_filter(
                     engine,
-                    &filter,
-                    PSECURITY_DESCRIPTOR::default(),
-                    Some(&mut id),
-                )
-            };
-            if status != 0 {
-                failures.push(format!("FwpmFilterAdd0 port {port} failed: {status}"));
-            } else {
-                if let Ok(mut fids) = self.filter_ids.lock() {
-                    fids.push(id);
+                    layer,
+                    cond,
+                    &format!("ShieldGhita block local port {port}"),
+                    "ShieldGhita custom local-port block (ALE accept, v4+v6)",
+                ) {
+                    Ok(id) => {
+                        if let Ok(mut fids) = self.filter_ids.lock() {
+                            fids.push(id);
+                        }
+                        installed += 1;
+                    }
+                    Err(e) => failures.push(e),
                 }
-                installed += 1;
             }
         }
 

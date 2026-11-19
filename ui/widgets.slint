@@ -1,18 +1,19 @@
+import { Button } from "std-widgets.slint";
 import { I18n, Theme } from "common.slint";
 
 export component TabButton inherits Rectangle {
     in property <string> text;
     in property <bool> active: false;
-    in property <color> active-color: #38bdf8;
+    in property <color> active-color: Theme.accent;
     callback clicked <=> touch.clicked;
 
     border-radius: 8px;
     // Track 5: has-hover làm nền sáng nhẹ (~8%) theo token Theme
     background: root.active
-        ? (touch.has-hover ? Theme.surface-hover-strong : #1e293b)
-        : (touch.has-hover ? Theme.surface-hover : #0f172a);
+        ? (touch.has-hover ? Theme.surface-hover-strong : Theme.bg-card)
+        : (touch.has-hover ? Theme.surface-hover : Theme.bg-panel);
     border-width: 1px;
-    border-color: root.active ? root.active-color : #1f2937;
+    border-color: root.active ? root.active-color : Theme.border;
     animate background { duration: 120ms; }
 
     touch := TouchArea {
@@ -27,7 +28,7 @@ export component TabButton inherits Rectangle {
             text: root.text;
             font-size: 12px;
             font-weight: root.active ? 800 : 600;
-            color: root.active ? root.active-color : #94a3b8;
+            color: root.active ? root.active-color : Theme.text-secondary;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -69,24 +70,64 @@ export component Spinner inherits Rectangle {
 export component StatCard inherits Rectangle {
     in property <string> card-title;
     in property <string> big-value;
-    in property <color> accent: #38bdf8;
+    in property <color> accent: Theme.accent;
     in property <string> sub1;
-    in property <color> sub1-color: #64748b;
+    in property <color> sub1-color: Theme.text-muted;
     in property <string> sub2;
-    in property <color> sub2-color: #64748b;
+    in property <color> sub2-color: Theme.text-muted;
 
     height: 118px;
-    background: #111827;
+    background: stat-touch.has-hover ? Theme.surface-hover : Theme.bg-card-alt;
     border-radius: 10px;
     border-width: 1px;
-    border-color: #1f2937;
+    border-color: Theme.border;
+    animate background { duration: 120ms; }
+
+    stat-touch := TouchArea { }
 
     VerticalLayout {
         padding: 14px;
         spacing: 4px;
-        Text { text: root.card-title; font-size: 11px; font-weight: 700; color: #94a3b8; }
+        Text { text: root.card-title; font-size: 11px; font-weight: 700; color: Theme.text-secondary; }
         Text { text: root.big-value; font-size: 26px; font-weight: 800; color: root.accent; }
         Text { text: root.sub1; font-size: 11px; color: root.sub1-color; overflow: elide; }
         Text { text: root.sub2; font-size: 11px; color: root.sub2-color; overflow: elide; }
+    }
+}
+
+// Track 4 (0.1.5-alpha2): icon button with a floating hover tooltip.
+// The TouchArea sits ON TOP of the Button (hover never reaches an area below a
+// widget) and forwards clicks to the same root callback.
+export component TooltipButton inherits Rectangle {
+    in property <string> text;
+    in property <string> tip;
+    callback clicked;
+
+    btn := Button {
+        text: root.text;
+        clicked => { root.clicked(); }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    if ta.has-hover : Rectangle {
+        y: -26px;
+        width: tip-text.preferred-width + 16px;
+        height: 22px;
+        x: (parent.width - self.width) / 2;
+        background: Theme.bg-chrome;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        tip-text := Text {
+            text: root.tip;
+            font-size: 10px;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
 }

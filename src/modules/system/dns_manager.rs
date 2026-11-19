@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -216,24 +216,52 @@ pub fn is_elevated() -> bool {
     true
 }
 
+fn parse_netsh_interfaces(stdout: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in stdout.lines().skip(3) {
+        let lower_line = line.to_lowercase();
+        if lower_line.contains("disconnected") || lower_line.contains("ngắt") {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        let state_idx = match parts.iter().position(|token| {
+            let lower = token.to_lowercase();
+            lower.contains("connected") || lower == "kết"
+        }) {
+            Some(idx) => idx,
+            None => continue,
+        };
+        let mut name_start = state_idx + 1;
+        if parts[state_idx].to_lowercase() == "kết"
+            && parts
+                .get(name_start)
+                .map(|t| t.to_lowercase() == "nối")
+                .unwrap_or(false)
+        {
+            name_start += 1;
+        }
+        if name_start >= parts.len() {
+            continue;
+        }
+        out.push(parts[name_start..].join(" "));
+    }
+    out
+}
+
 pub fn get_active_adapters() -> Vec<String> {
-    let mut adapters = Vec::new();
+    let mut adapters: Vec<String> = Vec::new();
 
     if let Ok(output) = silent_command("netsh")
         .args(["interface", "ipv4", "show", "interfaces"])
         .output()
     {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines().skip(3) {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 5 {
-                let state = parts[3].to_lowercase();
-                if state == "connected" || state == "connected." || state.contains("kết") {
-                    let name = parts[4..].join(" ");
-                    if is_valid_physical_adapter(&name) {
-                        adapters.push(name);
-                    }
-                }
+        for name in parse_netsh_interfaces(&stdout) {
+            if is_valid_physical_adapter(&name) {
+                adapters.push(name);
             }
         }
     }
@@ -262,7 +290,11 @@ pub fn get_active_adapters() -> Vec<String> {
         );
     }
 
-    adapters.dedup();
+    let mut seen: HashSet<String> = HashSet::new();
+    let adapters: Vec<String> = adapters
+        .into_iter()
+        .filter(|name| seen.insert(name.clone()))
+        .collect();
     adapters
 }
 
@@ -310,8 +342,13 @@ fn get_current_adapter_dns_inner(adapter: &str, include_loopback: bool) -> Adapt
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut static_servers = Vec::new();
+    let mut static_servers: Vec<String> = Vec::new();
     let mut is_static_section = false;
+    let push_unique = |list: &mut Vec<String>, ip: &str| {
+        if !list.iter().any(|s| s == ip) {
+            list.push(ip.to_string());
+        }
+    };
 
     for line in stdout.lines() {
         let trimmed = line.trim();
@@ -329,7 +366,7 @@ fn get_current_adapter_dns_inner(adapter: &str, include_loopback: bool) -> Adapt
                 {
                     // Only accept parseable IPs in the header line too.
                     if include_loopback || ip.parse::<std::net::IpAddr>().is_ok() {
-                        static_servers.push(ip.to_string());
+                        push_unique(&mut static_servers, ip);
                     }
                 }
             }
@@ -340,7 +377,7 @@ fn get_current_adapter_dns_inner(adapter: &str, include_loopback: bool) -> Adapt
                 && (include_loopback || (ip != "127.0.0.1" && ip != "127.0.0.2"))
                 && ip.parse::<std::net::IpAddr>().is_ok()
             {
-                static_servers.push(ip.to_string());
+                push_unique(&mut static_servers, ip);
             }
         }
     }
@@ -367,7 +404,7 @@ fn get_current_adapter_ipv6_dns(adapter: &str) -> AdapterDnsState {
         Err(_) => return AdapterDnsState::Dhcp,
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut servers = Vec::new();
+    let mut servers: Vec<String> = Vec::new();
     for line in stdout.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.to_lowercase().contains("dns") || trimmed.contains("---") {
@@ -379,7 +416,15 @@ fn get_current_adapter_ipv6_dns(adapter: &str) -> AdapterDnsState {
             continue;
         }
         let bare = candidate.split('%').next().unwrap_or(candidate);
-        if bare.parse::<std::net::IpAddr>().is_ok() {
+        // fec:0:0:0::1/2/3 are the "no DNS configured" placeholders netsh
+        // prints; restoring them breaks `netsh ... add dns` (exit 1).
+        if bare.eq_ignore_ascii_case("fec:0:0:0::1")
+            || bare.eq_ignore_ascii_case("fec:0:0:0::2")
+            || bare.eq_ignore_ascii_case("fec:0:0:0::3")
+        {
+            continue;
+        }
+        if bare.parse::<std::net::IpAddr>().is_ok() && !servers.iter().any(|s| s == candidate) {
             servers.push(candidate.to_string());
         }
     }
@@ -1204,5 +1249,24 @@ mod tests {
         set_lan_only_mode(true);
         assert!(is_lan_only_mode());
         set_lan_only_mode(false);
+    }
+
+    #[test]
+    fn test_parse_netsh_interfaces_english_output() {
+        let stdout = "\nIdx     Met         MTU          State                Name\n---  ----------  ----------  ------------  ---------------------------\n  1          75  4294967295  connected     Wi-Fi\n  2          25  1500        connected     Ethernet 2\n  3          25  1500        disconnected  Bluetooth Network Connection\n";
+        let parsed = parse_netsh_interfaces(stdout);
+        assert_eq!(parsed, vec!["Wi-Fi".to_string(), "Ethernet 2".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_netsh_interfaces_vietnamese_output() {
+        let stdout = "\nIdx     Met         MTU          Trạng thái            Tên\n---  ----------  ----------  ------------  ---------------------------\n  1          75  4294967295  Đã kết nối    Wi-Fi\n  2          25  1500        Đã ngắt kết nối  Ethernet\n";
+        assert_eq!(parse_netsh_interfaces(stdout), vec!["Wi-Fi".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_netsh_interfaces_ignores_header_only() {
+        let stdout = "\nIdx     Met         MTU          State                Name\n---  ----------  ----------  ------------  ---------------------------\n";
+        assert!(parse_netsh_interfaces(stdout).is_empty());
     }
 }

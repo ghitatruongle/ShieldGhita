@@ -123,11 +123,117 @@ pub struct LanDevice {
 
 pub type DeviceActivityMap = Arc<RwLock<HashMap<String, (u64, u64, u64, String, String)>>>;
 
+/// Track 8 — Nhận diện thiết bị: đường dẫn file lưu tên máy (MAC → hostname).
+fn device_names_path() -> std::path::PathBuf {
+    crate::modules::paths::data_dir().join("device_names.json")
+}
+
+fn load_names_map() -> HashMap<String, String> {
+    std::fs::read_to_string(device_names_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_names_map(map: &HashMap<String, String>, keep_macs: &[String]) {
+    // Cap 512 MAC để file không phình vô hạn trên LAN lớn; khi vượt, ưu tiên
+    // giữ MAC vừa quét thấy (tránh evict tùy ý làm tên thiết bị "nhấp nháy").
+    let trimmed: HashMap<String, String> = if map.len() > 512 {
+        let mut out: HashMap<String, String> = HashMap::new();
+        for mac in keep_macs {
+            if let Some(v) = map.get(mac) {
+                out.insert(mac.clone(), v.clone());
+            }
+        }
+        for (k, v) in map.iter() {
+            if out.len() >= 512 {
+                break;
+            }
+            out.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        out
+    } else {
+        map.clone()
+    };
+    if let Ok(json) = serde_json::to_string(&trimmed) {
+        let _ = std::fs::create_dir_all(crate::modules::paths::data_dir());
+        let _ = std::fs::write(device_names_path(), json);
+    }
+}
+
+/// Track 8: chuẩn hóa OUI dài → tên hãng ngắn gọn dễ đọc ("Samsung Electronics
+/// Co.,Ltd" → "Samsung"); không khớp mapping thì trả nguyên văn (giữ chuỗi
+/// i18n "Không xác định" v.v. để logic vendor_known hoạt động như cũ).
+pub fn clean_brand(vendor: &str) -> String {
+    let lower = vendor.to_lowercase();
+    let brand: &str = if lower.contains("samsung") {
+        "Samsung"
+    } else if lower.contains("apple") || lower.contains("hon hai") {
+        "Apple"
+    } else if lower.contains("xiaomi") {
+        "Xiaomi"
+    } else if lower.contains("huawei") {
+        "Huawei"
+    } else if lower.contains("honor") {
+        "HONOR"
+    } else if lower.contains("oppo") {
+        "OPPO"
+    } else if lower.contains("vivo") {
+        "vivo"
+    } else if lower.contains("realme") {
+        "realme"
+    } else if lower.contains("oneplus") {
+        "OnePlus"
+    } else if lower.contains("tp-link") || lower.contains("tenda") {
+        "TP-Link/Tenda"
+    } else if lower.contains("hikvision") {
+        "Hikvision (Camera)"
+    } else if lower.contains("dahua") {
+        "Dahua (Camera)"
+    } else if lower.contains("ezviz") {
+        "Ezviz (Camera)"
+    } else if lower.contains("imou") {
+        "Imou (Camera)"
+    } else if lower.contains("espressif") {
+        "Espressif (IoT)"
+    } else if lower.contains("tuya") {
+        "Tuya (IoT)"
+    } else if lower.contains("intel") {
+        "Intel (PC)"
+    } else if lower.contains("giga-device") || lower.contains("asustek") || lower.contains("asus") {
+        "ASUS/Gigabyte (PC)"
+    } else if lower.contains("dell") {
+        "Dell (PC)"
+    } else if lower.contains("hewlett") {
+        "HP (PC)"
+    } else if lower.contains("lenovo") {
+        "Lenovo (PC)"
+    } else if lower.contains("acer") {
+        "Acer (PC)"
+    } else if lower.contains("micro-star") || lower.contains("msi") {
+        "MSI (PC)"
+    } else if lower.contains("microsoft") {
+        "Microsoft (PC)"
+    } else if lower.contains("raspberry") {
+        "Raspberry Pi"
+    } else if lower.contains("sony") {
+        "Sony"
+    } else if lower.contains("lg electronics") {
+        "LG"
+    } else {
+        return vendor.to_string();
+    };
+    brand.to_string()
+}
+
 pub struct LanScanner {
     devices: Arc<RwLock<Vec<LanDevice>>>,
     activity_map: DeviceActivityMap,
     notified_high_risk: Arc<RwLock<HashSet<String>>>,
     is_scanning: Arc<RwLock<bool>>,
+    /// Track 8: tên máy chủ thiết bị tự khai báo (NetBIOS/mDNS), lưu theo MAC
+    /// để tên "do chủ thiết bị đặt" còn thấy qua các lần quét sau.
+    names: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl LanScanner {
@@ -137,6 +243,7 @@ impl LanScanner {
             activity_map: Arc::new(RwLock::new(HashMap::new())),
             notified_high_risk: Arc::new(RwLock::new(HashSet::new())),
             is_scanning: Arc::new(RwLock::new(false)),
+            names: Arc::new(RwLock::new(load_names_map())),
         }
     }
 
@@ -956,28 +1063,48 @@ impl LanScanner {
 
             let hint = hints.get(&ip).cloned();
             let sem = enrich_sem.clone();
+            let names_map = self.names.clone();
 
             enrich_handles.push(tokio::spawn(async move {
                 let Ok(_permit) = sem.acquire_owned().await else {
                     return None;
                 };
-                let vendor = Self::lookup_vendor(&mac);
+                let vendor_raw = Self::lookup_vendor(&mac);
+                let vendor = clean_brand(&vendor_raw);
                 let vendor_unknown = i18n::tr("Không xác định", "Unknown", "未知");
                 let vendor_private_mac = i18n::tr("MAC riêng tư", "Private MAC", "随机 MAC");
                 let vendor_lan_host =
                     i18n::tr("Thiết bị mạng (LAN Host)", "LAN Host", "局域网主机");
-                let vendor_known = !vendor.contains(vendor_lan_host)
-                    && !vendor.contains(vendor_unknown)
-                    && !vendor.contains(vendor_private_mac);
+                let vendor_known = !vendor_raw.contains(vendor_lan_host)
+                    && !vendor_raw.contains(vendor_unknown)
+                    && !vendor_raw.contains(vendor_private_mac);
                 let (service_type, measured_latency) = Self::probe_device_services(&ip).await;
                 let netbios_name = Self::query_netbios_name(&ip).await;
+                // Track 8: hỏi thêm tên qua mDNS reverse-PTR (điện thoại/smart home) —
+                // chỉ probe khi NetBIOS không trả lời, đỡ multicast noise + thời gian quét.
+                let mdns_name = if netbios_name.is_none() {
+                    crate::modules::monitor::discovery::probe_mdns_reverse_name(&ip).await
+                } else {
+                    None
+                };
+                let fresh = netbios_name.clone().or(mdns_name);
+                if let Some(h) = &fresh {
+                    if let Ok(mut map) = names_map.write() {
+                        map.insert(mac.clone(), h.clone());
+                    }
+                }
+                let saved_host = names_map
+                    .read()
+                    .map(|m| m.get(&mac).cloned())
+                    .unwrap_or(None);
+                let hostname = fresh.clone().or(saved_host);
 
                 let has_mdns = hint.as_ref().map(|h| h.source == "mDNS").unwrap_or(false);
                 let has_ssdp = hint.as_ref().map(|h| h.source == "SSDP").unwrap_or(false);
                 let confidence = Self::confidence_score(
                     vendor_known,
                     service_type.is_some(),
-                    netbios_name.is_some(),
+                    hostname.is_some(),
                     has_mdns,
                     has_ssdp,
                 );
@@ -985,14 +1112,14 @@ impl LanScanner {
                 let classify_hint = hint.as_ref().and_then(|h| h.keyword).or(service_type);
 
                 let (device_label, _) =
-                    Self::classify_final(&ip, &vendor, classify_hint, netbios_name.as_deref());
+                    Self::classify_final(&ip, &vendor_raw, classify_hint, hostname.as_deref());
 
                 let name = if Self::is_gateway_ip(&ip) {
                     format!("📡 Router Wi-Fi / Gateway ({})", vendor)
-                } else if let Some(ref host) = netbios_name {
-                    format!("{} - {}", host, device_label)
+                } else if let Some(ref host) = hostname {
+                    format!("{} — {} ({})", host, device_label, vendor)
                 } else {
-                    format!("{} ({})", device_label, ip)
+                    format!("{} — {} ({})", device_label, vendor, ip)
                 };
 
                 let ip_addr: IpAddr = ip.parse().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
@@ -1002,7 +1129,7 @@ impl LanScanner {
                     .unwrap_or_default();
                 let port_advice = port_scanner::worst_port_advice(&open_ports);
                 let os_name =
-                    Self::estimate_os(&vendor, &open_ports, service_type, netbios_name.as_deref());
+                    Self::estimate_os(&vendor_raw, &open_ports, service_type, hostname.as_deref());
 
                 Some(LanDevice {
                     name,
@@ -1035,6 +1162,15 @@ impl LanScanner {
             if let Ok(Some(dev)) = handle.await {
                 devices.push(dev);
             }
+        }
+
+        // Track 8: lưu tên máy (MAC → hostname) để giữ qua các lần quét sau.
+        {
+            let names_snapshot = self.names.read().unwrap_or_else(|e| e.into_inner()).clone();
+            let keep_macs: Vec<String> = devices.iter().map(|d| d.mac.clone()).collect();
+            let _ =
+                tokio::task::spawn_blocking(move || save_names_map(&names_snapshot, &keep_macs))
+                    .await;
         }
 
         if let Some(sec) = sec_engine {

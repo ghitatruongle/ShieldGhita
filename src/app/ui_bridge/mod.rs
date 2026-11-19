@@ -220,9 +220,9 @@ pub fn setup_ui_bridge(
         ui.on_start_camera_live_stream(|_, _, _| {});
         ui.on_stop_camera_live_stream(|| {});
         ui.on_audit_camera_security(|_| {});
+        ui.on_camera_unlock_advanced(|_| {});
         ui.on_save_camera_credential(|_, _, _| {});
         ui.on_save_camera_snapshot(|_| {});
-        ui.on_send_camera_ptz(|_| {});
         ui.on_send_camera_ptz(|_| {});
         ui.on_pentest_scan_tls(|| {});
         ui.on_pentest_password_audit(|| {});

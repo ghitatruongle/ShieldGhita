@@ -8,7 +8,10 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const MAGIC: &[u8; 7] = b"SGVLT1\x01";
+const MAGIC: &[u8; 6] = b"SGVLT1";
+const FORMAT_WITH_NAME: u8 = 2;
+const FORMAT_LEGACY: u8 = 1;
+const NAME_LEN_BYTES: usize = 2;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
@@ -91,8 +94,21 @@ pub fn encrypt_file(src: &Path, password: &str) -> Result<VaultOutcome, String> 
     new_name.push_str(VAULT_EXTENSION);
     dest.set_file_name(new_name);
 
-    let mut blob = Vec::with_capacity(MAGIC.len() + SALT_LEN + NONCE_LEN + ciphertext.len());
+    let mut blob = Vec::with_capacity(
+        MAGIC.len()
+            + 1
+            + NAME_LEN_BYTES
+            + file_name.len()
+            + SALT_LEN
+            + NONCE_LEN
+            + ciphertext.len(),
+    );
     blob.extend_from_slice(MAGIC);
+    blob.push(FORMAT_WITH_NAME);
+    let name_bytes = file_name.as_bytes();
+    let name_len = u16::try_from(name_bytes.len()).map_err(|_| "file name too long".to_string())?;
+    blob.extend_from_slice(&name_len.to_le_bytes());
+    blob.extend_from_slice(name_bytes);
     blob.extend_from_slice(&salt);
     blob.extend_from_slice(&nonce);
     blob.extend_from_slice(&ciphertext);
@@ -112,8 +128,7 @@ pub fn decrypt_file(src: &Path, password: &str) -> Result<VaultOutcome, String> 
         }
     }
     let blob = fs::read(src).map_err(|e| format!("read: {e}"))?;
-    let header_len = MAGIC.len() + SALT_LEN + NONCE_LEN;
-    if blob.len() < header_len || &blob[..MAGIC.len()] != MAGIC {
+    if blob.len() < MAGIC.len() + 1 + SALT_LEN + NONCE_LEN || &blob[..MAGIC.len()] != MAGIC {
         return Err(crate::modules::i18n::tr4(
             "Không phải tệp .sgvault của ShieldGhita",
             "Not a ShieldGhita .sgvault file",
@@ -122,7 +137,38 @@ pub fn decrypt_file(src: &Path, password: &str) -> Result<VaultOutcome, String> 
         )
         .to_string());
     }
-    let mut cursor = &blob[MAGIC.len()..];
+    let format = blob[MAGIC.len()];
+    let mut cursor = &blob[MAGIC.len() + 1..];
+    let stored_name = match format {
+        FORMAT_WITH_NAME => {
+            if cursor.len() < NAME_LEN_BYTES {
+                return Err("corrupt vault header (name length)".to_string());
+            }
+            let name_len = u16::from_le_bytes([cursor[0], cursor[1]]) as usize;
+            cursor = &cursor[NAME_LEN_BYTES..];
+            if name_len == 0 || cursor.len() < name_len {
+                return Err("corrupt vault header (name)".to_string());
+            }
+            let name = std::str::from_utf8(&cursor[..name_len])
+                .map_err(|_| "corrupt vault header (name encoding)".to_string())?
+                .to_string();
+            cursor = &cursor[name_len..];
+            Some(name)
+        }
+        FORMAT_LEGACY => None,
+        _ => {
+            return Err(crate::modules::i18n::tr4(
+                "Phiên bản .sgvault không được hỗ trợ",
+                "Unsupported .sgvault format version",
+                "不支持该 .sgvault 版本",
+                "Неподдерживаемая версия .sgvault",
+            )
+            .to_string())
+        }
+    };
+    if cursor.len() < SALT_LEN + NONCE_LEN {
+        return Err("corrupt vault header (truncated)".to_string());
+    }
     let salt: [u8; SALT_LEN] = cursor[..SALT_LEN]
         .try_into()
         .map_err(|_| "corrupt salt".to_string())?;
@@ -136,11 +182,23 @@ pub fn decrypt_file(src: &Path, password: &str) -> Result<VaultOutcome, String> 
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    let original_name = raw_name
+    let file_derived_name = raw_name
         .strip_suffix(VAULT_EXTENSION)
         .and_then(|s| s.strip_suffix('.'))
         .unwrap_or(&raw_name)
         .to_string();
+    let (aad_name, original_name) = match stored_name {
+        Some(stored) => {
+            let safe = safe_file_name(&stored);
+            let output = if safe.is_empty() {
+                file_derived_name.clone()
+            } else {
+                safe
+            };
+            (stored, output)
+        }
+        None => (file_derived_name.clone(), file_derived_name),
+    };
     let key = derive_key(password, &salt)?;
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| format!("cipher: {e}"))?;
     let plaintext = cipher
@@ -148,7 +206,7 @@ pub fn decrypt_file(src: &Path, password: &str) -> Result<VaultOutcome, String> 
             Nonce::from_slice(&nonce),
             Payload {
                 msg: ciphertext,
-                aad: original_name.as_bytes(),
+                aad: aad_name.as_bytes(),
             },
         )
         .map_err(|_| {
@@ -176,6 +234,18 @@ pub fn decrypt_file(src: &Path, password: &str) -> Result<VaultOutcome, String> 
         output: dest,
         bytes: plaintext.len() as u64,
     })
+}
+
+fn safe_file_name(raw: &str) -> String {
+    let name = Path::new(raw)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if name.is_empty() || name == "." || name == ".." {
+        String::new()
+    } else {
+        name
+    }
 }
 
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
@@ -444,6 +514,72 @@ mod tests {
             decrypt_file(&outcome.output, "Master#Pass-2026").expect("decrypt must succeed");
         let content = fs::read(&restored.output).unwrap();
         assert_eq!(content, b"ShieldGhita vault payload 123");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_renamed_vault_file_still_decrypts_to_stored_name() {
+        let dir = temp_dir();
+        let src = dir.join("report-2026.pdf");
+        fs::write(&src, b"pdf body").unwrap();
+        let sealed = encrypt_file(&src, "rename-pass").unwrap();
+        let renamed = dir.join("renamed-elsewhere.sgvault");
+        fs::rename(&sealed.output, &renamed).unwrap();
+        let restored =
+            decrypt_file(&renamed, "rename-pass").expect("rename must not break decrypt");
+        assert_eq!(restored.output.file_name().unwrap(), "report-2026.pdf");
+        assert_eq!(fs::read(&restored.output).unwrap(), b"pdf body");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_legacy_v1_container_still_decrypts() {
+        use aes_gcm::aead::{Aead, KeyInit, Payload};
+        use aes_gcm::{Aes256Gcm, Nonce};
+        let dir = temp_dir();
+        let original_name = "legacy.txt";
+        let mut salt = [0u8; SALT_LEN];
+        let mut nonce = [0u8; NONCE_LEN];
+        getrandom::fill(&mut salt).unwrap();
+        getrandom::fill(&mut nonce).unwrap();
+        let key = derive_key("legacy-pass", &salt).unwrap();
+        let plaintext = b"legacy payload";
+        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: plaintext.as_slice(),
+                    aad: original_name.as_bytes(),
+                },
+            )
+            .unwrap();
+        let mut blob = Vec::new();
+        blob.extend_from_slice(MAGIC);
+        blob.push(FORMAT_LEGACY);
+        blob.extend_from_slice(&salt);
+        blob.extend_from_slice(&nonce);
+        blob.extend_from_slice(&ciphertext);
+        let path = dir.join(format!("{original_name}.{VAULT_EXTENSION}"));
+        fs::write(&path, &blob).unwrap();
+        let restored = decrypt_file(&path, "legacy-pass").expect("v1 container must still open");
+        assert_eq!(fs::read(&restored.output).unwrap(), plaintext.to_vec());
+        assert!(decrypt_file(&path, "wrong-pass").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_new_container_is_format_v2_with_stored_name() {
+        let dir = temp_dir();
+        let src = dir.join("named.bin");
+        fs::write(&src, b"x").unwrap();
+        let sealed = encrypt_file(&src, "fmt-pass").unwrap();
+        let blob = fs::read(&sealed.output).unwrap();
+        assert_eq!(&blob[..MAGIC.len()], MAGIC);
+        assert_eq!(blob[MAGIC.len()], FORMAT_WITH_NAME);
+        let name_len = u16::from_le_bytes([blob[MAGIC.len() + 1], blob[MAGIC.len() + 2]]) as usize;
+        let name = std::str::from_utf8(&blob[MAGIC.len() + 3..MAGIC.len() + 3 + name_len]).unwrap();
+        assert_eq!(name, "named.bin");
         let _ = fs::remove_dir_all(&dir);
     }
 

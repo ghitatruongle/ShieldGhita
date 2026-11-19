@@ -384,4 +384,21 @@ pub(super) fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             Err(e) => tracing::error!("Failed to open release page: {}", e),
         }
     });
+
+    // Track 1 (0.1.5-alpha2): update banner actions.
+    ui.on_open_update_release(move || {
+        const RELEASES_URL: &str = "https://github.com/ghitatruongle/ShieldGhita/releases/latest";
+        match crate::modules::system::open_url_in_default_browser(RELEASES_URL) {
+            Ok(()) => info!("Opened release page from update banner"),
+            Err(e) => tracing::error!("Failed to open release page from banner: {}", e),
+        }
+    });
+    ui.on_dismiss_update_banner({
+        let ui_weak = ui.as_weak();
+        move || {
+            if let Some(u) = ui_weak.upgrade() {
+                u.set_update_available(false);
+            }
+        }
+    });
 }
