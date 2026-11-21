@@ -6,6 +6,7 @@ import { TabButton, StatCard, Spinner, TooltipButton } from "../widgets.slint";
 
 export component OnboardingOverlay inherits Rectangle {
     callback dismiss-onboarding();
+    callback enable-max-shield();
     in property <float> overlay-fade;
     in-out property <bool> show-onboarding;
     if root.show-onboarding : Rectangle {
@@ -22,9 +23,9 @@ export component OnboardingOverlay inherits Rectangle {
         }
         Rectangle {
             x: (root.width - 520px) / 2;
-            y: (root.height - 360px) / 2;
+            y: (root.height - 470px) / 2;
             width: 520px;
-            height: 360px;
+            height: 470px;
             background: Theme.bg-panel;
             border-radius: 14px;
             border-width: 2px;
@@ -56,10 +57,29 @@ export component OnboardingOverlay inherits Rectangle {
                     color: Theme.text-body;
                     wrap: word-wrap;
                 }
+                Text {
+                    text: I18n.t4("4️⃣ Bật bảo vệ an ninh mạng: IDS/IPS, giám sát ARP spoofing, bảo vệ thời gian thực và chặn quảng cáo cho cả mạng LAN", "4️⃣ Turn on network security: IDS/IPS, ARP spoofing watch, real-time file guard and LAN-wide ad blocking", "4️⃣ 开启网络安全：IDS/IPS、ARP 欺骗监控、实时文件防护与全网广告拦截", "4️⃣ Включите сетевую защиту: IDS/IPS, контроль ARP-спуфинга, защита файлов в реальном времени и блокировка рекламы для всей LAN");
+                    font-size: 13px;
+                    color: Theme.text-body;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: I18n.t4("⚠ Bật bảo vệ tối đa sẽ giám sát mạng của bạn, theo dõi thư mục Downloads / Desktop / ổ USB để quét tệp mới, và mở cổng DNS 53 cho thiết bị trong LAN (chế độ toàn LAN có hiệu lực sau khi khởi động lại app). Có thể tắt lại bất cứ lúc nào trong tab Cài đặt và Diệt Virus.", "⚠ Max Shield monitors your network, watches Downloads / Desktop / USB drives to scan new files, and opens DNS port 53 to your LAN devices (LAN-wide mode takes effect after an app restart). You can turn any of it off again in Settings and Antivirus.", "⚠ 最大防护会监控网络、监视“下载 / 桌面 / USB”以扫描新文件，并向局域网设备开放 DNS 53 端口（全网模式需重启应用后生效）。可随时在“设置”和“杀毒”中关闭。", "⚠ Максимальная защита включит мониторинг сети, наблюдение за Загрузками / Рабочим столом / USB для сканирования новых файлов и откроет DNS-порт 53 для устройств LAN (режим всей LAN вступает в силу после перезапуска). Всё можно выключить в Настройках и Антивирусе.");
+                    font-size: 11px;
+                    color: Theme.warning-deep;
+                    wrap: word-wrap;
+                }
                 Rectangle { vertical-stretch: 1; }
-                Button {
-                    text: I18n.t4("Bắt đầu thôi!", "Get Started!", "开始使用！", "Начать!");
-                    clicked => { root.dismiss-onboarding(); }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Button {
+                        text: I18n.t4("🛡 Bật bảo vệ tối đa (khuyến nghị)", "🛡 Turn on Max Shield (recommended)", "🛡 开启最大防护（推荐）", "🛡 Включить максимальную защиту (рекомендуется)");
+                        clicked => { root.enable-max-shield(); }
+                    }
+                    Button {
+                        text: I18n.t4("Để sau", "Maybe later", "以后再说", "Позже");
+                        clicked => { root.dismiss-onboarding(); }
+                    }
                 }
             }
         }

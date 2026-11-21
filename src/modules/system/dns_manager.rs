@@ -9,6 +9,10 @@ use tracing::{error, info, warn};
 static DNS_OVERRIDDEN: AtomicBool = AtomicBool::new(false);
 static MASTER_INTERNET_LOCKED: AtomicBool = AtomicBool::new(false);
 static LAN_ONLY_MODE: AtomicBool = AtomicBool::new(false);
+static LOCK_DEGRADED: AtomicBool = AtomicBool::new(false);
+
+type LockLayerHook = Arc<dyn Fn(bool) -> Result<(), String> + Send + Sync>;
+static LOCK_LAYER_HOOK: Mutex<Option<LockLayerHook>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AdapterDnsState {
@@ -657,7 +661,9 @@ pub fn recover_stale_override_on_startup() -> Option<String> {
         *guard6 = Some(parsed.ipv6);
     }
     let result = restore_system_dns_inner(false);
-    clear_override_backup();
+    if result.is_ok() {
+        clear_override_backup();
+    }
     match result {
         Ok(()) => Some(
             crate::modules::i18n::tr4(
@@ -684,6 +690,11 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
     } else {
         None
     };
+    if let Err(error) = locked_packet_layer(false) {
+        warn!("Packet-layer release during DNS restore failed: {error}");
+    }
+    LOCK_DEGRADED.store(false, Ordering::SeqCst);
+    MASTER_INTERNET_LOCKED.store(false, Ordering::SeqCst);
     let adapters = get_active_adapters();
     let backup_map = {
         let mut orig_guard = ORIGINAL_DNS_SETTINGS
@@ -900,23 +911,91 @@ fn restore_system_dns_inner(take_lock: bool) -> Result<(), String> {
     }
 }
 
+pub fn install_lock_layer_hook(hook: LockLayerHook) {
+    let mut guard = LOCK_LAYER_HOOK.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(hook);
+}
+
+fn locked_packet_layer(locked: bool) -> Result<(), String> {
+    let hook = LOCK_LAYER_HOOK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    match hook {
+        Some(hook) => hook(locked),
+        None => Err("no packet-layer hook registered".to_string()),
+    }
+}
+
+pub fn is_lock_degraded() -> bool {
+    LOCK_DEGRADED.load(Ordering::Relaxed)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayerOutcome {
+    Full,
+    Degraded,
+}
+
+fn layer_outcome(result: &Result<(), String>) -> LayerOutcome {
+    if result.is_ok() {
+        LayerOutcome::Full
+    } else {
+        LayerOutcome::Degraded
+    }
+}
+
+#[cfg(test)]
+fn reset_lock_layer_hook() {
+    let mut guard = LOCK_LAYER_HOOK.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = None;
+}
+
 pub fn set_master_internet_lock(locked: bool) -> Result<(), String> {
+    if locked {
+        engage_master_internet_lock()
+    } else {
+        release_master_internet_lock()
+    }
+}
+
+fn engage_master_internet_lock() -> Result<(), String> {
     let prev = MASTER_INTERNET_LOCKED.load(Ordering::SeqCst);
-    let target = if locked { "127.0.0.2" } else { "127.0.0.1" };
-    match set_system_dns(target) {
+    if let Err(error) = set_system_dns("127.0.0.2") {
+        MASTER_INTERNET_LOCKED.store(prev, Ordering::SeqCst);
+        return Err(error);
+    }
+    let packet = locked_packet_layer(true);
+    match layer_outcome(&packet) {
+        LayerOutcome::Full => LOCK_DEGRADED.store(false, Ordering::SeqCst),
+        LayerOutcome::Degraded => {
+            LOCK_DEGRADED.store(true, Ordering::SeqCst);
+            warn!(
+                "MASTER INTERNET LOCK IS DNS-ONLY: packet layer failed: {}",
+                packet.err().unwrap_or_default()
+            );
+        }
+    }
+    MASTER_INTERNET_LOCKED.store(true, Ordering::SeqCst);
+    info!("MASTER INTERNET LOCK ACTIVATED: external resolution blackholed");
+    Ok(())
+}
+
+fn release_master_internet_lock() -> Result<(), String> {
+    if let Err(error) = locked_packet_layer(false) {
+        warn!("Packet-layer unlock failed (filters are session-bound): {error}");
+    }
+    LOCK_DEGRADED.store(false, Ordering::SeqCst);
+    let prev = MASTER_INTERNET_LOCKED.load(Ordering::SeqCst);
+    match set_system_dns("127.0.0.1") {
         Ok(()) => {
-            MASTER_INTERNET_LOCKED.store(locked, Ordering::SeqCst);
-            if locked {
-                info!("MASTER INTERNET LOCK ACTIVATED: All external DNS blackholed");
-            } else {
-                info!("MASTER INTERNET LOCK DEACTIVATED: Normal protection resumed");
-            }
+            MASTER_INTERNET_LOCKED.store(false, Ordering::SeqCst);
+            info!("MASTER INTERNET LOCK DEACTIVATED: normal protection resumed");
             Ok(())
         }
-        Err(e) => {
-            // Rollback flag on failure — only set after Ok.
+        Err(error) => {
             MASTER_INTERNET_LOCKED.store(prev, Ordering::SeqCst);
-            Err(e)
+            Err(error)
         }
     }
 }
@@ -1201,6 +1280,54 @@ pub async fn start_dns_guard_watchdog(protection_enabled: Arc<AtomicBool>, liste
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn lock_layer_without_a_hook_reports_unavailable() {
+        let _serial = HOOK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_lock_layer_hook();
+        let result = locked_packet_layer(true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no packet-layer hook"));
+    }
+
+    #[test]
+    fn lock_layer_forwards_the_requested_state() {
+        let _serial = HOOK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seen = Arc::new(Mutex::new(Vec::<bool>::new()));
+        let recorder = seen.clone();
+        install_lock_layer_hook(Arc::new(move |locked| {
+            recorder
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(locked);
+            Ok(())
+        }));
+        assert!(locked_packet_layer(true).is_ok());
+        assert!(locked_packet_layer(false).is_ok());
+        assert_eq!(
+            *seen.lock().unwrap_or_else(|e| e.into_inner()),
+            vec![true, false]
+        );
+        reset_lock_layer_hook();
+    }
+
+    #[test]
+    fn lock_layer_propagates_the_hook_error() {
+        let _serial = HOOK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        install_lock_layer_hook(Arc::new(|_| Err("BFE stopped".to_string())));
+        let result = locked_packet_layer(true);
+        assert_eq!(result.unwrap_err(), "BFE stopped");
+        reset_lock_layer_hook();
+    }
+
+    #[test]
+    fn layer_outcome_marks_dns_only_when_the_packet_layer_fails() {
+        assert_eq!(layer_outcome(&Ok(())), LayerOutcome::Full);
+        assert_eq!(layer_outcome(&Err("x".to_string())), LayerOutcome::Degraded);
+        assert!(!is_lock_degraded() || is_lock_degraded());
+    }
 
     #[test]
     fn test_classify_flags_foreign_loopback_resolver() {

@@ -411,6 +411,15 @@ impl SecurityEngine {
             if map.len() > 500 {
                 let now = Instant::now();
                 map.retain(|_, exp| now < *exp);
+                if map.len() > 500 {
+                    let mut by_expiry: Vec<(String, Instant)> =
+                        map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                    by_expiry.sort_by_key(|(_, exp)| *exp);
+                    let excess = map.len().saturating_sub(400);
+                    for (key, _) in by_expiry.into_iter().take(excess) {
+                        map.remove(&key);
+                    }
+                }
             }
             map.insert(ip.to_string(), Instant::now() + duration);
             warn!(

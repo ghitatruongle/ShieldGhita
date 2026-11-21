@@ -3,7 +3,7 @@
 import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
 import { I18n, Theme } from "../common.slint";
 import { NetworkDevice, SecurityIncident } from "../common.slint";
-import { TabButton, StatCard, Spinner } from "../widgets.slint";
+import { TabButton, StatCard, Spinner, TooltipBadge } from "../widgets.slint";
 component LanDeviceRow inherits Rectangle {
     in property <NetworkDevice> device;
     callback view-logs(string);
@@ -241,7 +241,13 @@ export component SecurityTab inherits Rectangle {
                             VerticalLayout {
                                 padding: 10px;
                                 spacing: 4px;
-                                Text { text: I18n.t("🛡️ HỆ THỐNG PHÁT HIỆN TẤN CÔNG (IDS)", "🛡️ INTRUSION DETECTION (IDS)", "🛡️ 入侵检测系统 (IDS)"); font-size: 11px; font-weight: 700; color: Theme.accent; }
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Text { text: I18n.t("🛡️ HỆ THỐNG PHÁT HIỆN TẤN CÔNG (IDS)", "🛡️ INTRUSION DETECTION (IDS)", "🛡️ 入侵检测系统 (IDS)"); font-size: 11px; font-weight: 700; color: Theme.accent; horizontal-stretch: 1; overflow: elide; }
+                                    TooltipBadge {
+                                        tip: I18n.t4("Phát hiện DNS Flood, DNS Tunneling (phân tích entropy), miền DGA và chặn TLD .onion/.bit/.bazar. Mặc định TẮT — bật trong tab Cài đặt. Giới hạn tần suất DNS vẫn luôn chạy kể cả khi IDS tắt.", "Detects DNS floods, DNS tunneling (entropy analysis), DGA domains, and drops the .onion/.bit/.bazar TLDs. OFF by default — enable it in Settings. The DNS rate limit stays active even while IDS is off.", "检测 DNS 洪泛、DNS 隧道（熵分析）、DGA 域名，并拦截 .onion/.bit/.bazar 顶级域。默认关闭 — 请在“设置”中开启。DNS 速率限制即使在 IDS 关闭时也始终生效。", "Обнаруживает DNS-флуд, DNS-туннели (энтропийный анализ), DGA-домены и отсекает TLD .onion/.bit/.bazar. По умолчанию ВЫКЛ — включите в Настройках. Ограничение частоты DNS работает даже при выключенном IDS.");
+                                    }
+                                }
                                 Text { text: root.attack-detection-enabled ? (I18n.t("🟢 ĐANG BẢO VỆ", "🟢 ACTIVE", "🟢 防护中")) : (I18n.t("⚪ ĐANG TẮT", "⚪ DISABLED", "⚪ 已关闭")); font-size: 13px; font-weight: 800; color: root.attack-detection-enabled ? Theme.ok-bright : Theme.text-secondary; }
                             }
                         }
@@ -254,7 +260,13 @@ export component SecurityTab inherits Rectangle {
                             VerticalLayout {
                                 padding: 10px;
                                 spacing: 4px;
-                                Text { text: I18n.t("⚡ TỰ ĐỘNG KHÓA IP TẤN CÔNG (IPS)", "⚡ AUTO-BLOCK THREATS (IPS)", "⚡ 自动封锁攻击 IP (IPS)"); font-size: 11px; font-weight: 700; color: Theme.danger-soft; }
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Text { text: I18n.t("⚡ TỰ ĐỘNG KHÓA IP TẤN CÔNG (IPS)", "⚡ AUTO-BLOCK THREATS (IPS)", "⚡ 自动封锁攻击 IP (IPS)"); font-size: 11px; font-weight: 700; color: Theme.danger-soft; horizontal-stretch: 1; overflow: elide; }
+                                    TooltipBadge {
+                                        tip: I18n.t4("Khi BẬT: nguồn tấn công bị chặn DNS 5 phút (flood) hoặc 10 phút (quét cổng) và bị NXDOMAIN. Khi TẮT: chỉ cảnh báo, lưu lượng vẫn đi qua bình thường.", "ON: the attacking source gets DNS-blocked for 5 minutes (flood) or 10 minutes (port scan) and receives NXDOMAIN. OFF: alert only, traffic still flows normally.", "开启时：攻击源被 DNS 封锁 5 分钟（洪泛）或 10 分钟（端口扫描）并返回 NXDOMAIN。关闭时：仅告警，流量照常通过。", "ВКЛ: источник атаки блокируется по DNS на 5 минут (флуд) или 10 минут (скан портов), ответ NXDOMAIN. ВЫКЛ: только оповещение, трафик идёт как обычно.");
+                                    }
+                                }
                                 Text { text: root.auto-block-attacks ? (I18n.t("🟢 TỰ ĐỘNG CÔ LẬP NGUỒN", "🟢 AUTO-MITIGATION ON", "🟢 自动隔离攻击源")) : (I18n.t("⚪ CHỈ CẢNH BÁO", "⚪ ALERT ONLY", "⚪ 仅告警")); font-size: 13px; font-weight: 800; color: root.auto-block-attacks ? Theme.ok-bright : Theme.text-secondary; }
                             }
                         }
@@ -267,7 +279,13 @@ export component SecurityTab inherits Rectangle {
                             VerticalLayout {
                                 padding: 10px;
                                 spacing: 4px;
-                                Text { text: I18n.t("📡 GIÁM SÁT ARP SPOOFING / MITM", "📡 ARP SPOOFING WATCH", "📡 ARP 欺骗 / 中间人监控"); font-size: 11px; font-weight: 700; color: Theme.warning; }
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Text { text: I18n.t("📡 GIÁM SÁT ARP SPOOFING / MITM", "📡 ARP SPOOFING WATCH", "📡 ARP 欺骗 / 中间人监控"); font-size: 11px; font-weight: 700; color: Theme.warning; horizontal-stretch: 1; overflow: elide; }
+                                    TooltipBadge {
+                                        tip: I18n.t4("So sánh địa chỉ MAC của gateway với baseline mỗi chu kỳ quét LAN (khoảng 2,5 phút) hoặc khi bấm Quét lại — không giám sát gói tin thời gian thực, nên kẻ tấn công có thể lọt giữa hai lần kiểm tra.", "Compares the gateway MAC against the baseline at every LAN scan (about every 2.5 minutes) and on Rescan — not a packet-level real-time monitor, so an attacker can slip in between two checks.", "在每次局域网扫描（约 2,5 分钟一次）或点击重新扫描时，将网关 MAC 与基线比对 — 非实时包级监控，攻击者可能在两次检查之间溜入。", "Сравнивает MAC-адрес шлюза с базовой линией при каждом сканировании LAN (примерно раз в 2,5 минуты) и по кнопке — не контроль пакетов в реальном времени, злоумышленник может пролезть между проверками.");
+                                    }
+                                }
                                 Text { text: root.arp-spoof-detection ? (I18n.t("🟢 QUẢN TRỊ GATEWAY", "🟢 GATEWAY MONITORED", "🟢 网关监控中")) : (I18n.t("⚪ ĐANG TẮT", "⚪ DISABLED", "⚪ 已关闭")); font-size: 13px; font-weight: 800; color: root.arp-spoof-detection ? Theme.ok-bright : Theme.text-secondary; }
                             }
                         }
@@ -314,6 +332,10 @@ export component SecurityTab inherits Rectangle {
                             color: Theme.text-secondary;
                             vertical-alignment: center;
                             overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        if root.lan-subview-mode == 1 : TooltipBadge {
+                            tip: I18n.t4("Phát hiện quét cổng: đọc bảng socket cục bộ khoảng 3 giây/lần nên chỉ thấy probe vào cổng đang mở (đang lắng nghe) của máy này; quét cổng đóng không để lại dấu vết để đọc. Tắt IDS thì không ghi nhận gì.", "Port-scan detection: reads the local socket table about every 3 seconds, so it only sees probes against this PC's open (listening) ports; scans of closed ports leave nothing to read. With IDS off, nothing is recorded.", "端口扫描检测：约每 3 秒读取本地 socket 表，因此只能看到针对本机开放（监听）端口的探测；扫描关闭端口不会留下可读取的记录。关闭 IDS 时不记录任何内容。", "Обнаружение скана портов: читает локальную таблицу сокетов примерно раз в 3 секунды, поэтому видит только зондирование открытых (слушающих) портов ПК; скан закрытых портов ничего не оставляет. При выключенном IDS ничего не фиксируется.");
                         }
                     }
 

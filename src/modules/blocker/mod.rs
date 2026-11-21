@@ -7,14 +7,20 @@ use tracing::info;
 use windows::core::PWSTR;
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
+#[cfg(any(windows, test))]
+#[allow(dead_code)]
+mod lockdown;
+
 #[cfg(windows)]
 use windows::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterDeleteById0,
     FWPM_CONDITION_IP_LOCAL_PORT, FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_FILTER0,
     FWPM_FILTER_CONDITION0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
-    FWPM_SUBLAYER_UNIVERSAL, FWP_ACTION_BLOCK, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE,
-    FWP_MATCH_EQUAL, FWP_UINT32,
+    FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4, FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6,
+    FWPM_SUBLAYER_UNIVERSAL, FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_ACTION_TYPE,
+    FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE, FWP_MATCH_EQUAL, FWP_UINT32, FWP_UINT8,
+    FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_V6_ADDR_AND_MASK, FWP_V6_ADDR_MASK,
 };
 #[cfg(windows)]
 use windows::Win32::Security::PSECURITY_DESCRIPTOR;
@@ -22,10 +28,13 @@ use windows::Win32::Security::PSECURITY_DESCRIPTOR;
 pub struct WfpBlocker {
     enabled: Arc<AtomicBool>,
     available: Arc<AtomicBool>,
+    lockdown: Arc<AtomicBool>,
     #[cfg(windows)]
     engine_handle: std::sync::Mutex<Option<HANDLE>>,
     #[cfg(windows)]
     filter_ids: std::sync::Mutex<Vec<u64>>,
+    #[cfg(windows)]
+    lockdown_filter_ids: std::sync::Mutex<Vec<u64>>,
     blocked_ips: std::sync::RwLock<Vec<String>>,
     blocked_ports: std::sync::RwLock<Vec<u16>>,
 }
@@ -55,10 +64,13 @@ impl WfpBlocker {
         Self {
             enabled: Arc::new(AtomicBool::new(false)),
             available: Arc::new(AtomicBool::new(false)),
+            lockdown: Arc::new(AtomicBool::new(false)),
             #[cfg(windows)]
             engine_handle: std::sync::Mutex::new(None),
             #[cfg(windows)]
             filter_ids: std::sync::Mutex::new(Vec::new()),
+            #[cfg(windows)]
+            lockdown_filter_ids: std::sync::Mutex::new(Vec::new()),
             blocked_ips: std::sync::RwLock::new(Vec::new()),
             blocked_ports: std::sync::RwLock::new(Vec::new()),
         }
@@ -156,7 +168,31 @@ impl WfpBlocker {
         &self,
         engine: HANDLE,
         layer: windows::core::GUID,
-        mut cond: FWPM_FILTER_CONDITION0,
+        cond: FWPM_FILTER_CONDITION0,
+        display_name: &str,
+        description: &str,
+    ) -> Result<u64, String> {
+        let mut conditions = [cond];
+        self.add_filter(
+            engine,
+            layer,
+            &mut conditions,
+            FWP_ACTION_BLOCK,
+            None,
+            display_name,
+            description,
+        )
+    }
+
+    #[cfg(windows)]
+    #[allow(clippy::too_many_arguments)]
+    fn add_filter(
+        &self,
+        engine: HANDLE,
+        layer: windows::core::GUID,
+        conditions: &mut [FWPM_FILTER_CONDITION0],
+        action: FWP_ACTION_TYPE,
+        weight: Option<u8>,
         display_name: &str,
         description: &str,
     ) -> Result<u64, String> {
@@ -167,9 +203,17 @@ impl WfpBlocker {
         filter.displayData.description = PWSTR(desc.as_ptr() as *mut u16);
         filter.layerKey = layer;
         filter.subLayerKey = FWPM_SUBLAYER_UNIVERSAL;
-        filter.action.r#type = FWP_ACTION_BLOCK;
-        filter.numFilterConditions = 1;
-        filter.filterCondition = &mut cond;
+        filter.action.r#type = action;
+        if let Some(level) = weight {
+            filter.weight.r#type = FWP_UINT8;
+            filter.weight.Anonymous.uint8 = level;
+        }
+        filter.numFilterConditions = u32::try_from(conditions.len()).unwrap_or(u32::MAX);
+        filter.filterCondition = if conditions.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            conditions.as_mut_ptr()
+        };
         let mut id: u64 = 0;
         let status = unsafe {
             FwpmFilterAdd0(
@@ -359,6 +403,181 @@ impl WfpBlocker {
         self.enabled.load(Ordering::Relaxed)
     }
 
+    pub fn is_lockdown_active(&self) -> bool {
+        self.lockdown.load(Ordering::SeqCst)
+    }
+
+    #[allow(dead_code)]
+    pub fn lockdown_unavailable_reason() -> String {
+        crate::modules::i18n::tr4(
+            "Chặn Internet bằng WFP không khả dụng (cần quyền Admin và dịch vụ BFE) — chỉ khóa DNS đang hoạt động.",
+            "WFP internet lockdown unavailable (needs Administrator and the BFE service) — only the DNS lock is active.",
+            "WFP 断网不可用（需要管理员权限和 BFE 服务）— 仅 DNS 锁定生效。",
+            "Блокировка через WFP недоступна (нужны права администратора и служба BFE) — активна только блокировка DNS.",
+        )
+        .to_string()
+    }
+
+    #[cfg(windows)]
+    pub fn enable_lockdown(&self) -> Result<(), String> {
+        if lockdown::transition(self.lockdown.load(Ordering::SeqCst))
+            == lockdown::Transition::AlreadyActive
+        {
+            return Ok(());
+        }
+        self.initialize()?;
+        self.clear_lockdown_filters()?;
+        let engine = self.engine()?;
+        let rules = lockdown::plan();
+        match lockdown::run(&rules, |rule| self.add_lockdown_rule(engine, rule)) {
+            lockdown::Outcome::Armed(ids) => {
+                let count = ids.len();
+                if let Ok(mut stored) = self.lockdown_filter_ids.lock() {
+                    stored.extend_from_slice(&ids);
+                }
+                self.lockdown.store(true, Ordering::SeqCst);
+                info!(
+                    "WFP lockdown armed: {count} filter(s) — local ranges permitted, all other outbound blocked"
+                );
+                Ok(())
+            }
+            lockdown::Outcome::RolledBack(installed, error) => {
+                let rolled_back = installed.len();
+                self.delete_filters(engine, &installed);
+                self.lockdown.store(false, Ordering::SeqCst);
+                Err(format!(
+                    "WFP lockdown failed, {rolled_back} filter(s) rolled back: {error}"
+                ))
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn enable_lockdown(&self) -> Result<(), String> {
+        Err("WFP lockdown is only available on Windows".into())
+    }
+
+    #[cfg(windows)]
+    pub fn disable_lockdown(&self) -> Result<(), String> {
+        self.clear_lockdown_filters()?;
+        self.lockdown.store(false, Ordering::SeqCst);
+        info!("WFP lockdown released");
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    pub fn disable_lockdown(&self) -> Result<(), String> {
+        self.lockdown.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn engine(&self) -> Result<HANDLE, String> {
+        let hg = self.engine_handle.lock().map_err(|e| e.to_string())?;
+        match *hg {
+            Some(handle) => Ok(handle),
+            None => Err("WFP engine is not open".into()),
+        }
+    }
+
+    #[cfg(windows)]
+    fn delete_filters(&self, engine: HANDLE, ids: &[u64]) {
+        for id in ids {
+            unsafe {
+                let _ = FwpmFilterDeleteById0(engine, *id);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn lockdown_layer_key(layer: lockdown::Layer) -> windows::core::GUID {
+        match layer {
+            lockdown::Layer::AuthConnectV4 => FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+            lockdown::Layer::AuthConnectV6 => FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+            lockdown::Layer::FlowEstablishedV4 => FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4,
+            lockdown::Layer::FlowEstablishedV6 => FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6,
+        }
+    }
+
+    #[cfg(windows)]
+    fn add_lockdown_rule(&self, engine: HANDLE, rule: &lockdown::Rule) -> Result<u64, String> {
+        match rule {
+            lockdown::Rule::BlockAll(layer) => self.add_filter(
+                engine,
+                Self::lockdown_layer_key(*layer),
+                &mut [],
+                FWP_ACTION_BLOCK,
+                Some(lockdown::BLOCK_WEIGHT),
+                "ShieldGhita Master Lock (block all outbound)",
+                "ShieldGhita Master Internet Lock: every outbound connection outside the local ranges is blocked",
+            ),
+            lockdown::Rule::PermitV4(layer, index) => {
+                let range = lockdown::PERMIT_V4[*index];
+                let mut address_mask = FWP_V4_ADDR_AND_MASK {
+                    addr: range.addr,
+                    mask: range.mask,
+                };
+                let mut condition = FWPM_FILTER_CONDITION0 {
+                    fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                    matchType: FWP_MATCH_EQUAL,
+                    ..Default::default()
+                };
+                condition.conditionValue.r#type = FWP_V4_ADDR_MASK;
+                condition.conditionValue.Anonymous.v4AddrMask = &mut address_mask;
+                let mut conditions = [condition];
+                let name = format!("ShieldGhita Master Lock allow {}", range.label);
+                self.add_filter(
+                    engine,
+                    Self::lockdown_layer_key(*layer),
+                    &mut conditions,
+                    FWP_ACTION_PERMIT,
+                    Some(lockdown::PERMIT_WEIGHT),
+                    &name,
+                    "ShieldGhita Master Internet Lock: local IPv4 traffic stays reachable",
+                )
+            }
+            lockdown::Rule::PermitV6(layer, index) => {
+                let range = lockdown::PERMIT_V6[*index];
+                let mut address_mask = FWP_V6_ADDR_AND_MASK {
+                    addr: range.addr,
+                    prefixLength: range.prefix,
+                };
+                let mut condition = FWPM_FILTER_CONDITION0 {
+                    fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                    matchType: FWP_MATCH_EQUAL,
+                    ..Default::default()
+                };
+                condition.conditionValue.r#type = FWP_V6_ADDR_MASK;
+                condition.conditionValue.Anonymous.v6AddrMask = &mut address_mask;
+                let mut conditions = [condition];
+                let name = format!("ShieldGhita Master Lock allow {}", range.label);
+                self.add_filter(
+                    engine,
+                    Self::lockdown_layer_key(*layer),
+                    &mut conditions,
+                    FWP_ACTION_PERMIT,
+                    Some(lockdown::PERMIT_WEIGHT),
+                    &name,
+                    "ShieldGhita Master Internet Lock: local IPv6 traffic stays reachable",
+                )
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn clear_lockdown_filters(&self) -> Result<(), String> {
+        let engine = {
+            let hg = self.engine_handle.lock().map_err(|e| e.to_string())?;
+            *hg
+        };
+        let mut ids = self.lockdown_filter_ids.lock().map_err(|e| e.to_string())?;
+        if let Some(handle) = engine {
+            self.delete_filters(handle, &ids);
+        }
+        ids.clear();
+        Ok(())
+    }
+
     #[cfg(windows)]
     fn clear_filters(&self) -> Result<(), String> {
         let hg = self.engine_handle.lock().map_err(|e| e.to_string())?;
@@ -389,15 +608,28 @@ impl WfpBlocker {
                     }
                 }
             }
+            if let Ok(mut lids) = self.lockdown_filter_ids.lock() {
+                for id in lids.drain(..) {
+                    unsafe {
+                        let _ = FwpmFilterDeleteById0(engine, id);
+                    }
+                }
+            }
             if let Some(h) = handle.take() {
                 unsafe {
                     let _ = FwpmEngineClose0(h);
                 }
             }
-        } else if let Ok(mut fids) = self.filter_ids.lock() {
-            fids.clear();
+        } else {
+            if let Ok(mut fids) = self.filter_ids.lock() {
+                fids.clear();
+            }
+            if let Ok(mut lids) = self.lockdown_filter_ids.lock() {
+                lids.clear();
+            }
         }
         self.enabled.store(false, Ordering::SeqCst);
+        self.lockdown.store(false, Ordering::SeqCst);
     }
 
     #[cfg(not(windows))]
@@ -438,5 +670,33 @@ mod tests {
         b.set_blocked_ports(vec![445, 3389]);
         assert_eq!(b.get_blocked_ips(), vec!["10.0.0.1".to_string()]);
         assert_eq!(b.get_blocked_ports(), vec![445, 3389]);
+    }
+
+    #[test]
+    fn lockdown_defaults_to_inactive() {
+        let b = super::WfpBlocker::new();
+        assert!(!b.is_lockdown_active());
+        assert!(!b.is_enabled());
+    }
+
+    #[test]
+    fn disable_lockdown_is_idempotent_without_an_engine() {
+        let b = super::WfpBlocker::new();
+        assert!(b.disable_lockdown().is_ok());
+        assert!(b.disable_lockdown().is_ok());
+        assert!(!b.is_lockdown_active());
+    }
+
+    #[test]
+    fn lockdown_unavailable_reason_is_user_facing() {
+        let reason = super::WfpBlocker::lockdown_unavailable_reason();
+        assert!(reason.len() > 20);
+        assert!(reason.contains("WFP"));
+    }
+
+    #[test]
+    fn lockdown_does_not_claim_availability_before_initialize() {
+        let b = super::WfpBlocker::new();
+        assert!(!b.is_available());
     }
 }

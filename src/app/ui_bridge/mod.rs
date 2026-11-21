@@ -206,9 +206,6 @@ pub fn setup_ui_bridge(
     }
     #[cfg(not(feature = "admin"))]
     {
-        ui.on_av_toggle_canary_autolock(|_| {});
-        ui.on_av_toggle_canary_in_folders(|_| {});
-        ui.on_av_unlock(|| {});
         ui.on_pentest_kill_switch(|| {});
         ui.on_trigger_proximity_scan(|| {});
         ui.on_refresh_admin_data(|| {});

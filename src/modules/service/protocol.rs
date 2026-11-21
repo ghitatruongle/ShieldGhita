@@ -266,6 +266,10 @@ pub struct CoreSnapshot {
     pub blocked_week: u64,
     pub protection: bool,
     pub lock: bool,
+    #[serde(default)]
+    pub lock_degraded: bool,
+    #[serde(default)]
+    pub lock_packet_active: bool,
     pub sinkhole: bool,
     pub paused: bool,
     pub pause_remaining_secs: u64,

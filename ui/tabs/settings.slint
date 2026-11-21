@@ -151,9 +151,10 @@ export component SettingsTab inherits Rectangle {
                                         }
                                     }
                                     Text {
-                                        text: I18n.t("Mở cổng DNS 53 cho tất cả các thiết bị cùng mạng Wi-Fi (iPhone, Android, Smart TV, PC). Đặt DNS Router về IP máy này để tự động chặn sạch quảng cáo.", "Listen on UDP/TCP port 53 for all LAN devices. Set your Wi-Fi Router DNS to this PC's IP to block ads network-wide.", "向同一 Wi-Fi 网络内的所有设备 (iPhone、Android、智能电视、PC) 开放 DNS 端口 53。将路由器 DNS 指向本机 IP 即可自动屏蔽全网广告。");
+                                        text: I18n.t("Mở cổng DNS 53 cho tất cả các thiết bị cùng mạng Wi-Fi (iPhone, Android, Smart TV, PC). Đặt DNS Router về IP máy này để tự động chặn sạch quảng cáo. ⚠ Bật/tắt tính năng này áp dụng sau khi khởi động lại app.", "Listen on UDP/TCP port 53 for all LAN devices. Set your Wi-Fi Router DNS to this PC's IP to block ads network-wide. ⚠ Turning this on/off takes effect after an app restart.", "向同一 Wi-Fi 网络内的所有设备 (iPhone、Android、智能电视、PC) 开放 DNS 端口 53。将路由器 DNS 指向本机 IP 即可自动屏蔽全网广告。⚠ 开关此功能需重启应用后生效。");
                                         font-size: 12px;
                                         color: Theme.text-secondary;
+                                        wrap: word-wrap;
                                     }
                                 }
                                 Button {

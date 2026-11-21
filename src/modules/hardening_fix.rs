@@ -193,23 +193,25 @@ pub fn apply_fix(id: &str) -> Result<String, String> {
     let Some(spec) = find_spec(id) else {
         return Err("unknown fix id".to_string());
     };
-    let mut backup_values = Vec::new();
-    for value in spec.values {
-        backup_values.push(BackupValue {
-            key: value.key.to_string(),
-            name: value.name.to_string(),
-            present: reg_read_dword(value.key, value.name).is_some(),
-            dword: reg_read_dword(value.key, value.name).unwrap_or(0),
-        });
-    }
-    let entry = BackupEntry {
-        fix_id: spec.id.to_string(),
-        time: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        values: backup_values,
-    };
     let mut backups = load_backups();
-    backups.push(entry);
-    save_backups(&backups)?;
+    if !backups.iter().any(|e| e.fix_id == spec.id) {
+        let mut backup_values = Vec::new();
+        for value in spec.values {
+            let current = reg_read_dword(value.key, value.name);
+            backup_values.push(BackupValue {
+                key: value.key.to_string(),
+                name: value.name.to_string(),
+                present: current.is_some(),
+                dword: current.unwrap_or(0),
+            });
+        }
+        backups.push(BackupEntry {
+            fix_id: spec.id.to_string(),
+            time: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            values: backup_values,
+        });
+        save_backups(&backups)?;
+    }
     for value in spec.values {
         reg_write_dword(value.key, value.name, value.dword)?;
     }
@@ -290,6 +292,21 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].fix_id, "smbv1");
         assert!(!parsed[0].values[0].present);
+    }
+
+    #[test]
+    fn reapply_keeps_the_first_snapshot() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("modules")
+                .join("hardening_fix.rs"),
+        )
+        .expect("read hardening_fix.rs");
+        assert!(
+            source.contains("if !backups.iter().any(|e| e.fix_id == spec.id)"),
+            "apply_fix must not overwrite the original snapshot on a second apply"
+        );
     }
 
     #[test]

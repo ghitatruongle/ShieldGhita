@@ -396,6 +396,74 @@ mod quarantine_tests {
     use super::*;
 
     #[test]
+    fn onboarding_max_shield_callback_is_wired_in_rust() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let overlay = root.join("ui").join("tabs").join("overlays.slint");
+        let source = std::fs::read_to_string(&overlay)
+            .unwrap_or_else(|e| panic!("read {}: {e}", overlay.display()));
+        assert!(
+            source.contains("callback enable-max-shield();"),
+            "the onboarding Max Shield button must keep its callback"
+        );
+        let bridge = root.join("src").join("app").join("ui_bridge");
+        let mut handler_source = String::new();
+        let mut pending = vec![bridge.clone()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+            {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        if text.contains("on_enable_max_shield") {
+                            handler_source.push_str(&text);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            !handler_source.is_empty(),
+            "enable-max-shield must be registered in src/app/ui_bridge — an unwired callback compiles fine but the button does nothing"
+        );
+        for switch in [
+            "invoke_toggle_network_wide_adblock(true)",
+            "invoke_toggle_attack_detection(true)",
+            "invoke_toggle_auto_block_attacks(true)",
+            "invoke_toggle_arp_spoof_detection(true)",
+            "invoke_av_toggle_realtime(true)",
+        ] {
+            assert!(
+                handler_source.contains(switch),
+                "Max Shield must turn on {switch}"
+            );
+        }
+    }
+
+    #[test]
+    fn public_edition_never_stubs_the_canary_callbacks() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("app")
+            .join("ui_bridge")
+            .join("mod.rs");
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        for stub in [
+            "on_av_toggle_canary_autolock",
+            "on_av_toggle_canary_in_folders",
+            "on_av_unlock",
+        ] {
+            assert!(
+                !source.contains(stub),
+                "{stub} must not be registered as a no-op stub — the canary controls would silently do nothing in the public edition"
+            );
+        }
+    }
+
+    #[test]
     fn callback_action_updates_device_quarantine_state() {
         use slint::Model;
         i_slint_backend_testing::init_no_event_loop();

@@ -11,6 +11,8 @@ pub(super) fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         });
     });
 
+    let ui_lock = ui.as_weak();
+    let guard_lock = state.realtime_guard.clone();
     ui.on_toggle_master_lock(move |locked| {
         if crate::modules::service::remote_mode() {
             let request = crate::modules::service::protocol::CoreRequest::Lock { on: locked };
@@ -22,9 +24,49 @@ pub(super) fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
             }
             return;
         }
-        if let Err(e) = dns_manager::set_master_internet_lock(locked) {
-            tracing::error!("Failed to toggle master internet lock: {}", e);
-        }
+        let weak = ui_lock.clone();
+        let guard = guard_lock.clone();
+        std::thread::spawn(move || {
+            let result = dns_manager::set_master_internet_lock(locked);
+            let degraded = dns_manager::is_lock_degraded();
+            if result.is_ok() && !locked {
+                guard.clear_lock_state();
+            }
+            if let Err(e) = &result {
+                tracing::error!("Failed to toggle master internet lock: {e}");
+            }
+            let message = match (&result, locked, degraded) {
+                (Ok(()), true, true) => {
+                    Some(crate::modules::i18n::tr4(
+                        "🔒 Đã khoá DNS — CHƯA cắt được Internet hoàn toàn (WFP không khả dụng, cần quyền Admin)",
+                        "🔒 DNS locked — internet NOT fully cut (WFP unavailable, needs Administrator)",
+                        "🔒 DNS 已锁定 — 未能完全断网（WFP 不可用，需要管理员权限）",
+                        "🔒 DNS заблокирован — интернет перерезан НЕ полностью (WFP недоступен, нужны права администратора)",
+                    ).to_string())
+                }
+                (Ok(()), true, false) => Some(crate::modules::i18n::tr4(
+                    "🔒 Đã khoá Internet (DNS + WFP). Mạng LAN vẫn dùng được.",
+                    "🔒 Internet locked (DNS + WFP). LAN stays reachable.",
+                    "🔒 已断网（DNS + WFP）。局域网仍可访问。",
+                    "🔒 Интернет заблокирован (DNS + WFP). LAN доступна.",
+                ).to_string()),
+                (Ok(()), false, _) => Some(crate::modules::i18n::tr4(
+                    "🔓 Đã mở khoá — mạng trở lại bình thường.",
+                    "🔓 Unlocked — network back to normal.",
+                    "🔓 已解锁 — 网络恢复正常。",
+                    "🔓 Разблокировано — сеть восстановлена.",
+                ).to_string()),
+                (Err(e), _, _) => Some(format!("❌ {e}")),
+            };
+            if let Some(text) = message {
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        window.set_status_text(text.into());
+                    }
+                });
+            }
+        });
     });
 
     fn spawn_service_action(

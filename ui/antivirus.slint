@@ -1,5 +1,6 @@
 import { Button, ListView, CheckBox } from "std-widgets.slint";
 import { I18n, QuarantineItem, Theme } from "common.slint";
+import { TooltipBadge } from "widgets.slint";
 
 component QuarantineRow inherits Rectangle {
     in property <QuarantineItem> entry;
@@ -68,6 +69,7 @@ export component AntivirusTab inherits Rectangle {
     in property <bool> is-busy: false;
     in-out property <bool> canary-autolock: false;
     in-out property <bool> canary-in-folders: false;
+    in-out property <bool> lock-degraded: false;
     in property <bool> lock-active: false;
 
     callback toggle-canary-autolock(bool);
@@ -137,16 +139,30 @@ export component AntivirusTab inherits Rectangle {
                 toggled => { root.toggle-auto-quarantine(root.av-auto-quarantine); }
             }
 
-            CheckBox {
-                text: I18n.t4("Tự khoá mạng khi tệp mồi bị đụng (tự mở sau 5 phút)", "Auto-lock when the canary is tampered (auto-release after 5 min)", "金丝雀被篡改时自动锁网（5 分钟后自动解除）", "Автоблокировка при вмешательстве в приманку (снятие через 5 мин)");
-                checked <=> root.canary-autolock;
-                toggled => { root.toggle-canary-autolock(root.canary-autolock); }
+            HorizontalLayout {
+                spacing: 4px;
+                alignment: center;
+                CheckBox {
+                    text: I18n.t4("Tự khoá mạng khi tệp mồi bị đụng (tự mở sau 5 phút)", "Auto-lock when the canary is tampered (auto-release after 5 min)", "金丝雀被篡改时自动锁网（5 分钟后自动解除）", "Автоблокировка при вмешательстве в приманку (снятие через 5 мин)");
+                    checked <=> root.canary-autolock;
+                    toggled => { root.toggle-canary-autolock(root.canary-autolock); }
+                }
+                TooltipBadge {
+                    tip: I18n.t4("Mặc định TẮT. Khi ransomware đổi tên/xoá tệp mồi hoặc sửa hàng loạt tệp theo dõi, app khóa Internet của máy và thiết bị LAN (DNS + WFP) trong 5 phút rồi tự mở; bấm Mở khoá ngay để mở sớm hơn. Khi đang khóa vẫn vào được thiết bị trong LAN.", "OFF by default. When ransomware renames/deletes the canary or mass-edits watched files, the app locks internet for this PC and LAN devices (DNS + WFP) for 5 minutes, then auto-releases; press Unlock now to release earlier. LAN devices stay reachable while locked.", "默认关闭。当勒索软件重命名/删除诱饵文件或批量修改受监控文件时，应用会锁定本机与局域网设备的网络（DNS + WFP）5 分钟后自动解除；可点“立即解锁”提前解除。锁定期间局域网设备仍可访问。", "По умолчанию ВЫКЛ. Если шифровальщик переименует/удалит приманку или массово изменит отслеживаемые файлы, приложение блокирует интернет ПК и устройств LAN (DNS + WFP) на 5 минут, затем снимает само; можно снять раньше кнопкой. Устройства LAN остаются доступны.");
+                }
             }
 
-            CheckBox {
-                text: I18n.t4("Đặt tệp mồi trong thư mục theo dõi", "Place canary inside watched folders", "在受监控文件夹放置诱饵文件", "Размещать приманку в отслеживаемых папках");
-                checked <=> root.canary-in-folders;
-                toggled => { root.toggle-canary-in-folders(root.canary-in-folders); }
+            HorizontalLayout {
+                spacing: 4px;
+                alignment: center;
+                CheckBox {
+                    text: I18n.t4("Đặt tệp mồi trong thư mục theo dõi", "Place canary inside watched folders", "在受监控文件夹放置诱饵文件", "Размещать приманку в отслеживаемых папках");
+                    checked <=> root.canary-in-folders;
+                    toggled => { root.toggle-canary-in-folders(root.canary-in-folders); }
+                }
+                TooltipBadge {
+                    tip: I18n.t4("Tạo tệp mồi canary.dat vô hại trong Downloads, Desktop và ổ USB để phát hiện ransomware. Tệp mồi chỉ dùng để báo động — app không xoá dữ liệu của bạn.", "Places a harmless canary.dat honeypot in Downloads, Desktop and USB drives to detect ransomware. It only raises an alarm — the app never deletes your data.", "在下载、桌面和 USB 磁盘放置无害的诱饵文件 canary.dat 以检测勒索软件。诱饵仅用于告警 — 应用绝不删除您的数据。", "Размещает безвредную приманку canary.dat в Загрузках, на Рабочем столе и USB-накопителях для обнаружения шифровальщика. Приманка только сигнализирует — приложение не удаляет ваши данные.");
+                }
             }
         }
 
@@ -164,17 +180,24 @@ export component AntivirusTab inherits Rectangle {
                 alignment: center;
 
                 Text {
-                    text: I18n.t4("⛔ Mạng đang bị KHOÁ do tệp mồi bị can thiệp — tự mở sau 5 phút", "⛔ Network is LOCKED by a canary tamper — auto-releases in 5 minutes", "⛔ 网络已因金丝雀被篡改而锁定 — 5 分钟后自动解除", "⛔ Сеть заблокирована из-за приманки — снимется через 5 минут");
+                    text: root.lock-degraded ? (I18n.t4("⛔ KHOÁ DNS do tệp mồi bị can thiệp — chưa cắt được Internet hoàn toàn (WFP cần quyền Admin), tự mở sau 5 phút", "⛔ DNS LOCKED by a canary tamper — internet not fully cut (WFP needs Administrator), auto-releases in 5 minutes", "⛔ 因金丝雀被篡改已锁定 DNS — 未能完全断网（WFP 需管理员权限），5 分钟后自动解除", "⛔ DNS заблокирован из-за приманки — сеть не перерезана полностью (WFP требует прав администратора), снятие через 5 минут")) : (I18n.t4("⛔ Mạng đang bị KHOÁ do tệp mồi bị can thiệp — máy và thiết bị LAN mất Internet, vẫn vào được thiết bị trong LAN, tự mở sau 5 phút", "⛔ Network is LOCKED by a canary tamper — this PC and LAN devices lose internet, LAN devices stay reachable, auto-releases in 5 minutes", "⛔ 网络已因金丝雀被篡改而锁定 — 本机与局域网设备断网，局域网设备仍可访问，5 分钟后自动解除", "⛔ Сеть заблокирована из-за приманки — ПК и устройства LAN без интернета, устройства LAN доступны, снятие через 5 минут"));
                     font-size: 12px;
                     font-weight: 800;
                     color: Theme.danger-text;
                     horizontal-stretch: 1;
-                    overflow: elide;
+                    wrap: word-wrap;
                 }
 
-                Button {
-                    text: I18n.t4("🔓 Mở khoá ngay", "🔓 Unlock now", "🔓 立即解除", "🔓 Разблокировать");
-                    clicked => { root.unlock(); }
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: center;
+                    Button {
+                        text: I18n.t4("🔓 Mở khoá ngay", "🔓 Unlock now", "🔓 立即解除", "🔓 Разблокировать");
+                        clicked => { root.unlock(); }
+                    }
+                    TooltipBadge {
+                        tip: I18n.t4("Gỡ khoá ngay, không chờ hết 5 phút: trả DNS về bình thường và gỡ bộ lọc WFP. Mạng máy này và thiết bị LAN trở lại như cũ.", "Releases the lock immediately instead of waiting 5 minutes: restores normal DNS and removes the WFP filters. This PC and the LAN devices get their network back.", "立即解除，无需等待 5 分钟：恢复正常 DNS 并移除 WFP 过滤器。本机与局域网设备的网络恢复如初。", "Снимает блокировку сразу, не дожидаясь 5 минут: восстанавливает DNS и удаляет фильтры WFP. ПК и устройства LAN получают сеть обратно.");
+                    }
                 }
             }
         }

@@ -124,6 +124,33 @@ pub(super) fn register(ui: &crate::AppWindow, state: &Arc<AppState>) {
         }
     });
 
+    let ui_shield = ui.as_weak();
+    ui.on_enable_max_shield(move || {
+        let Some(window) = ui_shield.upgrade() else {
+            return;
+        };
+        window.invoke_toggle_network_wide_adblock(true);
+        window.invoke_toggle_attack_detection(true);
+        window.invoke_toggle_auto_block_attacks(true);
+        window.invoke_toggle_arp_spoof_detection(true);
+        window.invoke_av_toggle_realtime(true);
+        window.set_network_wide_adblock(true);
+        window.set_attack_detection_enabled(true);
+        window.set_auto_block_attacks(true);
+        window.set_arp_spoof_detection(true);
+        window.set_av_realtime(true);
+        window.invoke_dismiss_onboarding();
+        window.set_status_text(
+            crate::modules::i18n::tr4(
+                "🛡 Đã bật bảo vệ tối đa: IDS/IPS + giám sát ARP + bảo vệ thời gian thực + toàn LAN — khởi động lại app để chế độ toàn LAN có hiệu lực.",
+                "🛡 Max Shield on: IDS/IPS + ARP watch + real-time guard + LAN-wide — restart the app for LAN-wide mode to take effect.",
+                "🛡 已开启最大防护：IDS/IPS + ARP 监控 + 实时防护 + 全网 — 重启应用后全网模式生效。",
+                "🛡 Максимальная защита включена: IDS/IPS + ARP + защита в реальном времени + вся LAN — перезапустите приложение для режима всей LAN.",
+            )
+            .into(),
+        );
+    });
+
     let s = state.clone();
     ui.on_refresh_connections(move || {
         s.monitor.connection_tracker.refresh_connections();

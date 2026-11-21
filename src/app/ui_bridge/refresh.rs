@@ -80,6 +80,9 @@ pub fn refresh_ui_state(ui_win: &crate::AppWindow, s: &Arc<AppState>) {
 
     let is_locked = dns_manager::is_master_internet_locked();
     ui_win.set_master_locked(is_locked);
+    ui_win.set_lock_degraded(
+        dns_manager::is_lock_degraded() || (is_locked && !s.wfp_blocker.is_lockdown_active()),
+    );
     ui_win.set_silent_sinkhole(s.blocker.is_silent_sinkhole());
 
     let protection = s.protection_atomic.load(Ordering::Relaxed);
@@ -347,6 +350,7 @@ pub fn apply_remote_snapshot(
     ui_win.set_absorbed_count(sat_i32_u64(snap.absorbed_count));
     ui_win.set_active_rules_count(sat_i32_u64(snap.rules_count));
     ui_win.set_master_locked(snap.lock);
+    ui_win.set_lock_degraded(snap.lock_degraded || (snap.lock && !snap.lock_packet_active));
     ui_win.set_silent_sinkhole(snap.sinkhole);
     ui_win.set_protection_enabled(snap.protection);
     ui_win.set_cpu_usage(snap.cpu);

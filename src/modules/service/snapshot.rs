@@ -29,6 +29,8 @@ pub fn build(state: &AppState, tab: i32, known_hash: u64) -> CoreSnapshot {
         blocked_week: state.monitor.block_stats.week_count(),
         protection: state.protection_atomic.load(Ordering::Relaxed),
         lock: crate::modules::system::dns_manager::is_master_internet_locked(),
+        lock_degraded: crate::modules::system::dns_manager::is_lock_degraded(),
+        lock_packet_active: state.wfp_blocker.is_lockdown_active(),
         sinkhole: state.blocker.is_silent_sinkhole(),
         paused: state.blocker.adblock.is_paused(),
         pause_remaining_secs: state.blocker.adblock.pause_remaining_secs(),

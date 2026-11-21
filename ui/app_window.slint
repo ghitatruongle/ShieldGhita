@@ -91,6 +91,7 @@ export component AppWindow inherits Window {
     in-out property <bool> show-onboarding: false;
     in-out property <string> incident-search: "";
     callback dismiss-onboarding();
+    callback enable-max-shield();
 
     // Track 5: giá trị 0→1 được animate khi toast/overlay/modal bật — các phần tử con
     // tham chiếu để trượt/mờ dần vào. Đặt ở Window (tồn tại vĩnh viễn) vì animate trên
@@ -106,6 +107,7 @@ export component AppWindow inherits Window {
     in-out property <float> mem-usage: 0.0;
     in-out property <bool> protection-enabled: true;
     in-out property <bool> master-locked: false;
+    in-out property <bool> lock-degraded: false;
     in-out property <bool> silent-sinkhole: true;
     in-out property <bool> network-wide-adblock: false;
     in-out property <bool> attack-detection-enabled: false;
@@ -395,8 +397,6 @@ export component AppWindow inherits Window {
     callback filter-logs(string, string, int);
     callback filter-logs-by-ip(string);
     callback dismiss-toast();
-    callback refresh-upstream-speed();
-    callback check-update();
     callback open-latest-release();
     callback trigger-proximity-scan();
     callback refresh-admin-data();
@@ -424,6 +424,7 @@ export component AppWindow inherits Window {
     OnboardingOverlay {
         x: 0; y: 0; width: 100%; height: 100%;
         dismiss-onboarding() => { root.dismiss-onboarding(); }
+        enable-max-shield() => { root.enable-max-shield(); }
         overlay-fade: root.overlay-fade;
         show-onboarding <=> root.show-onboarding;
     }
@@ -489,6 +490,7 @@ export component AppWindow inherits Window {
                     host-lan-ip <=> root.host-lan-ip;
                     lan-devices-count <=> root.lan-devices-count;
                     master-locked <=> root.master-locked;
+                    lock-degraded <=> root.lock-degraded;
                     network-wide-adblock <=> root.network-wide-adblock;
                     protection-enabled <=> root.protection-enabled;
                     threats-blocked-count <=> root.threats-blocked-count;
@@ -817,6 +819,7 @@ export component AppWindow inherits Window {
                     canary-autolock <=> root.av-canary-autolock;
                     canary-in-folders <=> root.av-canary-in-folders;
                     lock-active: root.av-lock-active;
+                    lock-degraded: root.lock-degraded;
                     toggle-canary-autolock(on) => { root.av-toggle-canary-autolock(on); }
                     toggle-canary-in-folders(on) => { root.av-toggle-canary-in-folders(on); }
                     unlock => { root.av-unlock(); }

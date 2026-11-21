@@ -35,6 +35,49 @@ export component TabButton inherits Rectangle {
     }
 }
 
+export component TooltipBadge inherits Rectangle {
+    in property <string> tip;
+    in property <string> icon: "ⓘ";
+
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    background: badge-touch.has-hover ? Theme.surface-hover-strong : Theme.bg-card;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+
+    badge-touch := TouchArea { }
+
+    Text {
+        text: root.icon;
+        font-size: 9px;
+        color: badge-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    if badge-touch.has-hover : Rectangle {
+        y: 22px;
+        width: 320px;
+        height: tip-text.preferred-height + 12px;
+        x: (parent.width - self.width) / 2;
+        background: Theme.bg-chrome;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-color: Theme.shadow-deep;
+        drop-shadow-blur: 12px;
+        tip-text := Text {
+            x: 8px;
+            width: parent.width - 16px;
+            text: root.tip;
+            font-size: 10px;
+            color: Theme.text-primary;
+            wrap: word-wrap;
+        }
+    }
+}
+
 // Track 5: Spinner — glyph nửa tròn "quay" báo trạng thái đang quét.
 // Lưu ý: quay bằng rotation-angle không khả dụng trên Rectangle trong Slint 1.8
 // (cargo check bắt lỗi thật) nên dùng cách đổi glyph tuần tự ◐◓◑◒

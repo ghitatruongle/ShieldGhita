@@ -389,12 +389,16 @@ async fn dispatch(state: &Arc<AppState>, request: CoreRequest) -> CoreResponse {
             CoreResponse::Ok
         }
         CoreRequest::Lock { on } => {
+            let guard = state.realtime_guard.clone();
             let result = tokio::task::spawn_blocking(move || {
                 crate::modules::system::dns_manager::set_master_internet_lock(on)
             })
             .await;
             match result {
                 Ok(Ok(())) => {
+                    if !on {
+                        guard.clear_lock_state();
+                    }
                     info!("Core IPC: master lock set to {on}");
                     CoreResponse::Ok
                 }

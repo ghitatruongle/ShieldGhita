@@ -323,8 +323,8 @@ impl AppConfig {
         // a truncated config.toml.
         let tmp = path.with_extension("toml.tmp");
         fs::write(&tmp, &content)?;
-        // Best-effort fsync before rename for durability.
-        if let Ok(f) = fs::File::open(&tmp) {
+        // Best-effort fsync before rename for durability (needs a write handle on Windows).
+        if let Ok(f) = fs::OpenOptions::new().write(true).open(&tmp) {
             let _ = f.sync_all();
         }
         fs::rename(&tmp, &path)?;

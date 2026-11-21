@@ -65,6 +65,16 @@ impl AppState {
         }
         wfp_blocker.set_blocked_ips(cfg.wfp_blocked_ips.clone());
         wfp_blocker.set_blocked_ports(cfg.wfp_blocked_ports.clone());
+        dns_manager::install_lock_layer_hook({
+            let layer = wfp_blocker.clone();
+            Arc::new(move |locked: bool| {
+                if locked {
+                    layer.enable_lockdown()
+                } else {
+                    layer.disable_lockdown()
+                }
+            })
+        });
         tracing::info!("Startup sub [wfp-init]: {} ms", t1.elapsed().as_millis());
 
         let mut self_def = SelfDefense::new();

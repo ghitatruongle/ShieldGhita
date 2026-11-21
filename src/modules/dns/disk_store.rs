@@ -465,12 +465,13 @@ impl DiskBlocklist {
             if let Some(parent) = out_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            // On Windows rename cannot replace an existing file, so remove
-            // the destination first — but only when it exists.
-            if out_path.exists() {
-                std::fs::remove_file(out_path).map_err(|e| e.to_string())?;
+            // Atomic swap first (MOVEFILE_REPLACE_EXISTING); remove only on rejection.
+            if std::fs::rename(&tmp_path, out_path).is_err() {
+                if out_path.exists() {
+                    std::fs::remove_file(out_path).map_err(|e| e.to_string())?;
+                }
+                std::fs::rename(&tmp_path, out_path).map_err(|e| e.to_string())?;
             }
-            std::fs::rename(&tmp_path, out_path).map_err(|e| e.to_string())?;
 
             Ok(total)
         })();

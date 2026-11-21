@@ -117,13 +117,22 @@ impl DnsBlocker {
                         .post(&url)
                         .header("content-type", "application/dns-message")
                         .header("accept", "application/dns-message")
-                        .body(query)
+                        .body(query.clone())
                         .send(),
                 )
                 .await;
                 if let Ok(Ok(resp)) = resp {
-                    if let Ok(bytes) = resp.bytes().await {
-                        let _ = tx.send(bytes.to_vec()).await;
+                    if !resp.status().is_success() {
+                        return;
+                    }
+                    const MAX_DOH_BYTES: usize = 64 * 1024;
+                    let read = tokio::time::timeout(Duration::from_millis(800), resp.bytes()).await;
+                    if let Ok(Ok(bytes)) = read {
+                        if bytes.len() <= MAX_DOH_BYTES
+                            && Self::response_matches_query(&bytes, &query)
+                        {
+                            let _ = tx.send(bytes.to_vec()).await;
+                        }
                     }
                 }
             });

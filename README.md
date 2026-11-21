@@ -4,7 +4,7 @@
 
 **Master Internet Controller & Ultra-Fast Network Security Shield for Windows**
 
-[![Version](https://img.shields.io/badge/version-0.1.5--alpha1-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
+[![Version](https://img.shields.io/badge/version-0.1.5--alpha3-blue.svg)](https://github.com/ghitatruongle/ShieldGhita)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com)
 
@@ -27,7 +27,7 @@
   - **Video & Livestream**: YouTube, Twitch, TikTok, Facebook Video, etc.
   - **Music & Streaming**: Spotify, SoundCloud, Zing MP3, etc.
   - **Browsers & Desktop Apps**: Chrome, Edge, Firefox, Brave, and all native Windows applications.
-- **Dual-Stack IPv4 & IPv6 Support**: Returns `0.0.0.0` (Type A) and `::` (Type AAAA) for immediate connection dropping without breaking HTTPS handshake lifecycles.
+- **IPv4 & IPv6 Block Answers**: Returns `0.0.0.0` (Type A) and `::` (Type AAAA) for immediate connection dropping without breaking HTTPS handshake lifecycles. *Honest scope:* block answers cover both address families, while LAN scanning and device control are IPv4-only.
 - **World-Class Threat Feeds**: Integrated with AdGuard DNS Filter, OISD, StevenBlack Hosts, and Anudeep Adservers with scheduled automatic updates.
 - **Real-Time In-App Toast Notifications**: Instant, smooth floating alerts whenever an ad or malicious tracker is intercepted.
 
@@ -44,9 +44,9 @@
 ### 4. Intrusion Detection & Prevention (IDS / IPS)
 - **DNS Flood / DoS Detection**: Flags abnormal per-client query bursts with an always-on hard rate limit that stays active even when IDS is toggled off.
 - **DNS Tunneling & Data Exfiltration Watch**: Entropy analysis flags suspiciously encoded subdomains used for covert tunnels.
-- **Botnet / C2 Domain Blocking**: Auto-isolates queries to `.onion`, `.bit`, `.bazar` underground networks via NXDOMAIN drops.
-- **ARP Spoofing / MITM Watchdog**: Alerts the moment your gateway's MAC address changes unexpectedly.
-- **Mass Port Scan Detection**: Flags remote hosts probing many distinct local ports within a short window, with optional IPS isolation of the scanner.
+- **Underground Network Blocking**: Auto-drops queries to `.onion`, `.bit`, `.bazar` underground networks via NXDOMAIN drops. *Honest scope:* this is TLD-level blocking only — there is no botnet/C2 domain feed behind it.
+- **ARP Spoofing / MITM Watchdog**: Detects unexpected changes of your gateway's MAC address. *Honest scope:* checked at every LAN scan (about every 2.5 minutes) and when you press Rescan — not a packet-level real-time monitor.
+- **Inbound Port Scan Detection**: Flags remote hosts probing many distinct local ports within a short window, with optional IPS isolation of the scanner. *Honest scope:* reads the local socket table about every 3 seconds, so it sees probes against **open (listening)** ports; scans of closed ports leave nothing there to read.
 - **Real-Time Incident Feed**: Color-coded incident log (CRITICAL / HIGH) with the exact IPS action taken for each threat, plus a live Security Score (0–100).
 
 ### 5. Real-time Traffic & Connection Inspector
@@ -54,12 +54,12 @@
 - Comprehensive active socket inspector tracking processes (PID, Process Name, Protocol, Local and Remote IP/Port tuples).
 
 ### 6. Master Internet Lock & Fail-Safe DNS Restoration
-- **Master Internet Lock**: Instantly isolate and block all outbound internet traffic with one click during security incidents.
+- **Master Internet Lock**: Cut internet for this PC **and** every LAN device using this DNS, with one click during security incidents. *Honest scope:* it blackholes DNS resolution and blocks outbound connections through WFP (full blocking needs Administrator rights — otherwise DNS-only and the app tells you so). LAN devices, loopback and local multicast stay reachable while locked. Unlock restores the network in one click, and the canary auto-lock releases itself after 5 minutes.
 - **100% Fail-Safe DNS Restoration**: Backs up and automatically restores original network DNS settings (DHCP or Static) upon graceful shutdown or crash recovery.
 - **Stealth Background Execution**: Zero black console window flashes or flickering during startup and background operation.
 
 ### 7. Settings, Multi-Language Support & Desktop Comfort
-- In-app dynamic language switching between **English 🇬🇧**, **Tiếng Việt 🇻🇳** and **简体中文 🇨🇳**; the setup installer also lets you pick the application language (or follow Windows).
+- In-app dynamic language switching between **English 🇬🇧**, **Tiếng Việt 🇻🇳**, **简体中文 🇨🇳** and **Русский 🇷🇺**; the setup installer itself runs in English, Tiếng Việt or 简体中文 and sets the startup language (switch to Русский in-app).
 - Configurable settings for Windows autostart, close-to-tray / minimize-to-tray, start hidden in tray, ad-blocking notifications, and custom filter rules (blacklist + whitelist with validation).
 - Resizable main window that remembers its position and size between sessions.
 - One-click CSV export of the full DNS query log.
@@ -90,6 +90,7 @@
 - **Signature Matching**: Offline SHA-256 signature database (including the industry-standard EICAR test vector) checked on every scan, with an optional update feed (`av_signature_url` in config.toml).
 - **Real-time Guard**: New files landing in Downloads, Desktop or USB drives are scanned within seconds (separate toggle, off by default).
 - **Ransomware Canary**: Honey files plus mass-mutation detection — tampering triggers a CRITICAL incident and an emergency Master Internet Lock.
+- **Honest scope (canary auto-lock)**: both canary switches are **off by default**. When tripped, the auto-lock cuts internet for this PC **and** every LAN device using this DNS (DNS + WFP) for **5 minutes**, then auto-releases; LAN devices stay reachable while locked and **Unlock now** releases it immediately. Hover the ⓘ next to each switch for the full note.
 - **Encrypted Quarantine**: Malicious files are moved into an AES-256-encrypted vault (key sealed with Windows DPAPI) and the original is securely overwritten (3 passes) — restore is bit-exact, delete is unrecoverable.
 - **Manual Quarantine**: Quarantine any file on demand from the Antivirus tab.
 
@@ -112,8 +113,8 @@
 ## Installation & Getting Started
 
 ### 1. Pre-built Setup Installer
-- Download `ShieldGhita_Setup_v0.1.5-alpha2.exe` and execute with **Administrator** privileges.
-- The installer itself runs in English, Tiếng Việt or 简体中文, lets you choose the application language, automatically terminates running instances, cleanly uninstalls previous versions, and deploys the new release safely.
+- Download `ShieldGhita_Setup_v0.1.5-alpha3.exe` and execute with **Administrator** privileges.
+- The installer itself runs in English, Tiếng Việt or 简体中文, sets the application language to match (switch to Русский from in-app settings), automatically terminates running instances, cleanly uninstalls previous versions, and deploys the new release safely.
 
 ### 2. Build From Source (For Developers)
 Requires **Rust** (Cargo toolchain) and an elevated **Administrator** terminal:
@@ -155,7 +156,7 @@ cargo run --release
   - **Video & Livestream**: YouTube, Twitch, TikTok, Facebook Video...
   - **Âm nhạc & Streaming**: Spotify, SoundCloud, Zing MP3, Nhaccuatui...
   - **Trình duyệt & Ứng dụng**: Chrome, Edge, Firefox, Brave và tất cả các phần mềm chạy trên máy.
-- **Hỗ trợ song song IPv4 & IPv6**: Trả về `0.0.0.0` (Type A) và `::` (Type AAAA) giúp ngắt kết nối quảng cáo tức thì mà không làm treo các kết nối HTTPS.
+- **Trả lời chặn IPv4 & IPv6**: Trả về `0.0.0.0` (Type A) và `::` (Type AAAA) giúp ngắt kết nối quảng cáo tức thì mà không làm treo các kết nối HTTPS. *Phạm vi trung thực:* câu trả lời chặn phủ cả hai họ địa chỉ, còn quét và kiểm soát thiết bị chỉ làm với IPv4.
 - **Tích hợp bộ lọc hàng đầu thế giới**: Hỗ trợ AdGuard DNS Filter, OISD, StevenBlack Hosts, Anudeep Adservers cùng tính năng tự động cập nhật định kỳ.
 - **Thông báo chặn thời gian thực**: Hiển thị Toast thông báo nổi trực quan ngay khi phát hiện và chặn quảng cáo/mã theo dõi ngầm.
 
@@ -172,9 +173,9 @@ cargo run --release
 ### 4. Phát hiện & Ngăn chặn xâm nhập (IDS / IPS)
 - **Phát hiện DNS Flood / DoS**: Cảnh báo truy vấn bất thường theo từng máy client với cơ chế giới hạn tần suất nền tảng luôn hoạt động kể cả khi IDS đang tắt.
 - **Giám sát DNS Tunneling & Rò rỉ dữ liệu**: Phân tích Entropy phát hiện subdomain mã hóa bất thường dùng để đào hầm dữ liệu trái phép.
-- **Chặn miền Botnet / C2**: Tự động cách ly truy vấn tới các mạng ngầm `.onion`, `.bit`, `.bazar` bằng NXDOMAIN Drop.
-- **Giám sát ARP Spoofing / MITM**: Cảnh báo ngay khi địa chỉ MAC của Gateway thay đổi bất thường.
-- **Phát hiện quét cổng hàng loạt (Port Scan)**: Gắn cờ máy từ xa dò nhiều cổng cục bộ khác nhau trong khoảng thời gian ngắn, tùy chọn tự cách ly bằng IPS.
+- **Chặn mạng ngầm**: Tự động chặn truy vấn tới các mạng ngầm `.onion`, `.bit`, `.bazar` bằng NXDOMAIN Drop. *Phạm vi trung thực:* chỉ chặn ở mức TLD — không có nguồn dữ liệu miền Botnet/C2 phía sau.
+- **Giám sát ARP Spoofing / MITM**: Phát hiện địa chỉ MAC của Gateway thay đổi bất thường. *Phạm vi trung thực:* được kiểm tra mỗi chu kỳ quét LAN (khoảng 2,5 phút) hoặc khi bấm Quét lại — không phải giám sát gói tin thời gian thực.
+- **Phát hiện quét cổng vào (Inbound Port Scan)**: Gắn cờ máy từ xa dò nhiều cổng cục bộ khác nhau trong khoảng thời gian ngắn, tùy chọn tự cách ly bằng IPS. *Phạm vi trung thực:* đọc bảng socket cục bộ khoảng 3 giây/lần nên chỉ thấy probe vào **cổng đang mở (đang lắng nghe)**; quét cổng đóng không để lại gì trong bảng này để đọc.
 - **Nhật ký sự cố thời gian thực**: Ghi log phân màu theo mức độ (CRITICAL / HIGH) kèm biện pháp IPS đã thực thi và Điểm An ninh trực tiếp (0–100).
 
 ### 5. Giám sát kết nối & Lưu lượng thời gian thực (Traffic Monitor)
@@ -182,12 +183,12 @@ cargo run --release
 - Theo dõi toàn bộ các kết nối mạng đang hoạt động theo từng tiến trình (PID, Process Name, Protocol, Local/Remote IP & Port).
 
 ### 6. Khóa mạng khẩn cấp & Cơ chế hoàn nguyên DNS an toàn 100%
-- **Master Internet Lock**: Khóa toàn bộ truy cập Internet ra bên ngoài chỉ với một click khi phát hiện nguy cơ bảo mật.
+- **Master Internet Lock**: Cắt Internet của máy này **và** mọi thiết bị LAN dùng DNS này chỉ với một click khi phát hiện nguy cơ bảo mật. *Phạm vi trung thực:* chặn phân giải DNS và chặn kết nối ra ngoài qua WFP (chặn hoàn toàn cần quyền Admin — nếu không chỉ khóa DNS và app sẽ báo cho bạn). Thiết bị LAN, loopback và multicast nội bộ vẫn dùng được khi đang khóa. Mở khóa trả mạng lại trong một click, và khóa tự động của canary tự mở sau 5 phút.
 - **Khôi phục DNS thông minh 100%**: Tự động sao lưu và hoàn nguyên cấu hình DNS gốc (DHCP hoặc IP tĩnh) của máy khi đóng app hoặc khi gặp sự cố, đảm bảo máy tính không bao giờ bị mất mạng.
 - **Chạy ngầm hoàn toàn êm ái (Stealth Execution)**: Loại bỏ triệt để các cửa sổ console đen nhấp nháy khi app chạy nền.
 
 ### 7. Cài đặt, Đa ngôn ngữ & Trải nghiệm Desktop
-- Chuyển đổi ngôn ngữ linh hoạt ngay trong app giữa **Tiếng Việt 🇻🇳**, **English 🇬🇧** và **简体中文 🇨🇳**; trình cài đặt cũng cho phép chọn ngôn ngữ ứng dụng (hoặc theo ngôn ngữ Windows).
+- Chuyển đổi ngôn ngữ linh hoạt ngay trong app giữa **Tiếng Việt 🇻🇳**, **English 🇬🇧**, **简体中文 🇨🇳** và **Русский 🇷🇺**; trình cài đặt chạy bằng English / Tiếng Việt / 简体中文 và đặt ngôn ngữ khởi động theo đó (đổi sang Русский ngay trong app).
 - Tùy chỉnh tự khởi động cùng Windows, đóng/thu nhỏ vào khay hệ thống, khởi động ẩn trong khay, bật/tắt thông báo chặn quảng cáo và bộ lọc tùy chỉnh (Blacklist + Whitelist có kiểm tra hợp lệ).
 - Cửa sổ thay đổi kích thước tự do, ghi nhớ vị trí và kích thước giữa các lần chạy.
 - Xuất nhật ký truy vấn DNS ra file CSV chỉ với một nút bấm.
@@ -218,6 +219,7 @@ cargo run --release
 - **Đối chiếu chữ ký**: Cơ sở dữ liệu chữ ký SHA-256 offline (bao gồm mẫu kiểm thử EICAR tiêu chuẩn ngành) chạy trên mọi lần quét, hỗ trợ nguồn cập nhật qua `av_signature_url` trong config.toml.
 - **Bảo vệ thời gian thực**: Tệp mới xuất hiện ở Downloads, Desktop hoặc ổ USB được quét trong vài giây (công tắc riêng, mặc định tắt).
 - **Canary chống ransomware**: Tệp mồi + phát hiện đổi tên/xóa hàng loạt — bị đụng tới là báo CRITICAL và kích hoạt Khóa Mạng Khẩn cấp.
+- **Phạm vi trung thực (khóa mạng của canary)**: cả hai công tắc canary **mặc định tắt**. Khi bị kích hoạt, khóa mạng cắt Internet của máy này **và** mọi thiết bị LAN dùng DNS này (DNS + WFP) trong **5 phút** rồi tự mở; khi đang khóa vẫn vào được thiết bị trong LAN, bấm **Mở khoá ngay** để mở ngay. Di chuột vào ⓘ cạnh từng công tắc để xem ghi chú đầy đủ.
 - **Cách ly mã hóa**: Tệp độc được chuyển vào kho mã hóa AES-256 (khóa bọc bằng DPAPI của Windows), bản gốc bị ghi đè an toàn 3 vòng — khôi phục nguyên vẹn, xóa là mất hẳn.
 - **Cách ly thủ công**: Cách ly bất kỳ tệp nào ngay từ tab Diệt Virus.
 
@@ -240,8 +242,8 @@ cargo run --release
 ## Hướng dẫn cài đặt & Sử dụng
 
 ### 1. Cài đặt nhanh qua bộ Setup
-- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.5-alpha2.exe` và chạy với quyền **Administrator**.
-- Trình cài đặt hỗ trợ tiếng Việt / English / 简体中文, cho phép chọn ngôn ngữ ứng dụng, tự động dừng ứng dụng cũ, dọn sạch phiên bản trước và cập nhật phiên bản mới một cách an toàn.
+- Tải tệp cài đặt `ShieldGhita_Setup_v0.1.5-alpha3.exe` và chạy với quyền **Administrator**.
+- Trình cài đặt hỗ trợ tiếng Việt / English / 简体中文, đặt ngôn ngữ ứng dụng theo lựa chọn đó (đổi sang Русский ngay trong app), tự động dừng ứng dụng cũ, dọn sạch phiên bản trước và cập nhật phiên bản mới một cách an toàn.
 
 ### 2. Chạy từ mã nguồn (Dành cho Developer)
 Yêu cầu đã cài đặt **Rust** (Cargo) và chạy Terminal với quyền **Administrator**:

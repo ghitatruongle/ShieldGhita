@@ -67,9 +67,15 @@ impl RealtimeGuard {
         self.lock_active.load(Ordering::Relaxed)
     }
 
+    pub fn clear_lock_state(&self) {
+        self.lock_active.store(false, Ordering::SeqCst);
+    }
+
     pub fn force_unlock(&self) {
-        if self.lock_active.swap(false, Ordering::SeqCst) {
-            let _ = crate::modules::system::dns_manager::set_master_internet_lock(false);
+        if self.lock_active.swap(false, Ordering::SeqCst)
+            && crate::modules::system::dns_manager::set_master_internet_lock(false).is_err()
+        {
+            self.lock_active.store(true, Ordering::SeqCst);
         }
     }
 
@@ -105,6 +111,7 @@ impl RealtimeGuard {
             .name("sg-realtime-guard".into())
             .spawn(move || loop {
                 std::thread::sleep(POLL_INTERVAL);
+                running.release_expired_lock();
                 if !running.enabled.load(Ordering::Relaxed) {
                     std::thread::sleep(IDLE_INTERVAL);
                     continue;
@@ -114,7 +121,6 @@ impl RealtimeGuard {
     }
 
     fn tick(&self) {
-        self.release_expired_lock();
         let dirs = watched_dirs();
         let mut changed: Vec<PathBuf> = Vec::new();
         {
@@ -447,7 +453,10 @@ impl RealtimeGuard {
             return;
         }
         self.lock_active.store(false, Ordering::SeqCst);
-        let _ = crate::modules::system::dns_manager::set_master_internet_lock(false);
+        if crate::modules::system::dns_manager::set_master_internet_lock(false).is_err() {
+            self.lock_active.store(true, Ordering::SeqCst);
+            return;
+        }
         self.emit_incident(
             "CANARY_LOCK_RELEASED",
             "-",
@@ -497,9 +506,15 @@ fn app_canary_path() -> std::path::PathBuf {
 }
 
 fn is_quarantine_path(path: &Path) -> bool {
-    path.to_string_lossy()
+    let owned = path.to_string_lossy().to_lowercase().replace('/', "\\");
+    let real = crate::modules::paths::data_dir()
+        .join("quarantine")
+        .to_string_lossy()
         .to_lowercase()
-        .contains("\\shieldghita\\quarantine\\")
+        .replace('/', "\\");
+    owned.starts_with(&real)
+        || owned.contains("\\shieldghita\\quarantine\\")
+        || owned.starts_with("shieldghita\\quarantine\\")
 }
 
 fn now_millis() -> u64 {

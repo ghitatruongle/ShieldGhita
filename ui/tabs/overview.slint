@@ -13,6 +13,7 @@ export component OverviewTab inherits Rectangle {
     in-out property <string> host-lan-ip;
     in-out property <int> lan-devices-count;
     in-out property <bool> master-locked;
+    in-out property <bool> lock-degraded;
     in-out property <bool> network-wide-adblock;
     in-out property <bool> protection-enabled;
     in-out property <int> threats-blocked-count;
@@ -100,6 +101,19 @@ export component OverviewTab inherits Rectangle {
                                     text: I18n.t("🔄 Cập nhật Bộ lọc", "🔄 Update Blocklists", "🔄 更新过滤库");
                                     clicked => { root.update-blocklist(); }
                                 }
+                            }
+
+                            if root.master-locked && root.lock-degraded : Text {
+                                text: I18n.t("⚠ Chưa cắt được Internet hoàn toàn — WFP không khả dụng (cần quyền Admin và dịch vụ BFE); hiện chỉ DNS bị khóa. Ứng dụng dùng IP trực tiếp hoặc DoH vẫn có thể đi qua.", "⚠ Internet is not fully cut — WFP unavailable (needs Administrator and the BFE service); only DNS is blackholed now. Apps using raw IPs or DoH may still get through.", "⚠ 未能完全断网 — WFP 不可用（需要管理员权限和 BFE 服务），目前仅 DNS 被拦截。使用直连 IP 或 DoH 的应用仍可能连通。");
+                                font-size: 11px;
+                                color: Theme.warning-deep;
+                                wrap: word-wrap;
+                            }
+                            if root.master-locked && !root.lock-degraded : Text {
+                                text: I18n.t("🔒 Đang khóa: DNS bị chặn và mọi kết nối ra Internet bị chặn (WFP). Vẫn truy cập được thiết bị trong LAN, loopback và multicast nội bộ. Bấm Mở khóa để trả mạng lại ngay.", "🔒 Locked: DNS is blackholed and every outbound internet connection is blocked (WFP). LAN devices, loopback and local multicast stay reachable. Press Unlock to restore the network immediately.", "🔒 已锁定：DNS 与所有外连均被阻断（WFP）。局域网设备、回环与本地多播仍可访问。点击解锁立即恢复网络。");
+                                font-size: 11px;
+                                color: Theme.ok-text;
+                                wrap: word-wrap;
                             }
                         }
                     }
